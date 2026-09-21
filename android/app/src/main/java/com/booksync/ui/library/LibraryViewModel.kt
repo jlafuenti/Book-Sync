@@ -464,7 +464,8 @@ class LibraryViewModel @Inject constructor(
      * warmed it ends.
      */
     private suspend fun pruneUnusedSyncMaps(pairs: List<BookPairEntity>) {
-        SyncMapPruning.pairsToPrune(pairs, SyncMapInUse.snapshot()).forEach { pairId ->
+        val withPoints = repository.pairIdsWithSyncPoints()
+        SyncMapPruning.pairsToPrune(pairs, SyncMapInUse.snapshot(), withPoints).forEach { pairId ->
             repository.clearSyncMapCache(pairId)
         }
     }

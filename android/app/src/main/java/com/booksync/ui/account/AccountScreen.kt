@@ -355,8 +355,7 @@ fun AccountScreen(
                     // this line is the one place a user sees how much of the
                     // per-device cache is left and can drop all of it.
                     ActionRow(
-                        title = "Sync data — ${syncMapStorage.pairCount} books, about " +
-                            approxSyncDataLabel(syncMapStorage.approxBytes),
+                        title = syncDataStorageTitle(syncMapStorage.pairCount, syncMapStorage.approxBytes),
                         description = "Cached chapter-position data. Removed automatically for streamed " +
                             "books once you stop reading or listening; kept for downloaded ones. " +
                             "Tap to clear it all now.",
@@ -807,18 +806,6 @@ private fun Divider() {
     )
 }
 
-/**
- * Formats [SyncMapStorageStats][com.booksync.data.local.dao.SyncMapStorageStats]'
- * approximate byte count for the Storage section's "about X MB" line (issue
- * #678). Whole megabytes only — the underlying estimate is already rough (see
- * that class's doc), so a decimal would suggest more precision than it has.
- * Anything under half a megabyte reads as "under 1 MB" rather than "0 MB",
- * which would look broken with cached data actually present.
- */
-private fun approxSyncDataLabel(approxBytes: Long): String {
-    val mb = approxBytes / (1024.0 * 1024.0)
-    return if (mb < 0.5) "under 1 MB" else "${Math.round(mb)} MB"
-}
 
 @Composable
 private fun ConfirmDialog(

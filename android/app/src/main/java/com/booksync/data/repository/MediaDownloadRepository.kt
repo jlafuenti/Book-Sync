@@ -9,7 +9,9 @@ import com.booksync.diagnostics.DiagnosticLogger
 import com.booksync.diagnostics.LogChannel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CancellationException
+import com.booksync.data.remote.SyncMapResponse
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
 import java.io.File
 import javax.inject.Inject
@@ -164,6 +166,9 @@ class MediaDownloadRepository @Inject constructor(
      * before inserting the new ones anyway. Tour cleanup (issue #597 tester feedback) has no
      * following download to do that, so it needs the points gone now, not just marked stale.
      */
+    /** Pair ids that hold sync points on disk, whatever their cached flag says. */
+    suspend fun pairIdsWithSyncPoints(): Set<Int> = syncPointDao.distinctPairIds().toSet()
+
     suspend fun clearSyncMapCache(pairId: Int) {
         syncPointDao.deletePointsForPair(pairId)
         resetSyncMapDownloaded(pairId)
@@ -174,6 +179,15 @@ class MediaDownloadRepository @Inject constructor(
         log("downloadSyncMap — pairId=$pairId")
         val syncMap = api.getSyncMap(pairId)
 
+        // Once the response is in hand, the local write finishes as a unit. The
+        // player gives this fetch a bounded wait and cancels it on timeout; a
+        // cancel between the insert and the stamp left every point on disk with
+        // `syncMapDownloaded = false`, which the prune, Refresh and Remove all
+        // read as "no map" (issue #678, seen on the emulator).
+        withContext(NonCancellable) { saveSyncMap(pairId, syncMap) }
+    }
+
+    private suspend fun saveSyncMap(pairId: Int, syncMap: SyncMapResponse) {
         // Clear old sync points
         syncPointDao.deletePointsForPair(pairId)
 

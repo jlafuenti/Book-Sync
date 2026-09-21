@@ -11,6 +11,7 @@ import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
 import org.junit.Before
 import org.junit.Test
@@ -170,5 +171,34 @@ class MediaDownloadRepositorySyncMapTest {
         repo().downloadSyncMap(42)
 
         coVerify(exactly = 1) { syncMapRemovalStore.clearRemoved(42) }
+    }
+
+    /**
+     * The player waits a bounded time for the map at open, then cancels the
+     * fetch and plays on. Cancelled between writing the points and stamping the
+     * flag, the cache was left with every point on disk and
+     * `syncMapDownloaded = false` — invisible to the prune, which reads the
+     * flag, and to Refresh/Remove, which are gated on it (seen on the emulator,
+     * issue #678). Once the response is in hand, the local write must finish.
+     */
+    @Test
+    fun `a fetch cancelled mid-write still stamps the cache it wrote`() = runTest {
+        coEvery { api.getSyncMap(42) } returns SyncMapResponse(
+            id = 1,
+            book_pair_id = 42,
+            version = 3,
+            total_sentences = 0,
+            total_chapters = 0,
+            created_at = "2026-01-01T00:00:00Z",
+            sync_points = emptyList(),
+        )
+        coEvery { syncPointDao.insertPoints(any()) } coAnswers { kotlinx.coroutines.delay(1_000) }
+
+        val job = launch { repo().downloadSyncMap(42) }
+        testScheduler.advanceTimeBy(500)
+        job.cancel()
+        testScheduler.advanceUntilIdle()
+
+        coVerify(exactly = 1) { bookPairDao.setSyncMapCached(42, true, 3) }
     }
 }

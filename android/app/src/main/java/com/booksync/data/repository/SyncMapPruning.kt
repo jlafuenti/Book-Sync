@@ -27,10 +27,19 @@ object SyncMapPruning {
      * Ids of the pairs in [pairs] whose cached sync map should be cleared:
      * a map is cached, nothing is downloaded, and the pair is not in
      * [inUsePairIds].
+     *
+     * "Cached" is the flag *or* points on disk ([pairIdsWithPoints]): a fetch
+     * cancelled between its two writes used to leave points with the flag
+     * down, and older builds may still carry such rows. The flag alone never
+     * finds them.
      */
-    fun pairsToPrune(pairs: List<BookPairEntity>, inUsePairIds: Set<Int>): List<Int> =
+    fun pairsToPrune(
+        pairs: List<BookPairEntity>,
+        inUsePairIds: Set<Int>,
+        pairIdsWithPoints: Set<Int> = emptySet(),
+    ): List<Int> =
         pairs.filter { pair ->
-            pair.syncMapDownloaded &&
+            (pair.syncMapDownloaded || pair.id in pairIdsWithPoints) &&
                 !pair.ebookDownloaded &&
                 !pair.audiobookDownloaded &&
                 pair.id !in inUsePairIds

@@ -88,4 +88,33 @@ class SyncMapPruningTest {
 
         assertEquals(listOf(1), result)
     }
+
+    /**
+     * Points on disk with the flag down — what a fetch cancelled between the
+     * two writes left behind before that write was made atomic, and what
+     * older builds may still carry. The flag alone never finds them, so the
+     * prune also takes the pairs that actually hold points (issue #678).
+     */
+    @Test
+    fun `orphaned points for a streamed pair are pruned even with the flag down`() {
+        val streamed = pair(id = 1, syncMapDownloaded = false)
+
+        val result = SyncMapPruning.pairsToPrune(
+            listOf(streamed), inUsePairIds = emptySet(), pairIdsWithPoints = setOf(1),
+        )
+
+        assertEquals(listOf(1), result)
+    }
+
+    @Test
+    fun `orphaned points are kept while the pair is in use or downloaded`() {
+        val open = pair(id = 1)
+        val downloaded = pair(id = 2, ebookDownloaded = true)
+
+        val result = SyncMapPruning.pairsToPrune(
+            listOf(open, downloaded), inUsePairIds = setOf(1), pairIdsWithPoints = setOf(1, 2),
+        )
+
+        assertEquals(emptyList<Int>(), result)
+    }
 }

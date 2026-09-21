@@ -195,11 +195,16 @@ fun pairMenuActions(
         // map cached there is nothing to refresh either, so this arm can add
         // nothing at all. It must still claim the `when`, or the `else` below
         // would offer to re-transcribe (issue #484).
-        target.isTranscribed -> if (target.syncMapCached) {
-            add(PairAction.RefreshSyncData)
-            // Beside Refresh, gated on the same "there is a cache to act on"
-            // condition (issue #678).
-            add(PairAction.RemoveSyncData)
+        target.isTranscribed -> {
+            // A downloaded pair offers Refresh even with no map cached: after
+            // "Remove sync data" it is one of the two ways back, beside a fresh
+            // download (issue #678). A streamed pair with no map has nothing
+            // to refresh — its map is fetched when it is opened.
+            if (target.syncMapCached || target.hasEbookDownloaded || target.hasAudiobookDownloaded) {
+                add(PairAction.RefreshSyncData)
+            }
+            // Remove needs a cache to act on.
+            if (target.syncMapCached) add(PairAction.RemoveSyncData)
         }
         target.isQueuedOrTranscribing -> add(PairAction.CancelTranscription)
         else -> add(PairAction.Transcribe)
