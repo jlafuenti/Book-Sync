@@ -33,6 +33,17 @@ operator must do by hand rather than read about afterwards.
 
 ### Fixed
 
+- The SSRF guard no longer resolves DNS on the event loop. `assert_safe_url` looked the hostname
+  up with a synchronous `socket.getaddrinfo()`, and three `async def` handlers called it directly —
+  cover fetching during matching (reachable by editors, and run once per redirect hop) and the
+  System page's Audiobookshelf and transcription-worker connection tests. One uvicorn worker serves
+  every request, so for the length of each lookup nothing else was served: position sync,
+  streaming, login and `/api/health` all stalled. Invisible with a resolver that answers in
+  milliseconds; seconds long with one that has to time out, and the symptom — unrelated endpoints
+  timing out — never pointed at the cause. Those callers now use `assert_safe_url_async`, which
+  crosses to a worker thread once. What the guard accepts and rejects is unchanged. A source-guard
+  test fails the build if any `async def` calls the synchronous guard again (#673).
+
 - A server restart no longer makes an in-progress **remote** transcription look like it restarted
   from zero. `queue_manager.reset_stale_items()` used to re-stamp `started_at` to the restart
   moment and hand every recovered row back to the pipeline exactly like a brand-new item — which

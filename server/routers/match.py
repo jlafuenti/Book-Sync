@@ -18,7 +18,7 @@ from rate_limit import external_metadata_searches
 from routers.auth import get_current_user, get_editor_user, rate_limited
 from routers.library import sanitize_filename
 from services import credentials as credential_store
-from services.url_safety import assert_safe_url, UnsafeUrlError
+from services.url_safety import assert_safe_url_async, UnsafeUrlError
 from utils import resolve_cover_url
 
 logger = logging.getLogger(__name__)
@@ -393,7 +393,9 @@ async def _fetch_cover_safely(url: str) -> tuple[bytes, str]:
     async with httpx.AsyncClient(follow_redirects=False, timeout=60.0) as client:
         for _ in range(MAX_COVER_REDIRECTS + 1):
             try:
-                assert_safe_url(current_url, allow_private=False)
+                # Once per redirect hop, so a redirect chain used to block the
+                # event loop once per hop (issue #673).
+                await assert_safe_url_async(current_url, allow_private=False)
             except UnsafeUrlError as e:
                 logger.warning(f"Rejected unsafe cover URL {current_url!r}: {e}")
                 raise HTTPException(status_code=400, detail="Cover URL is not allowed")
