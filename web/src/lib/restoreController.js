@@ -139,12 +139,22 @@ export function classifyLanding({ landed, steps, position, audioDerived }) {
  * reader opened with (after the audio rung, if taken), `outcome` is
  * `classifyLanding`'s verdict — or to `null` when `isDestroyed()` reported
  * the book torn down mid-way, in which case nothing was displayed.
+ *
+ * A caller that already holds a fresh record passes it as `position` and
+ * nothing is fetched (the re-anchor on return, issue #683). `onResolved`
+ * receives the record the ladder will display from — after the audio rung —
+ * before anything is displayed, because a reader whose `relocated` handler
+ * is already attached reads the text-nav preview from the event `display()`
+ * fires.
  */
 export async function restorePosition({
     book, rendition, pairId, ebookId, initialChapter, initialTextPreview,
+    position: prefetched, onResolved = () => {},
     isDestroyed = () => false,
 }) {
-    let position = await fetchOpeningPosition({ pairId, ebookId, initialChapter, initialTextPreview })
+    let position = prefetched !== undefined
+        ? prefetched
+        : await fetchOpeningPosition({ pairId, ebookId, initialChapter, initialTextPreview })
     if (isDestroyed()) return null
 
     const ladderContext = {
@@ -177,6 +187,7 @@ export async function restorePosition({
         }
     }
 
+    onResolved(position)
     const landed = await executeRestore(book, rendition, steps)
     return { position, steps, outcome: classifyLanding({ landed, steps, position, audioDerived }) }
 }
@@ -235,6 +246,17 @@ export function createWriteGate() {
         if (!gate.audioConfirmPending) return false
         gate.audioConfirmPending = false
         return true
+    }
+
+    // Back to the state at open, ahead of re-running the ladder (issue
+    // #683): nothing is written until the new landing is in, and a page turn
+    // made before listening moved on no longer counts as navigation — the
+    // settle save that follows must not claim `source: ebook` on its account.
+    gate.resetForReanchor = () => {
+        gate.positionEstablished = false
+        gate.restoreLanded = false
+        gate.audioConfirmPending = false
+        gate.userNavigated = false
     }
 
     gate.noteUserNavigation = () => {

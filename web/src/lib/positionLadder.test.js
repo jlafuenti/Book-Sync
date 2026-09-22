@@ -3,6 +3,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import {
     planRestore, hasAnchor, isStartOfBook, navigationEstablishesPosition,
+    shouldReanchor, LOCATOR_REUSE_THRESHOLD_MS,
 } from './positionLadder'
 
 /**
@@ -111,5 +112,41 @@ describe('the navigation clause (issue #159)', () => {
         expect(isStartOfBook({ spineIndex: 0, chapterProgression: 0 })).toBe(true)
         expect(isStartOfBook({ spineIndex: 0, chapterProgression: 0.1 })).toBe(false)
         expect(isStartOfBook({ spineIndex: 1, chapterProgression: 0 })).toBe(false)
+    })
+})
+
+describe('shouldReanchor — a reader coming back after listening moved on (issue #683)', () => {
+    // Web mirror of Android's ResumeReanchorPolicy.shouldReanchor (issue #682):
+    // same inputs, same answers.
+    it('re-anchors an audiobook-sourced record whose audio moved past the threshold', () => {
+        expect(shouldReanchor({ source: 'audiobook', recordAudioMs: 1800000, baselineAudioMs: 600000 })).toBe(true)
+    })
+
+    it('never re-anchors an ebook-sourced record', () => {
+        expect(shouldReanchor({ source: 'ebook', recordAudioMs: 1800000, baselineAudioMs: 600000 })).toBe(false)
+    })
+
+    it('does not re-anchor when the audio moved less than the threshold', () => {
+        expect(shouldReanchor({
+            source: 'audiobook', recordAudioMs: 600000 + LOCATOR_REUSE_THRESHOLD_MS - 1, baselineAudioMs: 600000,
+        })).toBe(false)
+    })
+
+    it('re-anchors at exactly the threshold, in either direction', () => {
+        expect(shouldReanchor({
+            source: 'audiobook', recordAudioMs: 600000 + LOCATOR_REUSE_THRESHOLD_MS, baselineAudioMs: 600000,
+        })).toBe(true)
+        expect(shouldReanchor({
+            source: 'audiobook', recordAudioMs: 600000 - LOCATOR_REUSE_THRESHOLD_MS, baselineAudioMs: 600000,
+        })).toBe(true)
+    })
+
+    it('re-anchors when the reader never knew an audio position', () => {
+        expect(shouldReanchor({ source: 'audiobook', recordAudioMs: 5000, baselineAudioMs: null })).toBe(true)
+    })
+
+    it('does not re-anchor a record with no audio position, or no record at all', () => {
+        expect(shouldReanchor({ source: 'audiobook', recordAudioMs: null, baselineAudioMs: 600000 })).toBe(false)
+        expect(shouldReanchor({ source: undefined, recordAudioMs: undefined, baselineAudioMs: null })).toBe(false)
     })
 })

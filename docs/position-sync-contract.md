@@ -128,6 +128,22 @@ clients actually drifted, does not.
 If every rung fails, that is **unresolved**, which is not the same as unread.
 The client shows something but sets no position as established.
 
+**A reader left open re-runs the ladder when it comes back** (issues #682,
+#683). "At open" is not enough on its own: a reader that stays open while the
+book is listened to elsewhere still shows the page from before, and the first
+page turn from it would write that stale page, one page on, as `source =
+ebook` over the real listening position. So on return — Android's `onStart`
+after an `onStop`, the web's `visibilitychange` back to `visible` after
+`hidden` — the reader holds every save (they are dropped, not queued),
+re-fetches the record, and re-runs the ladder from it when the record is
+audiobook-sourced and its `audio_position_ms` has moved at least
+`LOCATOR_REUSE_THRESHOLD_MS` from what the reader last knew (its record at
+open, kept current by its own sync-map-matched saves). The rule is
+`ResumeReanchorPolicy.shouldReanchor` on Android and `shouldReanchor` in
+`positionLadder.js` on the web. A re-anchor resets the write gate exactly as an
+open would, including forgetting earlier page turns, so the settle save that
+follows does not claim `source`.
+
 ## The write gate
 
 A client must not write *anchors* until it knows where the reader is. On
