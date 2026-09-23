@@ -1017,9 +1017,10 @@ async def _refresh_write_back_hash(db: AsyncSession, book, *, is_ebook: bool) ->
 
     # Only a map that already carries provenance needs correcting -- one with
     # a NULL `epub_file_hash` predates the column and stays "unknown" either
-    # way (services/sync_map_audit.py). The pair constraint is on the
-    # (ebook, audiobook) combination, so one ebook can sit in several pairs,
-    # each with its own map -- refresh every one of them.
+    # way (services/sync_map_audit.py). An ebook sits in at most one pair
+    # (unique `book_pairs.ebook_id`, issue #691), so this finds at most one
+    # map; a query rather than a single lookup costs nothing and keeps it
+    # correct if that rule is ever relaxed.
     sync_maps = (await db.execute(
         select(SyncMap)
         .join(BookPair, BookPair.id == SyncMap.book_pair_id)
