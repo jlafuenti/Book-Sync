@@ -340,3 +340,40 @@ async def test_convert_all_reports_the_conflict_without_aborting_the_batch(
     assert not other_mobi.exists(), "the unrelated conversion should have deleted its source"
     rows = (await db.execute(select(BookPair))).scalars().all()
     assert len(rows) == 2
+
+
+async def test_delete_source_returns_409_without_deleting_the_file_on_conflict(
+    db, tmp_path, make_client, make_user, auth_header,
+):
+    """`DELETE /unsupported/{id}/source` removes the MOBI/AZW3 file from disk
+    itself (no converter call — the EPUB must already exist). Unlike the
+    convert endpoints, it used to do that *before* checking for a relink
+    conflict, so a 409 still left the source unlinked with nothing to
+    restore it: the row and its pair pointed at a file that no longer
+    existed. The check now runs first, so a conflict leaves the file (and
+    both pairs) exactly as it found them."""
+    from routers import library
+
+    source_id, epub_path, epub_pair_id = await _seed_mobi_with_a_paired_epub_sibling(
+        db, tmp_path
+    )
+    # This endpoint requires the EPUB to already exist on disk (it does not
+    # convert anything itself) -- write the bytes `_seed_...` only registered
+    # a DB row for.
+    epub_path.write_bytes(b"fake epub bytes")
+    user = await make_user(role="admin")
+
+    async with make_client(library.router) as c:
+        resp = await c.delete(
+            f"/api/library/unsupported/{source_id}/source",
+            headers=auth_header(user),
+        )
+
+    assert resp.status_code == 409, resp.text
+    assert str(epub_pair_id) in resp.json()["detail"]
+
+    assert (tmp_path / "book.mobi").exists(), "the source file must not be deleted on conflict"
+    rows = (await db.execute(select(BookPair))).scalars().all()
+    assert len(rows) == 2
+    ebooks = (await db.execute(select(EBook))).scalars().all()
+    assert len(ebooks) == 2, "the source ebook row must not be deleted on conflict"

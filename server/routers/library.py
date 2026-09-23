@@ -2016,6 +2016,43 @@ class PairRelinkConflict(Exception):
         )
 
 
+async def _relink_conflict(eb_id: int, epub_eb_id: int, db: AsyncSession) -> Optional[PairRelinkConflict]:
+    """Read-only: would re-pointing `eb_id`'s pair onto `epub_eb_id` violate
+    the one-to-one rule (issue #691)? Returns the (unraised) conflict, or
+    `None` if `eb_id` has no pair to re-point, or `epub_eb_id` has none of
+    its own to collide with.
+
+    Split out of `_relink_or_cleanup_pairs` so a caller that is about to do
+    something irreversible *before* that function runs — `delete_unsupported_
+    source` unlinks the source file first — can check first and skip the
+    irreversible step too, rather than only learning about the conflict after
+    the file is already gone. `_relink_or_cleanup_pairs` still raises the
+    same check itself as the backstop: nothing that mutates `book_pairs` may
+    depend on a caller having remembered to check first.
+    """
+    has_pair = (await db.execute(
+        select(BookPair.id).where(BookPair.ebook_id == eb_id)
+    )).scalar_one_or_none()
+    if has_pair is None:
+        return None
+    existing_pair_id = (await db.execute(
+        select(BookPair.id).where(BookPair.ebook_id == epub_eb_id)
+    )).scalar_one_or_none()
+    if existing_pair_id is None:
+        return None
+    return PairRelinkConflict(epub_eb_id, existing_pair_id)
+
+
+async def _relink_conflict_for_path(eb_id: int, epub_path: str, db: AsyncSession) -> Optional[PairRelinkConflict]:
+    """Like `_relink_conflict`, but for a sibling path that may not be
+    registered as an `EBook` row yet — if it isn't, there is nothing to
+    conflict with regardless of `eb_id`'s own pair."""
+    epub_eb = await _find_by_path(db, EBook, epub_path)
+    if epub_eb is None:
+        return None
+    return await _relink_conflict(eb_id, epub_eb.id, db)
+
+
 async def _relink_or_cleanup_pairs(eb_id: int, epub_eb: Optional[EBook], db: AsyncSession) -> List[int]:
     """
     For every BookPair whose ebook_id == eb_id:
@@ -2040,17 +2077,17 @@ async def _relink_or_cleanup_pairs(eb_id: int, epub_eb: Optional[EBook], db: Asy
     MOBI/AZW3 source was converted — but silently dropping the source's pair
     to make room would be exactly the kind of silent data loss issue #691 is
     about avoiding, so the caller must resolve it (unpair one side) instead.
+    This is the backstop check (see `_relink_conflict`'s docstring) — a caller
+    with an irreversible step of its own to protect should check first.
     """
     relinked: List[int] = []
     pairs_result = await db.execute(select(BookPair).where(BookPair.ebook_id == eb_id))
     pairs = pairs_result.scalars().all()
 
     if epub_eb is not None and pairs:
-        conflict = (await db.execute(
-            select(BookPair.id).where(BookPair.ebook_id == epub_eb.id)
-        )).scalar_one_or_none()
+        conflict = await _relink_conflict(eb_id, epub_eb.id, db)
         if conflict is not None:
-            raise PairRelinkConflict(epub_eb.id, conflict)
+            raise conflict
 
     for pair in pairs:
         if epub_eb is not None:
@@ -2293,6 +2330,19 @@ async def delete_unsupported_source(
             detail="No converted EPUB found. Convert the file first before deleting the source.",
         )
 
+    # Check for a relink conflict (issue #691 — the EPUB sibling already has
+    # its own pair) *before* touching the filesystem: unlike the convert
+    # endpoints, this one deletes the source file itself rather than calling
+    # a converter, so if the destructive step ran first a 409 here would
+    # still leave the source unlinked with nothing to restore it — the row
+    # and its pair would point at a file that no longer exists. The read-only
+    # check can run before the EPUB is even registered in the DB (it looks
+    # the sibling up by path); `_relink_or_cleanup_pairs` below repeats the
+    # same check as the backstop, in case anything changed between the two.
+    conflict = await _relink_conflict_for_path(ebook_id, str(epub_sibling), db)
+    if conflict is not None:
+        raise HTTPException(status_code=409, detail=str(conflict))
+
     try:
         os.remove(eb.file_path)
     except OSError as e:
@@ -2300,11 +2350,6 @@ async def delete_unsupported_source(
 
     # Ensure the EPUB is registered, then re-link any pairs to it (preserves pair + transcript)
     epub_eb = await _register_epub_in_db(str(epub_sibling), eb, db)
-    # The source file above is already unlinked by this point, so a relink
-    # conflict (issue #691 — the EPUB already has its own pair) cannot be
-    # made fully safe here; surfacing it as a 409 at least stops the source
-    # *row* and its pair from being silently dropped, which is the operator's
-    # signal to resolve the conflicting pair before retrying.
     try:
         relinked = await _relink_or_cleanup_pairs(ebook_id, epub_eb, db)
     except PairRelinkConflict as e:
