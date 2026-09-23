@@ -31,6 +31,10 @@ operator must do by hand rather than read about afterwards.
   already stored on a running server, so "Library verify" (Troubleshoot → Verify library) now also
   re-checks any pair whose stored verdict currently says implausible, and clears it if a freshly
   computed word count now passes; a pair whose stored verdict is already plausible is left alone.
+  The added scan phase also exposed a small pre-existing display bug: the Troubleshoot page's
+  progress bar guessed the total phase count before the server had reported one, so it briefly
+  showed "phase 1 of 3" and then flipped once the real total came back. It no longer guesses — the
+  phase total only renders once the server has actually reported it.
 
 - The web reader left open in a tab now catches up with listening done elsewhere (#683, the web
   half of #682). Before, it kept showing the page from before, because it only worked out where to
