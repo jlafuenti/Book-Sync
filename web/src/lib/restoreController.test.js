@@ -374,3 +374,50 @@ describe('createWriteGate — nothing is written until the restore has landed', 
         expect(gate.positionEstablished).toBe(false)
     })
 })
+
+describe('re-anchoring a reader that comes back after listening (issue #683)', () => {
+    it('restorePosition uses a record the caller already fetched instead of fetching again', async () => {
+        const record = { anchor_revision: 0, epub_chapter: 2, hints: [] }
+        const { book, rendition } = makeBook()
+
+        const result = await restorePosition({ book, rendition, pairId: 42, ebookId: 7, position: record })
+
+        expect(getPositionMock).not.toHaveBeenCalled()
+        expect(rendition.display).toHaveBeenCalledWith('ch2.xhtml')
+        expect(result.position).toBe(record)
+        expect(result.outcome.kind).toBe('landed')
+    })
+
+    it('restorePosition reports the record it will display from before displaying it', async () => {
+        // The reader's text-nav pass reads the preview from the relocated
+        // event that display() fires, so the audio-derived preview must be
+        // known before that event, not after display resolves.
+        const record = { anchor_revision: 0, source: 'audiobook', audio_position_ms: 1800000, hints: [] }
+        audioToEpubMock.mockResolvedValue({ epub_chapter: 1, preview: 'where the listening stopped' })
+        const { book, rendition } = makeBook()
+        const seen = []
+        rendition.display.mockImplementation(async () => { seen.push('display') })
+
+        await restorePosition({
+            book, rendition, pairId: 42, ebookId: 7, position: record,
+            onResolved: (p) => seen.push(p.epub_text_preview),
+        })
+
+        expect(seen).toEqual(['where the listening stopped', 'display'])
+    })
+
+    it('resetForReanchor closes the gate and forgets the earlier navigation', () => {
+        const gate = createWriteGate()
+        gate.applyLanding(classifyLanding({ landed: true, steps: [{ kind: 'hint' }], position: {}, audioDerived: false }))
+        gate.noteUserNavigation()
+
+        gate.resetForReanchor()
+
+        expect(gate.positionEstablished).toBe(false)
+        expect(gate.restoreLanded).toBe(false)
+        expect(gate.audioConfirmPending).toBe(false)
+        // A settle save after the re-anchor must not claim `source: ebook`
+        // on the strength of a page turn made before listening moved on.
+        expect(gate.userNavigated).toBe(false)
+    })
+})

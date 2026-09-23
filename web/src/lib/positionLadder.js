@@ -113,6 +113,32 @@ export function planRestore(position, { spineCount, deviceId, hintKind }) {
 }
 
 /**
+ * Whether a reader coming back to the foreground must re-run the ladder
+ * before it accepts another save (issue #683; Android's
+ * `ResumeReanchorPolicy`, issue #682, answers identically).
+ *
+ * The ladder runs once, at open. A reader left open while the book is
+ * listened to elsewhere keeps showing the page from before, and the first
+ * page turn from it would write `stale + 1` as `source: ebook` over the real
+ * listening position.
+ *
+ * The test is audio movement, not a timestamp — device clocks drift, but an
+ * audio position only advances when something actually played — measured
+ * with the same LOCATOR_REUSE_THRESHOLD_MS that `usableHint` uses, so a reader
+ * that comes back and a reader that opens fresh agree on "moved on".
+ *
+ * `source` / `recordAudioMs` come from a fetch made on return;
+ * `baselineAudioMs` is the audio the reader last knew the record to hold (at
+ * open, then as its own saves move it), null when it never knew one.
+ */
+export function shouldReanchor({ source, recordAudioMs, baselineAudioMs }) {
+    if (source !== 'audiobook') return false
+    if (recordAudioMs == null) return false
+    if (baselineAudioMs == null) return true
+    return Math.abs(recordAudioMs - baselineAudioMs) >= LOCATOR_REUSE_THRESHOLD_MS
+}
+
+/**
  * Whether the reader is still sitting at the very start of the book.
  *
  * Missing values count as the start (fail safe): a write we cannot prove is

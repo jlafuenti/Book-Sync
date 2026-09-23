@@ -135,3 +135,135 @@ describe('EbookReader — the debounced save writes the chapter the relocation l
         expect(updatePositionMock.mock.calls[0][2]).toMatchObject({ epub_chapter: 1, hint: { value: 'cfi-b' } })
     })
 })
+
+describe('EbookReader — a tab left open re-anchors after listening elsewhere (issue #683)', () => {
+    // The reader opened on a page captured while listening was at 10:00.
+    const OPENED = {
+        anchor_revision: 0, source: 'audiobook', audio_position_ms: 600000, epub_chapter: 1,
+        hints: [{
+            kind: 'epubjs_cfi', value: 'cfi-old', anchor_revision: 0,
+            device_id: 'device-abc', audio_position_ms: 600000,
+        }],
+    }
+    // Meanwhile another device listened on to 30:00.
+    const LISTENED_ON = { ...OPENED, audio_position_ms: 1800000 }
+
+    let visibility = 'visible'
+    beforeEach(() => {
+        visibility = 'visible'
+        Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => visibility })
+        return () => { delete document.visibilityState }
+    })
+    const setVisibility = (state) => {
+        visibility = state
+        act(() => { document.dispatchEvent(new Event('visibilitychange')) })
+    }
+
+    async function openReader() {
+        const fake = makeFakeBook(['cover.xhtml', 'ch1.xhtml', 'ch2.xhtml'])
+        ePubMock.mockReturnValue(fake.book)
+        getPositionMock.mockResolvedValueOnce(OPENED)
+        render(
+            <EbookReader
+                ebookId={7} pairId={42}
+                initialChapter={null} initialTextPreview={null}
+                bookTitle="Test Book" onClose={vi.fn()}
+            />
+        )
+        await waitFor(() => expect(fake.rendition.display).toHaveBeenCalledWith('cfi-old'))
+        await waitFor(() => expect(fake.handlers.relocated).toBeDefined())
+        return fake
+    }
+
+    it('coming back to the tab re-runs the ladder and lands where listening stopped', async () => {
+        const { rendition } = await openReader()
+        getPositionMock.mockResolvedValue(LISTENED_ON)
+        audioToEpubMock.mockResolvedValue({ epub_chapter: 2, preview: null })
+
+        setVisibility('hidden')
+        setVisibility('visible')
+
+        await waitFor(() => expect(rendition.display).toHaveBeenCalledWith('ch2.xhtml'))
+        expect(getPositionMock).toHaveBeenCalledTimes(2)
+        expect(audioToEpubMock).toHaveBeenCalledWith(42, 1800000)
+    })
+
+    it('holds every save while the fresh record is in flight — a page turn from the stale page is dropped', async () => {
+        const { rendition, handlers } = await openReader()
+        let release
+        getPositionMock.mockReturnValue(new Promise(r => { release = r }))
+
+        setVisibility('hidden')
+        setVisibility('visible')
+
+        // The user turns a page off the stale page before the fetch returns.
+        act(() => { window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight' })) })
+        act(() => {
+            handlers.relocated({
+                start: { cfi: 'cfi-old-plus-one', percentage: 0.2, displayed: { page: 2, total: 9 }, href: 'ch1.xhtml' },
+            })
+        })
+        await act(async () => { await new Promise(r => setTimeout(r, 2300)) })
+        expect(updatePositionMock).not.toHaveBeenCalled()
+
+        audioToEpubMock.mockResolvedValue({ epub_chapter: 2, preview: null })
+        await act(async () => { release(LISTENED_ON) })
+        await waitFor(() => expect(rendition.display).toHaveBeenCalledWith('ch2.xhtml'))
+        expect(updatePositionMock).not.toHaveBeenCalled()
+    })
+
+    it('does nothing when listening has not moved on', async () => {
+        const { rendition } = await openReader()
+        getPositionMock.mockResolvedValue({ ...OPENED, audio_position_ms: 610000 })
+
+        setVisibility('hidden')
+        setVisibility('visible')
+
+        await waitFor(() => expect(getPositionMock).toHaveBeenCalledTimes(2))
+        await act(async () => { await new Promise(r => setTimeout(r, 50)) })
+        expect(rendition.display).toHaveBeenCalledTimes(1)
+        expect(audioToEpubMock).not.toHaveBeenCalled()
+    })
+
+    it('does nothing when the record was last written by a reader', async () => {
+        const { rendition } = await openReader()
+        getPositionMock.mockResolvedValue({ ...LISTENED_ON, source: 'ebook' })
+
+        setVisibility('hidden')
+        setVisibility('visible')
+
+        await waitFor(() => expect(getPositionMock).toHaveBeenCalledTimes(2))
+        await act(async () => { await new Promise(r => setTimeout(r, 50)) })
+        expect(rendition.display).toHaveBeenCalledTimes(1)
+    })
+
+    it("counts the reader's own saves: an audio position it wrote is not 'listening moved on'", async () => {
+        const { rendition, handlers } = await openReader()
+        // The settle save's sync-map match moves the record's audio to 30:00.
+        matchTextToAudioMock.mockResolvedValue({
+            epub_chapter: 2, epub_sentence_index: 40, sync_map_version: 1, audio_position_ms: 1800000,
+        })
+        act(() => {
+            handlers.relocated({
+                start: { cfi: 'cfi-read-on', percentage: 0.6, displayed: { page: 1, total: 1 }, href: 'ch2.xhtml' },
+            })
+        })
+        await act(async () => { await new Promise(r => setTimeout(r, 2300)) })
+        await waitFor(() => expect(updatePositionMock).toHaveBeenCalledTimes(1))
+
+        getPositionMock.mockResolvedValue(LISTENED_ON)
+        setVisibility('hidden')
+        setVisibility('visible')
+
+        await waitFor(() => expect(getPositionMock).toHaveBeenCalledTimes(2))
+        await act(async () => { await new Promise(r => setTimeout(r, 50)) })
+        expect(rendition.display).toHaveBeenCalledTimes(1)
+    })
+
+    it('a tab that was never hidden does not re-fetch on a visible event', async () => {
+        await openReader()
+        setVisibility('visible')
+        await act(async () => { await new Promise(r => setTimeout(r, 50)) })
+        expect(getPositionMock).toHaveBeenCalledTimes(1)
+    })
+})

@@ -7,7 +7,10 @@ import {
 } from '../lib/position'
 // The restore ladder's execution, the landing verdict and the write gate
 // (issue #278) — the piece docs/position-sync-contract.md cares about.
-import { executeRestore, restorePosition, createWriteGate } from '../lib/restoreController'
+import {
+    executeRestore, restorePosition, createWriteGate, fetchOpeningPosition,
+} from '../lib/restoreController'
+import { shouldReanchor } from '../lib/positionLadder'
 import {
     normalizeForSearch, extractSearchableText, WHITESPACE_VARIANT_CHAR_RE,
 } from '../lib/textSearch'
@@ -117,6 +120,19 @@ function EbookReader({ ebookId, pairId, initialChapter, initialTextPreview, onCl
     // position hasn't moved since — visibilitychange fires on every tab
     // switch, and a duplicate write buys nothing.
     const lastIssuedSaveRef = useRef(null)
+    // Re-anchoring on return (issue #683). `baselineAudioRef` is the audio
+    // position the reader last knew the record to hold — at open, then as
+    // its own sync-map-matched saves move it — so listening elsewhere is told
+    // apart from the reader's own writes. `wasHiddenRef` limits the check to
+    // a genuine return; `reanchoringRef` holds every save while the fresh
+    // record is fetched and, if needed, the ladder re-runs.
+    const baselineAudioRef = useRef(null)
+    const wasHiddenRef = useRef(false)
+    const reanchoringRef = useRef(false)
+    // The open's `isDestroyed`, for the re-anchor that runs outside it; set
+    // once the open's own restore has landed, which is also what marks the
+    // reader as open.
+    const isDestroyedRef = useRef(null)
 
     // The text-nav pass confirmed an audio-derived landing: the preview text
     // was actually located in this book.
@@ -208,6 +224,9 @@ function EbookReader({ ebookId, pairId, initialChapter, initialTextPreview, onCl
         if (!cfi) return false
         // Don't save while text nav is hopping between chapters looking for text
         if (textNavInProgressRef.current) return false
+        // Nor while a return to the tab checks whether listening moved on:
+        // the page on screen may be stale (issue #683). Dropped, not queued.
+        if (reanchoringRef.current) return false
         // Nothing may be written until we know where the reader actually is.
         // A restore that failed and left the book at page one would otherwise
         // persist chapter 0 over a real position set on another device.
@@ -278,6 +297,7 @@ function EbookReader({ ebookId, pairId, initialChapter, initialTextPreview, onCl
             // The write reached the server and was adjudicated; a later flush
             // for the same CFI would be a pure duplicate.
             lastIssuedSaveRef.current = cfi
+            if (match?.audio_position_ms != null) baselineAudioRef.current = match.audio_position_ms
 
             // A genuinely different device wrote something newer. Surface it;
             // never navigate on the user's behalf.
@@ -337,6 +357,7 @@ function EbookReader({ ebookId, pairId, initialChapter, initialTextPreview, onCl
             saveTimerRef.current = null
         }
         if (textNavInProgressRef.current) return null
+        if (reanchoringRef.current) return null
         if (!maybeOpenGate()) return null
         const built = buildFlushPayload()
         if (!built) return null
@@ -373,6 +394,53 @@ function EbookReader({ ebookId, pairId, initialChapter, initialTextPreview, onCl
         return () => { saveFlushRef.current = null }
     }, [saveFlushRef])
 
+    // A reader left open while the book was listened to elsewhere shows the
+    // page from before; the ladder only ran at open (issue #683, the web half
+    // of #682). On return: hold saves, fetch the record, and if listening
+    // moved on re-run the same ladder from it — gate reset, text-nav pass
+    // re-armed — exactly as an open would.
+    const reanchorAfterReturn = useCallback(async () => {
+        const book = bookRef.current
+        const rendition = renditionRef.current
+        // Not open yet (the open's own restore is still running), or already
+        // re-anchoring from a previous return.
+        if (!isDestroyedRef.current || !book || !rendition) return
+        if (reanchoringRef.current) return
+        reanchoringRef.current = true
+        if (saveTimerRef.current) {
+            clearTimeout(saveTimerRef.current)
+            saveTimerRef.current = null
+        }
+        const isDestroyed = isDestroyedRef.current
+        try {
+            const record = await fetchOpeningPosition({ pairId, ebookId, initialChapter, initialTextPreview })
+            if (isDestroyed()) return
+            if (!shouldReanchor({
+                source: record?.source,
+                recordAudioMs: record?.audio_position_ms,
+                baselineAudioMs: baselineAudioRef.current,
+            })) return
+            console.log(`[EbookReader] listening moved on to ${record.audio_position_ms}ms — re-anchoring`)
+            gate.resetForReanchor()
+            textNavDoneRef.current = false
+            const restored = await restorePosition({
+                book, rendition, pairId, ebookId, position: record, isDestroyed,
+                onResolved: (p) => { positionRef.current = p },
+            })
+            if (!restored) return
+            positionRef.current = restored.position
+            baselineAudioRef.current = restored.position?.audio_position_ms ?? null
+            gate.applyLanding(restored.outcome)
+            setUnresolvedPosition(restored.outcome.unresolved)
+        } catch (e) {
+            console.warn('[EbookReader] re-anchor on return failed:', e?.message || e)
+        } finally {
+            reanchoringRef.current = false
+        }
+    }, [pairId, ebookId, initialChapter, initialTextPreview, gate])
+    const reanchorRef = useRef(() => {})
+    reanchorRef.current = reanchorAfterReturn
+
     // Last-guaranteed-event flushes (issue #158): on iOS the PWA is the app —
     // beforeunload never fires and pagehide is unreliable; visibilitychange →
     // hidden is the last event that reliably runs. Regular fetch is aborted
@@ -385,7 +453,13 @@ function EbookReader({ ebookId, pairId, initialChapter, initialTextPreview, onCl
                 built.fields, { claimSource: built.claimSource })
         }
         const onVisibilityChange = () => {
-            if (document.visibilityState === 'hidden') flushViaKeepalive()
+            if (document.visibilityState === 'hidden') {
+                wasHiddenRef.current = true
+                flushViaKeepalive()
+            } else if (document.visibilityState === 'visible' && wasHiddenRef.current) {
+                wasHiddenRef.current = false
+                reanchorRef.current()
+            }
         }
         window.addEventListener('pagehide', flushViaKeepalive)
         document.addEventListener('visibilitychange', onVisibilityChange)
@@ -421,6 +495,8 @@ function EbookReader({ ebookId, pairId, initialChapter, initialTextPreview, onCl
         })
         if (!restored) return
         positionRef.current = restored.position
+        baselineAudioRef.current = restored.position?.audio_position_ms ?? null
+        isDestroyedRef.current = isDestroyed
 
         // A position we could not resolve is NOT the same as no position.
         // Saving stays blocked in that case, so a failed restore can never

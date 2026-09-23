@@ -16,6 +16,17 @@ operator must do by hand rather than read about afterwards.
 
 ## [Unreleased]
 
+### Fixed
+
+- The web reader left open in a tab now catches up with listening done elsewhere (#683, the web
+  half of #682). Before, it kept showing the page from before, because it only worked out where to
+  open when the book was first opened, and the first page turn from that stale page was saved as
+  a reading position over the real, later listening position. Now, when the tab becomes visible
+  again, the reader holds its saves, re-reads the position, and, if the audiobook moved on by 30
+  seconds or more since the reader last knew, re-opens the book there the same way a fresh open
+  would. Costs one position read each time the tab comes back. A page turned in the moment
+  between returning to the tab and that read coming back is not saved.
+
 ## [0.5.1] - 2026-09-21
 
 ### Changed
