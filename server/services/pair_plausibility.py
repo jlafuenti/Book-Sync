@@ -23,7 +23,13 @@ and it takes the true findings with it.
 
 For calibration: a normal novel lands near 50-150 KB of EPUB per hour of
 narration. The reported pair is about 32 MB per hour, roughly 16x outside the
-upper bound here, and a heavily illustrated EPUB still sits comfortably inside.
+upper bound here. A heavily illustrated EPUB can still land outside it too —
+issue #693 was exactly that: a picture-heavy book at ~24 MB/hour, 12x over the
+upper bound, with a perfectly ordinary words-per-hour rate once its text was
+actually counted. That is why `check_pair_plausibility` treats the two signals
+as unequal rather than as peers: when a word count is available, its verdict
+is final, and this byte check only ever gets the last word when no word count
+could be taken at all.
 """
 
 import asyncio
@@ -96,11 +102,17 @@ def check_pair_plausibility(
     reporting every such pair as implausible would bury the real ones on the
     first scan.
 
-    Two independent signals, either of which can flag the pair (issue #620):
-    words-per-hour when `word_count` is available (checked first — it is the
-    more precise of the two, see `MAX_WORDS_PER_HOUR`'s docstring), and
-    bytes-per-hour otherwise or in addition. A pair only needs one signal to
-    be implausible; it does not need both.
+    Two signals, but not peers (issue #693, following #620). When `word_count`
+    is available, the words-per-hour check runs first and its verdict is
+    final either way: if it fails, that is the finding, full stop; if it
+    passes, the pair is plausible, full stop — control never falls through to
+    the bytes-per-hour check below. Bytes-per-hour is the imprecise signal
+    (see the module docstring: images and embedded fonts inflate an EPUB well
+    beyond its text), so it only ever gets to render a verdict on its own when
+    no word count could be taken at all. Letting it override a real word-count
+    measurement was the bug #693 fixed — a heavily illustrated book has a
+    plausible words-per-hour rate and an implausible bytes-per-hour one at the
+    same time, and the precise signal has to win.
     """
     # An abridgement genuinely has far less audio than the ebook has text, which
     # is exactly the shape this check looks for. #458 names it as the obvious
@@ -136,6 +148,10 @@ def check_pair_plausibility(
                     f"the wrong audiobook was matched."
                 )
             return False, detail
+        # The precise signal passed. Its verdict is final — do not second-guess
+        # a real word-count measurement with the imprecise byte heuristic
+        # below (issue #693).
+        return True, None
 
     if not ebook_file_size:
         return True, None
@@ -145,17 +161,24 @@ def check_pair_plausibility(
     if MIN_BYTES_PER_HOUR <= bytes_per_hour <= MAX_BYTES_PER_HOUR:
         return True, None
 
+    # Only reached when no word count was available at all, so the detail
+    # says so — an operator reading Troubleshoot Library needs to know this
+    # verdict came from the imprecise signal, not a confirmed word count.
     size = _human_size(ebook_file_size)
     if bytes_per_hour > MAX_BYTES_PER_HOUR:
         detail = (
-            f"{size} ebook paired with only {length} of audio. The audio file "
-            f"looks truncated, or the wrong file was matched — a sync map built "
-            f"from this would send the reader to the wrong place."
+            f"{size} ebook paired with only {length} of audio. No word count "
+            f"could be taken from the ebook, so this is based on file size "
+            f"alone, which is less precise. The audio file looks truncated, "
+            f"or the wrong file was matched — a sync map built from this "
+            f"would send the reader to the wrong place."
         )
     else:
         detail = (
-            f"{size} ebook paired with {length} of audio. That is far more audio "
-            f"than this ebook's text accounts for, which usually means the wrong "
+            f"{size} ebook paired with {length} of audio. No word count "
+            f"could be taken from the ebook, so this is based on file size "
+            f"alone, which is less precise. That is far more audio than "
+            f"this ebook's text accounts for, which usually means the wrong "
             f"audiobook was matched."
         )
     return False, detail

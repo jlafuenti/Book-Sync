@@ -18,6 +18,16 @@ operator must do by hand rather than read about afterwards.
 
 ### Fixed
 
+- A passing words-per-hour plausibility check could still be overruled by the imprecise
+  bytes-per-hour check, permanently flagging heavily illustrated ebooks (picture books, comics,
+  cookbooks) as `implausible_pair` even though their audio narrates them at a completely normal
+  pace (#693). `check_pair_plausibility` now treats a passing word-count verdict as final and
+  skips the byte check entirely when a word count is available; the byte check only ever runs on
+  its own when no word count could be computed for the ebook, and its message now says so
+  explicitly. Trade-off: a pair with a plausible word count is no longer checked by file size at
+  all — the word count is trusted outright as the more precise signal, so it can no longer act as
+  a second line of defense behind a coincidentally plausible-looking word count.
+
 - The web reader left open in a tab now catches up with listening done elsewhere (#683, the web
   half of #682). Before, it kept showing the page from before, because it only worked out where to
   open when the book was first opened, and the first page turn from that stale page was saved as

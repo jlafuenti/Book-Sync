@@ -260,12 +260,56 @@ def test_missing_word_count_falls_back_to_the_byte_check_only():
     assert detail is None
 
 
-def test_a_plausible_word_rate_still_lets_the_byte_check_flag_a_pair():
-    """An implausible pair can be implausible on either signal — a normal
-    word rate does not exempt a pair whose file size vs. audio length is
-    still an order of magnitude off (issue #458's original case)."""
+# ---------------------------------------------------------------------------
+# Issue #693: a passing word-rate verdict is final. It must not fall through
+# to the bytes-per-hour check, which is the *imprecise* signal by the
+# module's own admission — images and embedded fonts inflate an EPUB well
+# beyond its text, which is exactly what a heavily illustrated book does.
+# ---------------------------------------------------------------------------
+
+
+def test_a_plausible_word_rate_exempts_the_byte_check():
+    """The reported false positive: a ~100 MB, heavily illustrated EPUB
+    (~24 MB/hour of audio — about 12x over MAX_BYTES_PER_HOUR on its own)
+    paired with 4.15 hours of audio. Its ~9,100 words/hour sits squarely
+    inside a real unabridged reading's pace, and that precise signal must
+    win outright rather than being second-guessed by file size."""
+    ok, detail = check_pair_plausibility(
+        ebook_file_size=99_844_954, duration_seconds=14_940,
+        is_abridged=False, word_count=37_734,
+    )
+    assert ok is True
+    assert detail is None
+
+
+def test_missing_word_count_still_lets_the_byte_check_flag_a_pair():
+    """Only when no word count could be taken at all does the byte check
+    get to run on its own — issue #458's original case."""
     ok, detail = check_pair_plausibility(
         ebook_file_size=1_200_000, duration_seconds=132,
         is_abridged=False, word_count=None,
     )
     assert ok is False
+
+
+def test_the_byte_only_flag_says_no_word_count_was_available():
+    """When the byte check is what flags a pair, the detail has to say the
+    precise signal simply wasn't available — otherwise an operator reading
+    Troubleshoot Library has no way to tell the imprecise heuristic from a
+    confirmed problem."""
+    ok, detail = check_pair_plausibility(
+        ebook_file_size=1_200_000, duration_seconds=132,
+        is_abridged=False, word_count=None,
+    )
+    assert ok is False
+    assert "word count" in detail.lower()
+
+
+def test_the_byte_only_flag_says_no_word_count_was_available_too_much_audio():
+    """Same rule in the other direction of the byte band."""
+    ok, detail = check_pair_plausibility(
+        ebook_file_size=30_000, duration_seconds=_hours(20.0),
+        is_abridged=False, word_count=None,
+    )
+    assert ok is False
+    assert "word count" in detail.lower()
