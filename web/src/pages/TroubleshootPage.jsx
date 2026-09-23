@@ -36,6 +36,12 @@ const CATEGORIES = [
     // replace the file and rescan rather than to delete anything from here.
     { key: 'implausible_pair', label: 'Pairs whose audio length does not fit the ebook', kind: 'transcription', tone: 'warning' },
     { key: 'duplicate', label: 'Duplicate files', kind: 'dup', tone: 'warning' },
+    // Issue #692: content-similarity candidates (audio duration / ebook file
+    // size, corroborated by title/author/narrator/ASIN/ISBN) — never a
+    // certainty like `duplicate` above, so this is report-only: `kind:
+    // 'report'` offers no checkbox, no bulk-delete and no per-row action,
+    // only the existing title-click navigation to the item's details.
+    { key: 'possible_duplicate', label: 'Possible duplicates (same length or size)', kind: 'report', tone: 'warning' },
     { key: 'missing_cover', label: 'Missing covers', kind: 'cover', tone: 'warning' },
     { key: 'orphaned_cover', label: 'Orphaned cover files', kind: 'orphan', tone: 'warning' },
     { key: 'failed_transcription', label: 'Failed transcriptions', kind: 'transcription', tone: 'warning' },
@@ -316,6 +322,11 @@ function IssueSection({ cat, rows, canEdit, onChanged, onOpenDetails }) {
                                                     : <div style={{ fontWeight: 500 }}>{title}</div>
                                             })()}
                                             {r.author && <div className="ts-sub">{r.author}</div>}
+                                            {r.likely_redundant && (
+                                                <div className="ts-sub" style={{ color: 'var(--warning)' }}>
+                                                    Likely redundant — not paired to a book
+                                                </div>
+                                            )}
                                             {r.file_path && <div className="ts-path">{r.file_path}</div>}
                                         </td>
                                         <td className="ts-detail">{r.detail}</td>

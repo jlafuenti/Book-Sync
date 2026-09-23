@@ -16,6 +16,22 @@ operator must do by hand rather than read about afterwards.
 
 ## [Unreleased]
 
+### Added
+
+- Troubleshoot now lists **possible duplicates** as a report-only category alongside the existing
+  exact-hash `Duplicate files` check (#692). The exact-hash check only ever catches byte-identical
+  files, and a real duplicate almost never is one: a remux, a re-tag, or Tandem's own EPUB
+  metadata write-back (#533) changes every byte while leaving the same work behind, so genuine
+  duplicates accumulated invisibly. The new category matches audiobooks by duration and ebooks by
+  file size, but neither signal is trusted alone — on a library of any size, some pairs of
+  genuinely different books turn up within a few seconds or the same byte size purely by chance.
+  Every candidate also needs a second, independent signal already on the row (matching title,
+  overlapping author, same narrator, same ASIN/ISBN) before it is reported. When one copy of a
+  candidate pair is paired to a book and the other is not, the unpaired copy is marked as the
+  likely one to remove. Nothing here is deleted automatically or offered a delete/bulk-delete
+  action — a false candidate is expected, not exceptional (two different books can be the same
+  size), so the operator judges each one from the evidence in its `detail`.
+
 ### Fixed
 
 - A passing words-per-hour plausibility check could still be overruled by the imprecise
