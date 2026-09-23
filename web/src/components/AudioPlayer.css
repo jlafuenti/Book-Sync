@@ -644,3 +644,23 @@
         padding-bottom: calc(var(--mobile-bottomnav-height, 80px) + 64px + 16px);
     }
 }
+
+/* Load window (issue #697): the transport is disabled until the saved
+   position has been applied, and the play button shows a spinner. */
+.audio-transport button:disabled,
+.mini-player-controls button:disabled,
+.audio-seek-bar:disabled {
+    opacity: 0.5;
+    cursor: default;
+    pointer-events: none;
+}
+
+.player-spinner {
+    animation: spin 1s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .player-spinner {
+        animation: none;
+    }
+}

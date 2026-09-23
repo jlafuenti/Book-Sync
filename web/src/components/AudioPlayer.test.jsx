@@ -244,3 +244,45 @@ describe('cover art uses a scoped media token', () => {
         expect(getAccessTokenMock).not.toHaveBeenCalled()
     })
 })
+
+// Issue #697: until the saved position has been applied, the transport is
+// disabled and says it is loading, so nothing can start playback at 0:00.
+describe('load window', () => {
+    it('the full player disables play, skips and the seek bar while loading', async () => {
+        const togglePlayPause = vi.fn()
+        useAudioPlayerMock.mockReturnValue(basePlayer({ loading: true, togglePlayPause, currentTime: 8578, duration: 36000 }))
+        render(<AudioPlayerView onClose={vi.fn()} />)
+        await waitFor(() => expect(getAudiobookChaptersMock).toHaveBeenCalled())
+
+        const play = screen.getByRole('button', { name: 'Loading…' })
+        expect(play).toBeDisabled()
+        expect(screen.getByTitle('Back 30s')).toBeDisabled()
+        expect(screen.getByTitle('Forward 30s')).toBeDisabled()
+        expect(screen.getByRole('slider')).toBeDisabled()
+        // The saved position, not 0:00.
+        expect(screen.getByText('2:22:58')).toBeInTheDocument()
+
+        fireEvent.click(play)
+        expect(togglePlayPause).not.toHaveBeenCalled()
+    })
+
+    it('the full player enables them once loaded', async () => {
+        useAudioPlayerMock.mockReturnValue(basePlayer({ loading: false }))
+        render(<AudioPlayerView onClose={vi.fn()} />)
+        await waitFor(() => expect(getAudiobookChaptersMock).toHaveBeenCalled())
+
+        expect(screen.getByRole('button', { name: 'Play' })).toBeEnabled()
+        expect(screen.getByRole('slider')).toBeEnabled()
+    })
+
+    it('the mini player disables play and skips while loading', () => {
+        useAudioPlayerMock.mockReturnValue(basePlayer({ loading: true, stop: vi.fn() }))
+        render(<MiniPlayer onExpand={vi.fn()} />)
+
+        expect(screen.getByRole('button', { name: 'Loading…' })).toBeDisabled()
+        expect(screen.getByTitle('Back 30s')).toBeDisabled()
+        expect(screen.getByTitle('Forward 30s')).toBeDisabled()
+        // Stop stays available: the listener can still back out of a slow load.
+        expect(screen.getByTitle('Stop')).toBeEnabled()
+    })
+})

@@ -14,6 +14,16 @@ function formatTime(seconds) {
     return `${m}:${s.toString().padStart(2, '0')}`
 }
 
+// Shown in the play button while the audio loads (issue #697).
+function Spinner({ size }) {
+    return (
+        <svg className="player-spinner" viewBox="0 0 24 24" width={size} height={size} fill="none"
+            stroke="currentColor" strokeWidth="2.5" aria-hidden="true">
+            <circle cx="12" cy="12" r="9" strokeDasharray="42 15" strokeLinecap="round" />
+        </svg>
+    )
+}
+
 const SPEEDS = [0.5, 0.75, 1, 1.25, 1.5, 2]
 const SLEEP_OPTIONS = [15, 30, 45, 60]
 
@@ -56,7 +66,7 @@ export function AudioPlayerView({ onClose, onSwitchToEbook }) {
 
     if (!player.currentAudiobook) return null
 
-    const { currentAudiobook, pairedEbookId, playing, currentTime, duration, speed, sleepMinutes, staleConflict, playbackError } = player
+    const { currentAudiobook, pairedEbookId, playing, currentTime, duration, speed, sleepMinutes, staleConflict, playbackError, loading } = player
     const progressPercent = duration > 0 ? (currentTime / duration) * 100 : 0
 
     const currentChapter = chapters.length > 0
@@ -174,6 +184,7 @@ export function AudioPlayerView({ onClose, onSwitchToEbook }) {
                             max={duration || 0}
                             step={1}
                             value={currentTime}
+                            disabled={loading}
                             onChange={e => player.seekTo(Number(e.target.value))}
                             style={{
                                 background: `linear-gradient(to right, var(--accent) ${progressPercent}%, var(--border) ${progressPercent}%)`
@@ -186,14 +197,18 @@ export function AudioPlayerView({ onClose, onSwitchToEbook }) {
                     </div>
 
                     {/* Transport controls */}
+                    {/* Until the saved position has been applied the transport
+                        is disabled (issue #697): a press at the empty
+                        element's 0:00 used to start from the top of the file. */}
                     <div className="audio-transport">
-                        <button onClick={() => player.skipBackward()} title="Back 30s">
+                        <button onClick={() => player.skipBackward()} title="Back 30s" disabled={loading}>
                             <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" strokeWidth="2">
                                 <path d="M12.5 8V4l-5 4 5 4V8" /><path d="M19 12a7 7 0 1 1-7-7" />
                             </svg>
                         </button>
-                        <button className="play-btn" onClick={player.togglePlayPause}>
-                            {playing ? (
+                        <button className="play-btn" onClick={player.togglePlayPause} disabled={loading}
+                            aria-label={loading ? 'Loading…' : playing ? 'Pause' : 'Play'}>
+                            {loading ? <Spinner size={28} /> : playing ? (
                                 <svg viewBox="0 0 24 24" width="28" height="28" fill="currentColor">
                                     <rect x="6" y="4" width="4" height="16" /><rect x="14" y="4" width="4" height="16" />
                                 </svg>
@@ -203,7 +218,7 @@ export function AudioPlayerView({ onClose, onSwitchToEbook }) {
                                 </svg>
                             )}
                         </button>
-                        <button onClick={() => player.skipForward()} title="Forward 30s">
+                        <button onClick={() => player.skipForward()} title="Forward 30s" disabled={loading}>
                             <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" strokeWidth="2">
                                 <path d="M11.5 8V4l5 4-5 4V8" /><path d="M5 12a7 7 0 1 0 7-7" />
                             </svg>
@@ -323,7 +338,7 @@ export function MiniPlayer({ onExpand }) {
 
     if (!player.currentAudiobook) return null
 
-    const { currentAudiobook, playing, currentTime, duration, playbackError } = player
+    const { currentAudiobook, playing, currentTime, duration, playbackError, loading } = player
     const progressPercent = duration > 0 ? (currentTime / duration) * 100 : 0
 
     return (
@@ -360,13 +375,14 @@ export function MiniPlayer({ onExpand }) {
                         </svg>
                     </button>
                 )}
-                <button onClick={() => player.skipBackward()} title="Back 30s">
+                <button onClick={() => player.skipBackward()} title="Back 30s" disabled={loading}>
                     <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2">
                         <path d="M12.5 8V4l-5 4 5 4V8" /><path d="M19 12a7 7 0 1 1-7-7" />
                     </svg>
                 </button>
-                <button onClick={player.togglePlayPause}>
-                    {playing ? (
+                <button onClick={player.togglePlayPause} disabled={loading}
+                    aria-label={loading ? 'Loading…' : playing ? 'Pause' : 'Play'}>
+                    {loading ? <Spinner size={20} /> : playing ? (
                         <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
                             <rect x="6" y="4" width="4" height="16" /><rect x="14" y="4" width="4" height="16" />
                         </svg>
@@ -376,7 +392,7 @@ export function MiniPlayer({ onExpand }) {
                         </svg>
                     )}
                 </button>
-                <button onClick={() => player.skipForward()} title="Forward 30s">
+                <button onClick={() => player.skipForward()} title="Forward 30s" disabled={loading}>
                     <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2">
                         <path d="M11.5 8V4l5 4-5 4V8" /><path d="M5 12a7 7 0 1 0 7-7" />
                     </svg>

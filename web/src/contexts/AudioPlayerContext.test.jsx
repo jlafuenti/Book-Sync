@@ -1019,3 +1019,168 @@ describe('AudioPlayerProvider media session', () => {
         expect(ms.setActionHandler).not.toHaveBeenCalled()
     })
 })
+
+// Issue #697: between play() and the audio's `canplay`, the element sits at
+// 0:00 with no duration. On a slow link that window lasted over 20 s, and the
+// player showed 0:00, let play be pressed (which rewound from 0 and started at
+// the top of the file) and wrote a position of 0, which moved the paired ebook
+// back to 0 % as well. Until the saved position has actually been applied, the
+// player shows it, refuses transport commands, and never writes anything but it.
+describe('AudioPlayerProvider load window (issue #697)', () => {
+    const SAVED_MS = 8_578_000   // 2h 22m 58s
+    const BOOK = { title: 'A Book', cover_path: null, pair_id: 99, duration_seconds: 36_000 }
+
+    function LoadHarness() {
+        const player = useAudioPlayer()
+        return (
+            <>
+                <button onClick={() => player.play(7, BOOK, SAVED_MS)}>open-saved</button>
+                <button onClick={() => player.play(7, BOOK, 9_000_000)}>open-later</button>
+                <button onClick={() => player.togglePlayPause()}>toggle</button>
+                <button onClick={() => player.pause()}>pause</button>
+                <button onClick={() => player.seekTo(120)}>seek-120</button>
+                <button onClick={() => player.skipForward()}>skip-fwd</button>
+                <button onClick={() => player.skipBackward()}>skip-back</button>
+                <button onClick={() => player.play(8, { title: 'Other', pair_id: 100 }, 1_000)}>open-other</button>
+                <button onClick={() => player.play(7, BOOK, SAVED_MS).catch(() => {})}>open-catching</button>
+                <div data-testid="time">{player.currentTime}</div>
+                <div data-testid="duration">{player.duration}</div>
+                <div data-testid="loading">{String(player.loading)}</div>
+            </>
+        )
+    }
+
+    async function opening(which = 'open-saved') {
+        render(<AudioPlayerProvider><LoadHarness /></AudioPlayerProvider>)
+        fireEvent.click(screen.getByText(which))
+        const audio = audioInstances[0]
+        await waitFor(() => expect(audio.src).toBe('/api/files/audiobook/7?token=first-token'))
+        return audio
+    }
+
+    it('shows the saved position and the book length while loading, and says it is loading', async () => {
+        await opening()
+
+        expect(screen.getByTestId('time').textContent).toBe(String(SAVED_MS / 1000))
+        expect(screen.getByTestId('duration').textContent).toBe('36000')
+        expect(screen.getByTestId('loading').textContent).toBe('true')
+    })
+
+    it('a timeupdate or durationchange from the empty element does not reset the display to 0', async () => {
+        const audio = await opening()
+
+        act(() => {
+            audio.dispatchEvent(new Event('timeupdate'))       // currentTime is still 0
+            audio.dispatchEvent(new Event('durationchange'))   // duration is still 0
+        })
+
+        expect(screen.getByTestId('time').textContent).toBe(String(SAVED_MS / 1000))
+        expect(screen.getByTestId('duration').textContent).toBe('36000')
+    })
+
+    it('play/pause does nothing until the audio is ready', async () => {
+        const audio = await opening()
+
+        fireEvent.click(screen.getByText('toggle'))
+
+        expect(audio.paused).toBe(true)
+        expect(audio.currentTime).toBe(0)
+        expect(updatePositionMock).not.toHaveBeenCalled()
+    })
+
+    it('once ready it starts at the saved position and stops loading', async () => {
+        const audio = await opening()
+        fireEvent.click(screen.getByText('toggle'))   // ignored, as above
+
+        act(() => audio.dispatchEvent(new Event('canplay')))
+
+        expect(audio.currentTime).toBe(SAVED_MS / 1000)
+        expect(audio.paused).toBe(false)
+        expect(screen.getByTestId('loading').textContent).toBe('false')
+    })
+
+    it('seeks and skips during the window are ignored', async () => {
+        const audio = await opening()
+
+        fireEvent.click(screen.getByText('seek-120'))
+        expect(audio.currentTime).toBe(0)
+        fireEvent.click(screen.getByText('skip-fwd'))
+        expect(audio.currentTime).toBe(0)
+        fireEvent.click(screen.getByText('skip-back'))
+        expect(audio.currentTime).toBe(0)
+        expect(screen.getByTestId('time').textContent).toBe(String(SAVED_MS / 1000))
+
+        act(() => audio.dispatchEvent(new Event('canplay')))
+        expect(audio.currentTime).toBe(SAVED_MS / 1000)
+    })
+
+    it('pause during the window writes nothing', async () => {
+        await opening()
+
+        fireEvent.click(screen.getByText('pause'))
+
+        expect(updatePositionMock).not.toHaveBeenCalled()
+    })
+
+    it('a tab close during the window saves the saved position, not 0', async () => {
+        await opening()
+
+        act(() => { window.dispatchEvent(new Event('pagehide')) })
+
+        expect(sendPositionKeepaliveMock).toHaveBeenCalledWith('pair', 99, expect.objectContaining({
+            audio_position_ms: SAVED_MS,
+        }))
+    })
+
+    it('opening the same book again during the window updates the pending start', async () => {
+        const audio = await opening()
+
+        fireEvent.click(screen.getByText('open-later'))
+        act(() => audio.dispatchEvent(new Event('canplay')))
+
+        expect(audio.currentTime).toBe(9_000)
+    })
+
+    it("switching books during the window does not apply the first book's start to the second", async () => {
+        const audio = await opening()
+        getAudiobookStreamUrlMock.mockResolvedValue('/api/files/audiobook/8?token=second-token')
+
+        fireEvent.click(screen.getByText('open-other'))
+        await waitFor(() => expect(audio.src).toBe('/api/files/audiobook/8?token=second-token'))
+        act(() => audio.dispatchEvent(new Event('canplay')))
+
+        expect(audio.currentTime).toBe(1)
+    })
+
+    it('leaving a book during its window writes its saved position, not 0', async () => {
+        const audio = await opening()
+        getAudiobookStreamUrlMock.mockResolvedValue('/api/files/audiobook/8?token=second-token')
+
+        fireEvent.click(screen.getByText('open-other'))
+        await waitFor(() => expect(audio.src).toBe('/api/files/audiobook/8?token=second-token'))
+
+        const leaving = updatePositionMock.mock.calls.filter(c => c[0] === 'pair' && c[1] === 99)
+        for (const call of leaving) expect(call[2].audio_position_ms).toBe(SAVED_MS)
+    })
+
+    it('a failed stream mint does not leave the player stuck loading', async () => {
+        getAudiobookStreamUrlMock.mockRejectedValue(new Error('offline'))
+        render(<AudioPlayerProvider><LoadHarness /></AudioPlayerProvider>)
+
+        fireEvent.click(screen.getByText('open-catching'))
+
+        await waitFor(() => expect(screen.getByTestId('loading').textContent).toBe('false'))
+    })
+
+    it('a stream recovery during the window resumes from the saved position', async () => {
+        const audio = await opening()
+        getAudiobookStreamUrlMock.mockResolvedValue('/api/files/audiobook/7?token=second-token')
+
+        act(() => audio.dispatchEvent(new Event('error')))
+        await waitFor(() => expect(audio.src).toBe('/api/files/audiobook/7?token=second-token'))
+        act(() => audio.dispatchEvent(new Event('canplay')))
+
+        expect(audio.currentTime).toBe(SAVED_MS / 1000)
+        expect(screen.getByTestId('loading').textContent).toBe('false')
+    })
+})
