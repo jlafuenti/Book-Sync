@@ -158,10 +158,17 @@ async def test_a_pair_that_would_collide_is_dropped_with_its_children(db, make_u
     Re-pointing the second onto the survivor would violate `uq_book_pairs_pair`,
     so it goes — and its sync map, sync points and bookmarks have to go with it,
     or the delete fails / orphans rows.
+
+    Both pairs share one audiobook on purpose (`audio.id`), which the
+    one-to-one indexes added in 0025 (issue #691) would themselves now
+    reject — irrelevant to what 0012's own dedupe is being asked here, so the
+    schema is relaxed back to pre-0025 for this test the same way `_twin_ebooks`
+    relaxes it back to pre-0012.
     """
     user = await make_user(username="reader")
     keeper, loser = await _twin_ebooks(db)
     audio = await _audiobook(db)
+    await suspend_book_pair_uniqueness(db)
 
     kept_pair = BookPair(ebook_id=keeper.id, audiobook_id=audio.id,
                          status=PairStatus.SYNCED)
@@ -365,7 +372,11 @@ async def _rewind_to_pre_0012(db):
     Call this BEFORE seeding: dropping the `book_pairs` constraint means
     rebuilding the table, which discards its rows.
     """
-    await suspend_book_pair_uniqueness(db)  # also re-creates the two FK indexes
+    # Strips today's model down to no ebook_id/audiobook_id index at all — the
+    # one-to-one unique indexes 0025 later adds (issue #691) go the same way
+    # the plain `ix_book_pairs_*` ones used to, leaving exactly the shape
+    # 0012's own upgrade() expects to find and rebuild from scratch below.
+    await suspend_book_pair_uniqueness(db)
     for index in _CREATED_INDEXES:
         await db.execute(text(f"DROP INDEX IF EXISTS {index}"))
     await db.commit()

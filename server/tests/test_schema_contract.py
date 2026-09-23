@@ -114,7 +114,7 @@ def test_client_request_fields_exist_on_server_model(kotlin_dtos, kotlin_name, m
 
 
 # ---------------------------------------------------------------------------
-# Model <-> migration agreement on the library indexes (issue #256)
+# Model <-> migration agreement on the library indexes (issue #256, #691)
 # ---------------------------------------------------------------------------
 #
 # `file_path` is the identity key the scan and the conversion path look rows up
@@ -122,6 +122,12 @@ def test_client_request_fields_exist_on_server_model(kotlin_dtos, kotlin_name, m
 # 0012: one duplicate row — a manual insert, a restore from an older dump, a
 # future concurrent ingest — and the whole library scan 500s on
 # `MultipleResultsFound`, exactly the failure #64 fixed for `user_progress`.
+#
+# `book_pairs.ebook_id` / `book_pairs.audiobook_id` are unique for a different
+# reason (issue #691): a pair is one-to-one, so the same ebook (or audiobook)
+# being in two rows at once is the bug, not a duplicate of identical data.
+# These replaced the plain FK-lookup indexes and the `uq_book_pairs_pair`
+# composite unique that 0012 created — 0025 is the migration that changed them.
 #
 # `alembic check` is the real drift gate, but it only runs in the Postgres CI
 # job and it compares *shapes*, not names. These assertions run in the default
@@ -131,18 +137,19 @@ def test_client_request_fields_exist_on_server_model(kotlin_dtos, kotlin_name, m
 _MIGRATION_0012 = os.path.join(
     _SERVER_DIR, "alembic", "versions", "0012_book_file_path_indexes.py"
 )
+_MIGRATION_0025 = os.path.join(
+    _SERVER_DIR, "alembic", "versions", "0025_book_pairs_one_to_one.py"
+)
 
-# index name -> (table, columns, unique)
+# index name -> (table, columns, unique, migration that creates it)
 EXPECTED_INDEXES = {
-    "ux_ebooks_file_path": ("ebooks", ["file_path"], True),
-    "ux_audiobooks_file_path": ("audiobooks", ["file_path"], True),
-    "ix_ebooks_file_hash": ("ebooks", ["file_hash"], False),
-    "ix_audiobooks_file_hash": ("audiobooks", ["file_hash"], False),
-    "ix_book_pairs_ebook_id": ("book_pairs", ["ebook_id"], False),
-    "ix_book_pairs_audiobook_id": ("book_pairs", ["audiobook_id"], False),
+    "ux_ebooks_file_path": ("ebooks", ["file_path"], True, _MIGRATION_0012),
+    "ux_audiobooks_file_path": ("audiobooks", ["file_path"], True, _MIGRATION_0012),
+    "ix_ebooks_file_hash": ("ebooks", ["file_hash"], False, _MIGRATION_0012),
+    "ix_audiobooks_file_hash": ("audiobooks", ["file_hash"], False, _MIGRATION_0012),
+    "ux_book_pairs_ebook_id": ("book_pairs", ["ebook_id"], True, _MIGRATION_0025),
+    "ux_book_pairs_audiobook_id": ("book_pairs", ["audiobook_id"], True, _MIGRATION_0025),
 }
-
-UQ_BOOK_PAIRS_PAIR = "uq_book_pairs_pair"
 
 
 @pytest.fixture(scope="module")
@@ -158,7 +165,7 @@ def book_tables():
 
 @pytest.mark.parametrize("name", sorted(EXPECTED_INDEXES), ids=sorted(EXPECTED_INDEXES))
 def test_library_index_is_declared_on_the_model(book_tables, name):
-    table_name, columns, unique = EXPECTED_INDEXES[name]
+    table_name, columns, unique, _migration = EXPECTED_INDEXES[name]
     table = book_tables[table_name]
 
     index = next((ix for ix in table.indexes if ix.name == name), None)
@@ -172,29 +179,33 @@ def test_library_index_is_declared_on_the_model(book_tables, name):
     assert index.unique is unique
 
 
-def test_book_pairs_pair_is_unique_on_the_model(book_tables):
-    """`create_pair` already 409s on a duplicate; this pins it in the schema."""
+def test_book_pairs_has_no_composite_unique_constraint(book_tables):
+    """`uq_book_pairs_pair` (unique on the ebook_id+audiobook_id combination)
+    is gone as of issue #691/migration 0025: unique `ebook_id` alone already
+    implies the combination can never repeat, so keeping both was redundant.
+    A composite constraint reappearing here would mean 0025's replacement was
+    only partial."""
     from sqlalchemy import UniqueConstraint
 
     constraints = {
-        c.name: sorted(col.name for col in c.columns)
-        for c in book_tables["book_pairs"].constraints
+        c.name for c in book_tables["book_pairs"].constraints
         if isinstance(c, UniqueConstraint)
     }
-    assert constraints.get(UQ_BOOK_PAIRS_PAIR) == ["audiobook_id", "ebook_id"], constraints
+    assert constraints == set(), constraints
 
 
-@pytest.mark.parametrize(
-    "name", sorted(EXPECTED_INDEXES) + [UQ_BOOK_PAIRS_PAIR],
-    ids=sorted(EXPECTED_INDEXES) + [UQ_BOOK_PAIRS_PAIR],
-)
+@pytest.mark.parametrize("name", sorted(EXPECTED_INDEXES), ids=sorted(EXPECTED_INDEXES))
 def test_the_migration_creates_each_name_the_models_declare(name):
     """Same names on both sides — SQLite tests build from the models, production
     builds from the migration, and only matching names make those the same
     database."""
-    with open(_MIGRATION_0012, encoding="utf-8") as fh:
+    _table, _columns, _unique, migration_path = EXPECTED_INDEXES[name]
+    with open(migration_path, encoding="utf-8") as fh:
         source = fh.read()
-    assert name in source, f"{name} is declared on a model but never created by 0012"
+    assert name in source, (
+        f"{name} is declared on a model but never created by "
+        f"{os.path.basename(migration_path)}"
+    )
 
 
 # ---------------------------------------------------------------------------

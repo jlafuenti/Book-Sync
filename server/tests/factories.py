@@ -154,17 +154,24 @@ async def suspend_file_path_uniqueness(db):
 
 
 async def suspend_book_pair_uniqueness(db):
-    """Rebuild `book_pairs` without `uq_book_pairs_pair` for this test's schema.
+    """Rebuild `book_pairs` without any of its pair-uniqueness for this test's
+    schema: neither the one-to-one unique indexes (`ux_book_pairs_ebook_id`,
+    `ux_book_pairs_audiobook_id`, issue #691) nor the older composite
+    `uq_book_pairs_pair` this replaced (it no longer exists on the model, but
+    the discard loop below is harmless if a future model change brings a
+    `UniqueConstraint` back).
 
     SQLite has no `ALTER TABLE ... DROP CONSTRAINT`, and a `UniqueConstraint`
     declared in `CREATE TABLE` becomes an undroppable implicit index — so the
-    table is recreated from the ORM definition with that one constraint removed.
-    Lets a test reproduce a duplicate pairing, which `create_pair` has always
-    rejected with a 409 but which migration 0011 still has to survive.
+    table is recreated from the ORM definition with the constraint/indexes
+    removed. Lets a test reproduce a duplicate pairing (same ebook or
+    audiobook in two rows, or the exact same combination twice), which
+    `create_pair` has always rejected with a 409 but which a migration or a
+    restore from an older dump still has to survive.
 
     Call before seeding: the existing (empty) table is dropped.
     """
-    from sqlalchemy import MetaData, UniqueConstraint
+    from sqlalchemy import Index, MetaData, UniqueConstraint
     from models.book import BookPair
 
     # The two referenced tables come along so the copied FKs still resolve;
@@ -174,9 +181,11 @@ async def suspend_book_pair_uniqueness(db):
     AudioBook.__table__.to_metadata(scratch)
     unconstrained = BookPair.__table__.to_metadata(scratch)
     for constraint in list(unconstrained.constraints):
-        if (isinstance(constraint, UniqueConstraint)
-                and constraint.name == "uq_book_pairs_pair"):
+        if isinstance(constraint, UniqueConstraint) and constraint.name == "uq_book_pairs_pair":
             unconstrained.constraints.discard(constraint)
+    for index in list(unconstrained.indexes):
+        if index.unique:
+            unconstrained.indexes.discard(index)
 
     await db.execute(text("DROP TABLE book_pairs"))
     await db.run_sync(lambda session: unconstrained.create(session.connection()))

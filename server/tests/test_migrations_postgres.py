@@ -339,11 +339,17 @@ def test_0012_creates_the_library_indexes_and_enforces_the_path():
     Postgres can answer — that the indexes are created under the names the models
     declare, and that the unique one is a *working* unique, not a plain index
     that happens to be named `ux_`.
+
+    Upgrades only to 0012, not head: 0025 (issue #691) later replaces
+    `ix_book_pairs_ebook_id`/`ix_book_pairs_audiobook_id`/`uq_book_pairs_pair`
+    with its own unique indexes, so those specific names are 0012-era state,
+    not what a fresh database ends up with today — see
+    `test_0025_creates_the_one_to_one_indexes_and_enforces_them` below.
     """
     from alembic import command
 
     cfg = _alembic_config()
-    command.upgrade(cfg, "head")
+    command.upgrade(cfg, "0012_book_path_indexes")
 
     engine = _sync_engine()
     inspector = inspect(engine)
@@ -369,6 +375,130 @@ def test_0012_creates_the_library_indexes_and_enforces_the_path():
                 "INSERT INTO ebooks (title, filename, file_path, format, uploaded_at) "
                 "VALUES ('Other', 'e.epub', '/x/dup.epub', 'epub', now())"
             ))
+
+
+def test_0025_creates_the_one_to_one_indexes_and_enforces_them():
+    """0025's DDL on real Postgres (issue #691): the composite constraint is
+    gone, the two per-column unique indexes exist under the names the model
+    declares, and each one is a *working* unique — a second pair for an
+    already-paired ebook, or for an already-paired audiobook, is rejected at
+    the database level regardless of what the other id is."""
+    from alembic import command
+
+    cfg = _alembic_config()
+    command.upgrade(cfg, "head")
+
+    engine = _sync_engine()
+    inspector = inspect(engine)
+    names = {ix["name"] for ix in inspector.get_indexes("book_pairs")}
+    expected = {"ux_book_pairs_ebook_id", "ux_book_pairs_audiobook_id"}
+    assert expected <= names, f"book_pairs missing: {expected - names}"
+    assert "ix_book_pairs_ebook_id" not in names
+    assert "ix_book_pairs_audiobook_id" not in names
+    for ix in inspector.get_indexes("book_pairs"):
+        if ix["name"] in expected:
+            assert ix["unique"], f"{ix['name']} is not a working unique index"
+
+    uniques = {c["name"] for c in inspector.get_unique_constraints("book_pairs")}
+    assert "uq_book_pairs_pair" not in uniques, uniques
+
+    with engine.begin() as conn:
+        conn.execute(text(
+            "INSERT INTO ebooks (title, filename, file_path, format, uploaded_at) "
+            "VALUES ('E', 'e.epub', '/x/e691.epub', 'epub', now())"
+        ))
+        conn.execute(text(
+            "INSERT INTO audiobooks (title, filename, file_path, format, uploaded_at) "
+            "VALUES ('A1', 'a1.m4b', '/x/a691-1.m4b', 'm4b', now())"
+        ))
+        conn.execute(text(
+            "INSERT INTO audiobooks (title, filename, file_path, format, uploaded_at) "
+            "VALUES ('A2', 'a2.m4b', '/x/a691-2.m4b', 'm4b', now())"
+        ))
+        conn.execute(text(
+            "INSERT INTO book_pairs (ebook_id, audiobook_id, status) "
+            "SELECT (SELECT id FROM ebooks WHERE file_path = '/x/e691.epub'), "
+            "       (SELECT id FROM audiobooks WHERE file_path = '/x/a691-1.m4b'), "
+            "       'SYNCED'"
+        ))
+
+    # Same ebook, a different (unused) audiobook: rejected on ebook_id alone.
+    with pytest.raises(Exception):
+        with engine.begin() as conn:
+            conn.execute(text(
+                "INSERT INTO book_pairs (ebook_id, audiobook_id, status) "
+                "SELECT (SELECT id FROM ebooks WHERE file_path = '/x/e691.epub'), "
+                "       (SELECT id FROM audiobooks WHERE file_path = '/x/a691-2.m4b'), "
+                "       'SYNCED'"
+            ))
+
+    with engine.begin() as conn:
+        conn.execute(text(
+            "INSERT INTO ebooks (title, filename, file_path, format, uploaded_at) "
+            "VALUES ('E2', 'e2.epub', '/x/e691-2.epub', 'epub', now())"
+        ))
+
+    # A different ebook, the same already-used audiobook: rejected on
+    # audiobook_id alone.
+    with pytest.raises(Exception):
+        with engine.begin() as conn:
+            conn.execute(text(
+                "INSERT INTO book_pairs (ebook_id, audiobook_id, status) "
+                "SELECT (SELECT id FROM ebooks WHERE file_path = '/x/e691-2.epub'), "
+                "       (SELECT id FROM audiobooks WHERE file_path = '/x/a691-1.m4b'), "
+                "       'SYNCED'"
+            ))
+
+
+def test_0025_refuses_to_upgrade_over_existing_duplicate_pairs():
+    """The migration must not delete or merge a pre-existing multi-paired row
+    (issue #691) — that is the operator's call, not this migration's. Seed a
+    database at 0024 with two pairs sharing one ebook_id, the exact shape the
+    bug report described, and the upgrade to 0025 must refuse with a message
+    naming the offending id rather than silently dropping one pair or letting
+    the raw `IntegrityError` from `create_index` speak for itself."""
+    from alembic import command
+
+    cfg = _alembic_config()
+    engine = _sync_engine()
+    command.upgrade(cfg, "0024_captured_at_backfill")
+
+    with engine.begin() as conn:
+        conn.execute(text(
+            "INSERT INTO ebooks (title, filename, file_path, format, uploaded_at) "
+            "VALUES ('E', 'e.epub', '/x/dup691.epub', 'epub', now())"
+        ))
+        conn.execute(text(
+            "INSERT INTO audiobooks (title, filename, file_path, format, uploaded_at) "
+            "VALUES ('A1', 'a1.m4b', '/x/dup691-1.m4b', 'm4b', now())"
+        ))
+        conn.execute(text(
+            "INSERT INTO audiobooks (title, filename, file_path, format, uploaded_at) "
+            "VALUES ('A2', 'a2.m4b', '/x/dup691-2.m4b', 'm4b', now())"
+        ))
+        conn.execute(text(
+            "INSERT INTO book_pairs (ebook_id, audiobook_id, status) "
+            "SELECT (SELECT id FROM ebooks WHERE file_path = '/x/dup691.epub'), "
+            "       (SELECT id FROM audiobooks WHERE file_path = '/x/dup691-1.m4b'), "
+            "       'SYNCED'"
+        ))
+        conn.execute(text(
+            "INSERT INTO book_pairs (ebook_id, audiobook_id, status) "
+            "SELECT (SELECT id FROM ebooks WHERE file_path = '/x/dup691.epub'), "
+            "       (SELECT id FROM audiobooks WHERE file_path = '/x/dup691-2.m4b'), "
+            "       'SYNCED'"
+        ))
+
+    with pytest.raises(RuntimeError, match="ebook_id"):
+        command.upgrade(cfg, "head")
+
+    # Neither pair was touched by the refused upgrade.
+    with engine.begin() as conn:
+        count = conn.execute(text(
+            "SELECT COUNT(*) FROM book_pairs WHERE ebook_id = "
+            "(SELECT id FROM ebooks WHERE file_path = '/x/dup691.epub')"
+        )).scalar_one()
+    assert count == 2
 
 
 def test_no_model_migration_drift():

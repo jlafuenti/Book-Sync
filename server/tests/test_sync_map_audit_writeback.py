@@ -19,6 +19,7 @@ audit still catches that case (the negative test below).
 """
 
 import pytest
+from sqlalchemy.exc import IntegrityError
 
 from models.book import AudioBook, BookPair, EBook, PairStatus
 from routers import library
@@ -165,12 +166,16 @@ async def test_patching_audiobook_metadata_refreshes_its_stored_hash(
     assert reread.file_hash == new_hash
 
 
-async def test_an_ebook_in_two_pairs_refreshes_both_maps(
-    db, tmp_path, make_client, editor_headers,
-):
-    # The pair constraint is on (ebook, audiobook), so one ebook may carry two
-    # aligned maps; a metadata edit must keep both healthy, not raise on the
-    # second row.
+async def test_an_ebook_cannot_be_in_two_pairs(db, tmp_path):
+    """An ebook carrying two aligned maps through two pairs used to be
+    possible — the pair constraint was on (ebook, audiobook), not on either id
+    alone — and this test used to prove a metadata edit kept both healthy.
+
+    Issue #691 closed that: a pair is now strictly one-to-one, so this second
+    pair is exactly the state that used to let the same book be queued for
+    transcription twice. `ux_book_pairs_ebook_id` rejects it before a second
+    aligned map (or a second write-back refresh) can exist to test.
+    """
     pair, path = await _seed_pair(db, tmp_path)
     other_audio = tmp_path / "other.m4b"
     other_audio.write_bytes(b"other placeholder audio bytes")
@@ -178,20 +183,8 @@ async def test_an_ebook_in_two_pairs_refreshes_both_maps(
                     file_path=str(other_audio), file_hash=hash_file(str(other_audio)))
     db.add(ab2)
     await db.flush()
-    pair2 = BookPair(ebook_id=pair.ebook_id, audiobook_id=ab2.id, status=PairStatus.SYNCED)
-    db.add(pair2)
-    await db.commit()
-    await db.refresh(pair2)
-    await make_sync_map(db, pair2.id, _points(PREVIEWS), epub_file_hash=hash_file(path))
+    db.add(BookPair(ebook_id=pair.ebook_id, audiobook_id=ab2.id, status=PairStatus.SYNCED))
 
-    async with make_client(library.router) as c:
-        resp = await c.patch(
-            f"/api/library/ebooks/{pair.ebook_id}",
-            headers=editor_headers,
-            json={"title": "A New Title"},
-        )
-    assert resp.status_code == 200
-
-    rows = await sync_map_audit.audit_sync_maps(db)
-    assert len(rows) == 2
-    assert {row["hash_status"] for row in rows} == {"match"}
+    with pytest.raises(IntegrityError):
+        await db.commit()
+    await db.rollback()
