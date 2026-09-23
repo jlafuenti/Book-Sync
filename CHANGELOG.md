@@ -41,6 +41,14 @@ operator must do by hand rather than read about afterwards.
 
 ### Fixed
 
+- A pair's plausibility verdict now records when it was last checked (#699). Rewriting an
+  existing `library_check_results` row updated the verdict but left `checked_at` at the time the
+  row was first created, so a pair that "Library verify" had just re-checked and cleared (#693)
+  still showed a timestamp from days earlier, as if the re-check had never run. Every write now
+  stamps `checked_at`. Rows already stored keep their old time until the next Library verify
+  re-checks them; only pairs currently flagged are re-checked, so a passing pair's time still
+  reflects when it was paired.
+
 - A passing words-per-hour plausibility check could still be overruled by the imprecise
   bytes-per-hour check, permanently flagging heavily illustrated ebooks (picture books, comics,
   cookbooks) as `implausible_pair` even though their audio narrates them at a completely normal

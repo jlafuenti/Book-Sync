@@ -128,3 +128,24 @@ async def test_it_does_not_commit(db):
 
     # Everything above was rolled back together, the check row included.
     assert await _rows(db, pair.id) == []
+
+
+async def test_rewriting_an_existing_row_advances_checked_at(db):
+    """Issue #699: `checked_at` has to say when the verdict was last computed.
+
+    Library verify re-checks flagged pairs (issue #693) and rewrites their rows.
+    A row that kept its creation time looked as though the re-check never ran.
+    """
+    import datetime
+
+    pair, eb, ab = await _pair(db, ebook_size=1_200_000, duration=132)
+    await record_pair_plausibility(db, pair, eb, ab)
+    row = (await _rows(db, pair.id))[0]
+    stale = datetime.datetime(2020, 1, 1)
+    row.checked_at = stale
+    await db.flush()
+
+    await record_pair_plausibility(db, pair, eb, ab)
+
+    row = (await _rows(db, pair.id))[0]
+    assert row.checked_at > stale

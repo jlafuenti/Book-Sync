@@ -40,6 +40,7 @@ from typing import Optional, Tuple
 from sqlalchemy import select
 
 from models.library_issue import LibraryCheckResult
+from utils import utcnow
 
 logger = logging.getLogger(__name__)
 
@@ -261,5 +262,9 @@ async def record_pair_plausibility(db, pair, ebook, audiobook, word_count=None) 
     # a rescan skip unchanged *files*, and this check is over a pair of them.
     row.ok = ok
     row.detail = detail
+    # The column default only fires on insert. Library verify rewrites existing
+    # rows (issue #693), so without this a re-checked row kept its creation time
+    # and read as though the re-check never ran (issue #699).
+    row.checked_at = utcnow()
     await db.flush()
     return ok
