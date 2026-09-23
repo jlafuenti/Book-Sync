@@ -6,7 +6,7 @@ import enum
 from datetime import datetime
 from sqlalchemy import (
     String, Text, DateTime, Integer, BigInteger, Boolean, Enum, ForeignKey,
-    Float, Index, JSON, UniqueConstraint, inspect,
+    Float, Index, JSON, inspect,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -176,18 +176,29 @@ class BookPair(Base):
     # New-pairs inbox: cleared once user resolves/skips all discrepancies or manually acknowledges
     acknowledged: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
-    # Both FKs are read as predicates, not just joined through: the library
-    # browse's paired/unpaired filter runs `EXISTS (SELECT 1 FROM book_pairs
-    # WHERE ebook_id = ebooks.id)` per row on every page. Unindexed that is a
-    # sequential scan per item.
+    # A pair is strictly one-to-one (issue #691): an ebook may be in at most one
+    # `BookPair`, and an audiobook may be in at most one. Before this, the only
+    # uniqueness was on the *combination* of the two ids, so the same ebook
+    # could be paired to two different audiobooks (or vice versa) without
+    # either the DB or `create_pair` objecting — which meant the same book got
+    # queued for transcription twice, and a reader's position could silently
+    # split across the two pairs (`user_progress`/`bookmarks` key on
+    # `book_pair_id`).
     #
-    # The unique constraint is belt-and-braces: `create_pair` already rejects a
-    # duplicate pairing with 409, so this only stops the check-then-insert being
-    # the *sole* guarantee (issue #256).
+    # These are plain unique `Index`es rather than a table-level
+    # `UniqueConstraint` so they stay individually droppable on SQLite (a
+    # `UniqueConstraint` is baked into `CREATE TABLE` there and needs a full
+    # table rebuild to remove — see `tests.factories.suspend_book_pair_uniqueness`).
+    # They also serve the paired/unpaired filter's `EXISTS (SELECT 1 FROM
+    # book_pairs WHERE ebook_id = ebooks.id)` per-row check on every library
+    # page, same as the plain indexes they replace.
+    #
+    # `uq_book_pairs_pair` (unique on the *combination*) is gone: unique
+    # `ebook_id` alone already implies the combination can never repeat, so
+    # keeping both was redundant (migration 0025_book_pairs_one_to_one).
     __table_args__ = (
-        Index("ix_book_pairs_ebook_id", "ebook_id"),
-        Index("ix_book_pairs_audiobook_id", "audiobook_id"),
-        UniqueConstraint("ebook_id", "audiobook_id", name="uq_book_pairs_pair"),
+        Index("ux_book_pairs_ebook_id", "ebook_id", unique=True),
+        Index("ux_book_pairs_audiobook_id", "audiobook_id", unique=True),
     )
 
     # Relationships

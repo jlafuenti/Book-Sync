@@ -59,6 +59,19 @@ operator must do by hand rather than read about afterwards.
   showed "phase 1 of 3" and then flipped once the real total came back. It no longer guesses — the
   phase total only renders once the server has actually reported it.
 
+- A pair is now strictly one-to-one: an ebook can be in at most one `BookPair`, and an audiobook
+  can be in at most one. Before, `book_pairs` was only unique on the *combination* of the two ids,
+  so the same ebook could end up paired to two different audiobooks at once — once by an
+  auto-match during a scan, once by hand through the Pairs page — with nothing objecting. Each
+  pair queued its own transcription job for the same book, and because reading position keys on
+  `book_pair_id`, a reader's progress could silently split across the two pairs depending on which
+  one they happened to open. `POST /api/library/pairs` now returns 409 naming the existing pair
+  when the ebook or the audiobook is already paired, `auto_match` already skipped a paired book on
+  its own and now cannot double-claim one within a single scan either, and the EPUB-conversion
+  relink path refuses (rather than silently dropping a pair) if its target already has one. The
+  trade-off: you can no longer keep two recordings of one book (e.g. a straight reading and a
+  dramatization) paired at the same time — unpair one first (#691).
+
 - The web reader left open in a tab now catches up with listening done elsewhere (#683, the web
   half of #682). Before, it kept showing the page from before, because it only worked out where to
   open when the book was first opened, and the first page turn from that stale page was saved as
@@ -72,6 +85,18 @@ operator must do by hand rather than read about afterwards.
 
 - Run Library verify (Troubleshoot → Verify library) after deploying this change to clear pairs
   that were flagged by file size despite a normal word count (#693).
+
+- Migration `0025_book_pairs_one_to_one` replaces `book_pairs`' `uq_book_pairs_pair` constraint
+  with two unique indexes, one on `ebook_id` and one on `audiobook_id`. It refuses to run if any
+  existing row already violates that — it will not delete or merge a pair on its own, since
+  choosing which one to keep is an operator decision. Find any before upgrading:
+  ```sql
+  SELECT ebook_id, array_agg(id) FROM book_pairs GROUP BY ebook_id HAVING count(*) > 1;
+  SELECT audiobook_id, array_agg(id) FROM book_pairs GROUP BY audiobook_id HAVING count(*) > 1;
+  ```
+  For each group, keep one pair and delete the others (`DELETE /api/library/pairs/{id}` demotes
+  the deleted pair's reading positions onto the surviving ebook/audiobook rather than losing them),
+  then re-run the upgrade.
 
 ## [0.5.1] - 2026-09-21
 

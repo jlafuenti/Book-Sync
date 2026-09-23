@@ -63,29 +63,26 @@ class TestInvalidateAudiobookTranscripts:
             select(AudioTranscript).where(AudioTranscript.pair_id == pair.id)
         )).scalar_one_or_none() is None
 
-    async def test_touches_every_pair_on_a_multi_pair_audiobook(self, db):
-        ab = await make_audiobook(db)
+    async def test_an_audiobook_cannot_be_in_two_pairs(self, db):
+        """This used to prove `invalidate_audiobook_transcripts` walked every
+        pair on a multi-paired audiobook. Issue #691 made that state
+        unrepresentable — an audiobook is in at most one pair — so the two
+        single-pair tests above are the whole of this function's contract now;
+        this just pins that the second pair is rejected at the DB level."""
+        from sqlalchemy.exc import IntegrityError
+
         from tests.factories import make_ebook
+
+        ab = await make_audiobook(db)
         eb1 = await make_ebook(db, title="One")
         eb2 = await make_ebook(db, title="Two")
-        pair1 = BookPair(ebook_id=eb1.id, audiobook_id=ab.id, status=PairStatus.SYNCED)
-        pair2 = BookPair(ebook_id=eb2.id, audiobook_id=ab.id, status=PairStatus.ERROR)
-        db.add_all([pair1, pair2])
-        await db.commit()
-        db.add(AudioTranscript(pair_id=pair1.id, audiobook_path="/x/a.m4b",
-                               sentence_count=1, sentences_json="[]"))
-        db.add(AudioTranscript(pair_id=pair2.id, audiobook_path="/x/a.m4b",
-                               sentence_count=1, sentences_json="[]"))
+        db.add(BookPair(ebook_id=eb1.id, audiobook_id=ab.id, status=PairStatus.SYNCED))
         await db.commit()
 
-        touched = await audio_change.invalidate_audiobook_transcripts(db, ab.id)
-        await db.commit()
-
-        assert touched == 2
-        for pid in (pair1.id, pair2.id):
-            fresh = await db.get(BookPair, pid)
-            assert fresh.status == PairStatus.MANUAL_MATCHED
-        assert (await db.execute(select(AudioTranscript))).scalars().all() == []
+        db.add(BookPair(ebook_id=eb2.id, audiobook_id=ab.id, status=PairStatus.ERROR))
+        with pytest.raises(IntegrityError):
+            await db.commit()
+        await db.rollback()
 
 
 class TestLooksChanged:
@@ -326,33 +323,43 @@ class TestRefreshIfAudiobookFileChanged:
 
 
 class TestRefreshTranscriptFingerprints:
-    async def test_updates_only_transcripts_that_already_carry_a_fingerprint(self, db):
-        pair_known = await make_book_pair(db)
-        pair_unknown = await make_book_pair(db)
-        # Both pairs' audiobooks are distinct rows from make_book_pair; give
-        # pair_unknown's transcript the *same* audiobook_id as pair_known's
-        # so both belong to one audiobook.
-        ab_id = pair_known.audiobook_id
-        pair_unknown_row = await db.get(BookPair, pair_unknown.id)
-        pair_unknown_row.audiobook_id = ab_id
-        await db.commit()
-
-        db.add(AudioTranscript(pair_id=pair_known.id, audiobook_path="/x/a.m4b",
+    async def test_a_transcript_that_already_carries_a_fingerprint_is_updated(self, db):
+        pair = await make_book_pair(db)
+        db.add(AudioTranscript(pair_id=pair.id, audiobook_path="/x/a.m4b",
                                sentence_count=1, sentences_json="[]",
                                audio_file_hash="old-hash"))
-        db.add(AudioTranscript(pair_id=pair_unknown.id, audiobook_path="/x/a.m4b",
+        await db.commit()
+
+        await audio_change.refresh_transcript_fingerprints(db, pair.audiobook_id, "new-hash")
+        await db.commit()
+
+        row = (await db.execute(
+            select(AudioTranscript).where(AudioTranscript.pair_id == pair.id)
+        )).scalar_one()
+        assert row.audio_file_hash == "new-hash"
+
+    async def test_a_transcript_with_no_fingerprint_is_left_alone(self, db):
+        """`audio_file_hash IS NULL` means unknown provenance, not "known
+        unchanged" (the model's own docstring) — only a row that already
+        carries a fingerprint needs correcting.
+
+        A separate pair/audiobook from the "is updated" case above: an
+        audiobook can be in at most one pair (issue #691), and a pair can
+        have at most one transcript (`audio_transcripts.pair_id` is unique),
+        so there is no longer a way to put two transcripts — one with a
+        fingerprint, one without — under a single `audiobook_id` to compare
+        within one test.
+        """
+        pair = await make_book_pair(db)
+        db.add(AudioTranscript(pair_id=pair.id, audiobook_path="/x/a.m4b",
                                sentence_count=1, sentences_json="[]",
                                audio_file_hash=None))
         await db.commit()
 
-        await audio_change.refresh_transcript_fingerprints(db, ab_id, "new-hash")
+        await audio_change.refresh_transcript_fingerprints(db, pair.audiobook_id, "new-hash")
         await db.commit()
 
-        known = (await db.execute(
-            select(AudioTranscript).where(AudioTranscript.pair_id == pair_known.id)
+        row = (await db.execute(
+            select(AudioTranscript).where(AudioTranscript.pair_id == pair.id)
         )).scalar_one()
-        unknown = (await db.execute(
-            select(AudioTranscript).where(AudioTranscript.pair_id == pair_unknown.id)
-        )).scalar_one()
-        assert known.audio_file_hash == "new-hash"
-        assert unknown.audio_file_hash is None
+        assert row.audio_file_hash is None

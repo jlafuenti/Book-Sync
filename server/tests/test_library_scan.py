@@ -80,8 +80,9 @@ async def test_a_second_audiobook_row_with_the_same_path_cannot_be_flushed(db):
 
 
 async def test_the_same_pairing_cannot_be_recorded_twice(db):
-    """`create_pair` returns 409 for this; `uq_book_pairs_pair` means the 409 is
-    no longer the only thing standing between it and a duplicate."""
+    """`create_pair` returns 409 for this; `ux_book_pairs_ebook_id` (one of the
+    one-to-one indexes added for issue #691) means the 409 is no longer the
+    only thing standing between it and a duplicate."""
     ebook = EBook(title="E", filename="e.epub", file_path="/books/e.epub")
     audio = AudioBook(title="A", filename="a.m4b", file_path="/audio/a.m4b")
     db.add_all([ebook, audio])

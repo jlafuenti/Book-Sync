@@ -761,6 +761,37 @@ async def create_pair(
     if result.scalar_one_or_none():
         raise HTTPException(status_code=409, detail="This pair already exists")
 
+    # A pair is strictly one-to-one (issue #691): an ebook may be in at most
+    # one BookPair, and an audiobook may be in at most one. The check above
+    # only catches the *exact* combination; without this, pairing the same
+    # ebook to a second, different audiobook (or vice versa) succeeded
+    # silently — the DB's only guarantee used to be on the combination, not
+    # either id alone — and the same book got queued for transcription twice.
+    # Name the existing pair so the caller can unpair it first.
+    existing_for_ebook = (await db.execute(
+        select(BookPair.id).where(BookPair.ebook_id == pair_data.ebook_id)
+    )).scalar_one_or_none()
+    if existing_for_ebook is not None:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"This ebook is already paired (pair {existing_for_ebook}). "
+                "Unpair it first."
+            ),
+        )
+
+    existing_for_audiobook = (await db.execute(
+        select(BookPair.id).where(BookPair.audiobook_id == pair_data.audiobook_id)
+    )).scalar_one_or_none()
+    if existing_for_audiobook is not None:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"This audiobook is already paired (pair {existing_for_audiobook}). "
+                "Unpair it first."
+            ),
+        )
+
     pair = BookPair(
         ebook_id=pair_data.ebook_id,
         audiobook_id=pair_data.audiobook_id,
@@ -1969,6 +2000,22 @@ async def _register_epub_in_db(epub_path: str, source_eb: EBook, db: AsyncSessio
     return epub_eb
 
 
+class PairRelinkConflict(Exception):
+    """Raised when re-pointing a pair at a converted EPUB would violate the
+    one-to-one pair constraint (issue #691) — the EPUB row already has its
+    own pair, from being scanned and paired independently before its MOBI/AZW3
+    sibling was converted. Carries the conflicting pair id so a caller can
+    surface it."""
+
+    def __init__(self, epub_ebook_id: int, existing_pair_id: int):
+        self.epub_ebook_id = epub_ebook_id
+        self.existing_pair_id = existing_pair_id
+        super().__init__(
+            f"EPUB {epub_ebook_id} already has its own pair ({existing_pair_id}); "
+            "unpair it before converting/deleting the source."
+        )
+
+
 async def _relink_or_cleanup_pairs(eb_id: int, epub_eb: Optional[EBook], db: AsyncSession) -> List[int]:
     """
     For every BookPair whose ebook_id == eb_id:
@@ -1984,10 +2031,28 @@ async def _relink_or_cleanup_pairs(eb_id: int, epub_eb: Optional[EBook], db: Asy
     built from the *source* file and no longer describe the ebook the reader
     gets, so the caller must rebuild them — see `_realign_relinked_pairs`
     (issue #101).
+
+    Raises `PairRelinkConflict`, and touches nothing, if `epub_eb` already
+    carries its own pair (issue #691's one-ebook-one-pair rule): the source's
+    pair cannot be re-pointed onto an ebook id that is already paired to a
+    *different* audiobook without violating the unique index. This is rare —
+    it means the EPUB sibling was scanned and paired on its own before the
+    MOBI/AZW3 source was converted — but silently dropping the source's pair
+    to make room would be exactly the kind of silent data loss issue #691 is
+    about avoiding, so the caller must resolve it (unpair one side) instead.
     """
     relinked: List[int] = []
     pairs_result = await db.execute(select(BookPair).where(BookPair.ebook_id == eb_id))
-    for pair in pairs_result.scalars().all():
+    pairs = pairs_result.scalars().all()
+
+    if epub_eb is not None and pairs:
+        conflict = (await db.execute(
+            select(BookPair.id).where(BookPair.ebook_id == epub_eb.id)
+        )).scalar_one_or_none()
+        if conflict is not None:
+            raise PairRelinkConflict(epub_eb.id, conflict)
+
+    for pair in pairs:
         if epub_eb is not None:
             pair.ebook_id = epub_eb.id
             db.add(pair)
@@ -2121,8 +2186,18 @@ async def convert_all_unsupported(
             failed.append({"filename": eb.filename, "error": str(e)})
 
     realign_failures: list[dict] = []
+    # One item's relink conflicting with the new one-to-one constraint
+    # (issue #691 — the EPUB sibling already has its own pair) must not
+    # abort every other item's conversion, so it is caught per-item rather
+    # than left to propagate: nothing is removed or deleted for that one
+    # ebook, and it is reported the same way a conversion failure is.
+    relink_conflicts: list[dict] = []
     for eb, epub_eb in to_delete:
-        relinked = await _relink_or_cleanup_pairs(eb.id, epub_eb, db)
+        try:
+            relinked = await _relink_or_cleanup_pairs(eb.id, epub_eb, db)
+        except PairRelinkConflict as e:
+            relink_conflicts.append({"filename": eb.filename, "error": str(e)})
+            continue
         try:
             os.remove(eb.file_path)
         except OSError as e:
@@ -2137,6 +2212,7 @@ async def convert_all_unsupported(
         "failed": failed,
         "total": len(ebooks),
         "realign_failures": realign_failures,
+        "relink_conflicts": relink_conflicts,
     }
 
 
@@ -2169,7 +2245,14 @@ async def convert_unsupported_file(
     realign_failures: list[dict] = []
     relinked: List[int] = []
     if delete_source:
-        relinked = await _relink_or_cleanup_pairs(eb.id, epub_eb, db)
+        # Nothing destructive has happened yet at this point (the EPUB is
+        # only registered, the source file is untouched) — a relink conflict
+        # (issue #691) is safe to surface as a plain 409 and leave the source
+        # exactly as it was.
+        try:
+            relinked = await _relink_or_cleanup_pairs(eb.id, epub_eb, db)
+        except PairRelinkConflict as e:
+            raise HTTPException(status_code=409, detail=str(e))
         try:
             os.remove(eb.file_path)
         except OSError as e:
@@ -2217,7 +2300,15 @@ async def delete_unsupported_source(
 
     # Ensure the EPUB is registered, then re-link any pairs to it (preserves pair + transcript)
     epub_eb = await _register_epub_in_db(str(epub_sibling), eb, db)
-    relinked = await _relink_or_cleanup_pairs(ebook_id, epub_eb, db)
+    # The source file above is already unlinked by this point, so a relink
+    # conflict (issue #691 — the EPUB already has its own pair) cannot be
+    # made fully safe here; surfacing it as a 409 at least stops the source
+    # *row* and its pair from being silently dropped, which is the operator's
+    # signal to resolve the conflicting pair before retrying.
+    try:
+        relinked = await _relink_or_cleanup_pairs(ebook_id, epub_eb, db)
+    except PairRelinkConflict as e:
+        raise HTTPException(status_code=409, detail=str(e))
 
     await db.delete(eb)
     realign_failures = await _realign_relinked_pairs(relinked, db)

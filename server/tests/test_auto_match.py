@@ -286,6 +286,26 @@ async def test_already_paired_books_are_not_considered(db):
     assert len((await db.execute(select(BookPair))).scalars().all()) == 1
 
 
+async def test_one_ebook_never_gets_two_pairs_from_two_candidates_in_one_run(db):
+    """The mirror of `test_one_audiobook_is_never_claimed_by_two_ebooks_in_one_run`
+    (issue #691): a single unpaired ebook with two equally-good, unpaired
+    audiobook candidates must end the run in exactly one pair, never two —
+    `auto_match_books` picks the single best-scoring candidate per ebook and
+    stops, and the new `ux_book_pairs_ebook_id` unique index would reject a
+    second one at the DB level if it ever tried."""
+    eb = await make_ebook(db, title="Mistborn", author="Brandon Sanderson")
+    await make_audiobook(db, title="Mistborn", author="Brandon Sanderson",
+                         filename="one.m4b")
+    await make_audiobook(db, title="Mistborn", author="Brandon Sanderson",
+                         filename="two.m4b")
+
+    assert await auto_match_books(db) == 1
+    await db.commit()
+
+    pairs = (await db.execute(select(BookPair))).scalars().all()
+    assert [p.ebook_id for p in pairs] == [eb.id]
+
+
 # ---------------------------------------------------------------------------
 # Issue #620: word-rate implausible pairs must not be auto-matched at all —
 # not created and then flagged in Troubleshoot Library, which still lets the
