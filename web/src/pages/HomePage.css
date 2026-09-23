@@ -74,7 +74,7 @@
 .home-carousel-arrow:hover {
     background: var(--accent);
     border-color: var(--accent);
-    color: white;
+    color: var(--on-accent);
 }
 
 .home-carousel-arrow-left {
@@ -161,7 +161,7 @@
     top: 6px;
     right: 6px;
     background: var(--accent);
-    color: white;
+    color: var(--on-accent);
     font-size: 0.7rem;
     font-weight: 700;
     padding: 2px 6px;
@@ -193,7 +193,7 @@
     border-radius: 50%;
     background: var(--accent);
     border: none;
-    color: white;
+    color: var(--on-accent);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -320,7 +320,7 @@
 .home-card-action:active {
     background: var(--accent);
     border-color: var(--accent);
-    color: #fff;
+    color: var(--on-accent);
 }
 
 .home-card-sheet-backdrop {
@@ -723,7 +723,7 @@
         top: 12px;
         right: 12px;
         background: var(--accent);
-        color: white;
+        color: var(--on-accent);
         font-size: 9px;
         font-weight: 900;
         padding: 4px 8px;

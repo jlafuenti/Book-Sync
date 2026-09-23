@@ -41,6 +41,16 @@ operator must do by hand rather than read about afterwards.
 
 ### Fixed
 
+- Labels on accent-coloured buttons and badges are readable in every theme (#694). They were
+  hard-coded white, which only suits Blueprint's dark violet. On the light accents of Forest
+  Night, Ember, Aurora and Slate, white measured about 2.1–2.4:1 against the fill, well under the
+  4.5:1 that WCAG AA asks of normal text. Affected: primary buttons, the sidebar avatar, the player's
+  play and speed buttons, active filter and sort pills, count badges, the mobile upload button and
+  the placeholder cover's initial. A new theme token, `--on-accent`, now sets that ink: white on
+  Blueprint (unchanged) and the theme's own dark background on the other four (5.5:1 or better on
+  both the accent and its hover shade). Those labels are now dark rather than white in the four
+  light-accent themes. A test fails the build if white text reappears on an accent fill.
+
 - A pair's plausibility verdict now records when it was last checked (#699). Rewriting an
   existing `library_check_results` row updated the verdict but left `checked_at` at the time the
   row was first created, so a pair that "Library verify" had just re-checked and cleared (#693)

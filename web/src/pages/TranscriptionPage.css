@@ -716,7 +716,7 @@
     top: 6px;
     left: 6px;
     background: var(--accent);
-    color: #fff;
+    color: var(--on-accent);
     font-size: 0.7rem;
     font-weight: 700;
     width: 22px;
@@ -1189,7 +1189,7 @@
     .tx-mobile-start-fab {
         display: none;
         background: linear-gradient(135deg, var(--accent), var(--accent-hover, #8a4cfc));
-        color: #fff;
+        color: var(--on-accent);
         border: none;
         border-radius: 9999px;
         padding: 12px 28px;
