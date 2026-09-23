@@ -1038,6 +1038,7 @@ describe('AudioPlayerProvider load window (issue #697)', () => {
                 <button onClick={() => player.play(7, BOOK, 9_000_000)}>open-later</button>
                 <button onClick={() => player.togglePlayPause()}>toggle</button>
                 <button onClick={() => player.pause()}>pause</button>
+                <button onClick={() => player.stop()}>stop</button>
                 <button onClick={() => player.seekTo(120)}>seek-120</button>
                 <button onClick={() => player.skipForward()}>skip-fwd</button>
                 <button onClick={() => player.skipBackward()}>skip-back</button>
@@ -1120,6 +1121,15 @@ describe('AudioPlayerProvider load window (issue #697)', () => {
         fireEvent.click(screen.getByText('pause'))
 
         expect(updatePositionMock).not.toHaveBeenCalled()
+    })
+
+    it('stop during the window writes nothing and ends the load', async () => {
+        await opening()
+
+        fireEvent.click(screen.getByText('stop'))
+
+        expect(updatePositionMock).not.toHaveBeenCalled()
+        expect(screen.getByTestId('loading').textContent).toBe('false')
     })
 
     it('a tab close during the window saves the saved position, not 0', async () => {

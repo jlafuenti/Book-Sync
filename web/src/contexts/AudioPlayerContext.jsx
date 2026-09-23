@@ -687,8 +687,12 @@ export function AudioPlayerProvider({ children }) {
 
     const stop = useCallback(() => {
         if (audioRef.current) {
-            // Flush before the src swap resets the clock.
-            flushPosition({ appendToLog: true, claimFormat: playingRef.current })
+            // Flush before the src swap resets the clock — unless the book
+            // never finished loading: nothing played, so there is no session
+            // to log and no position beyond the saved one (issue #697).
+            if (pendingStartRef.current === null) {
+                flushPosition({ appendToLog: true, claimFormat: playingRef.current })
+            }
             audioRef.current.pause()
             audioRef.current.src = ''
         }
