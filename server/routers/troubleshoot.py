@@ -435,8 +435,9 @@ def _dup_order_pair_aware(group, paired_ids: set) -> List[Tuple[object, bool]]:
     return [(it, False) for it in paired] + [(it, mark_unpaired) for it in unpaired]
 
 
-def _possible_dup_item_dict(item, item_type: str, detail: str, likely_redundant: bool) -> dict:
-    d = _item_dict(item, item_type, detail)
+def _possible_dup_item_dict(item, item_type: str, detail: str, likely_redundant: bool,
+                            pair_id: Optional[int] = None) -> dict:
+    d = _item_dict(item, item_type, detail, pair_id)
     d["likely_redundant"] = likely_redundant
     return d
 
@@ -445,6 +446,7 @@ def _build_possible_duplicate_category(ebooks, audiobooks, all_pairs) -> list:
     """The `possible_duplicate` category: content-similarity candidates,
     pair-aware ordered (paired copy first, unpaired copy marked
     `likely_redundant` when the group has both)."""
+    pair_of = _pair_ids_by_file(all_pairs)
     paired_ebook_ids = {p.ebook_id for p in all_pairs}
     paired_audiobook_ids = {p.audiobook_id for p in all_pairs}
 
@@ -458,7 +460,8 @@ def _build_possible_duplicate_category(ebooks, audiobooks, all_pairs) -> list:
                 detail += (" Not paired to any ebook — the paired copy in "
                            "this group is likely the one to keep.")
             possible_duplicate.append(
-                _possible_dup_item_dict(item, "audiobook", detail, likely_redundant))
+                _possible_dup_item_dict(item, "audiobook", detail, likely_redundant,
+                                        pair_of.get(("audiobook", item.id))))
 
     ebook_groups, ebook_edges = _group_possible_duplicate_ebooks(ebooks)
     for group in ebook_groups:
@@ -468,7 +471,8 @@ def _build_possible_duplicate_category(ebooks, audiobooks, all_pairs) -> list:
                 detail += (" Not paired to any audiobook — the paired copy "
                            "in this group is likely the one to keep.")
             possible_duplicate.append(
-                _possible_dup_item_dict(item, "ebook", detail, likely_redundant))
+                _possible_dup_item_dict(item, "ebook", detail, likely_redundant,
+                                        pair_of.get(("ebook", item.id))))
 
     return possible_duplicate
 
@@ -476,6 +480,50 @@ def _build_possible_duplicate_category(ebooks, audiobooks, all_pairs) -> list:
 # ---------------------------------------------------------------------------
 # Issues
 # ---------------------------------------------------------------------------
+
+def _pair_ids_by_file(all_pairs) -> dict:
+    """`{("ebook", id) | ("audiobook", id): pair_id}` for every paired file.
+
+    One entry per file is enough: a pair is strictly one-to-one (issue #691).
+    File-level items used to leave `pair_id` null even for a paired file, which
+    read as "unpaired, low stakes" on exactly the corrupt audiobook whose pair
+    was queued for transcription (issue #700).
+    """
+    pair_of = {}
+    for p in all_pairs:
+        pair_of[("ebook", p.ebook_id)] = p.id
+        pair_of[("audiobook", p.audiobook_id)] = p.id
+    return pair_of
+
+
+# Categories whose defect makes a transcript of the pair useless: a job for it
+# would spend hours of worker time on a missing, truncated, corrupt or
+# unreadable file. Cosmetic ones (a missing cover, a duplicate) spoil nothing,
+# so the queue note would be noise there.
+_TRANSCRIPT_SPOILING_CATEGORIES = (
+    "missing", "zero_byte", "audio_corrupt", "ebook_drm", "ebook_unreadable",
+)
+
+_LIVE_JOB_NOTES = {
+    "pending": "paired, queued for transcription",
+    "in_progress": "paired, being transcribed now",
+}
+
+
+async def _live_job_status_by_pair(db: AsyncSession) -> dict:
+    """`{pair_id: "pending" | "in_progress"}` for pairs with a job that has not
+    finished. A paused job stays `pending`, so it counts as queued. When a pair
+    somehow has both, the running one wins."""
+    rows = (await db.execute(
+        select(TranscriptionQueueItem.book_pair_id, TranscriptionQueueItem.status)
+        .where(TranscriptionQueueItem.status.in_(tuple(_LIVE_JOB_NOTES)))
+    )).all()
+    status_by_pair = {}
+    for pair_id, status in rows:
+        if status_by_pair.get(pair_id) != "in_progress":
+            status_by_pair[pair_id] = status
+    return status_by_pair
+
 
 def _scan_library_files(ebook_rows: List[dict], audiobook_rows: List[dict]) -> dict:
     """Stat every library file and check every audiobook's chapter atom.
@@ -546,14 +594,19 @@ async def get_issues(
     computed live; audio/ebook integrity come from the last scan."""
     ebooks = (await db.execute(select(EBook))).scalars().all()
     audiobooks = (await db.execute(select(AudioBook))).scalars().all()
+    all_pairs = (await db.execute(select(BookPair))).scalars().all()
+    pair_of = _pair_ids_by_file(all_pairs)
+
+    def file_item(item, item_type: str, detail: str = "") -> dict:
+        return _item_dict(item, item_type, detail, pair_of.get((item_type, item.id)))
 
     # Snapshot the columns the scan needs before handing them to a thread: ORM
     # instances are bound to this request's session, and an expired attribute
     # touched off-loop would issue IO on it.
     scan = await asyncio.to_thread(
         _scan_library_files,
-        [_item_dict(eb, "ebook") for eb in ebooks],
-        [_item_dict(ab, "audiobook") for ab in audiobooks],
+        [file_item(eb, "ebook") for eb in ebooks],
+        [file_item(ab, "audiobook") for ab in audiobooks],
     )
     missing = scan["missing"]
     zero_byte = scan["zero_byte"]
@@ -569,11 +622,11 @@ async def get_issues(
     )).scalars().all()
     for r in rows:
         if r.check_type == "audio_integrity" and r.item_id in ab_by_id:
-            audio_corrupt.append(_item_dict(ab_by_id[r.item_id], "audiobook", r.detail or "Corrupt audio"))
+            audio_corrupt.append(file_item(ab_by_id[r.item_id], "audiobook", r.detail or "Corrupt audio"))
         elif r.check_type == "ebook_integrity" and r.item_id in eb_by_id:
             d = (r.detail or "").lower()
             bucket = ebook_drm if "drm" in d or "encrypt" in d else ebook_unreadable
-            bucket.append(_item_dict(eb_by_id[r.item_id], "ebook", r.detail or "Unreadable ebook"))
+            bucket.append(file_item(eb_by_id[r.item_id], "ebook", r.detail or "Unreadable ebook"))
 
     # Failed transcriptions: pairs in ERROR + latest queue error.
     failed_transcription = []
@@ -616,7 +669,6 @@ async def get_issues(
 
     # Synced pairs that are missing their sync map.
     sync_map_missing = []
-    all_pairs = (await db.execute(select(BookPair))).scalars().all()
     syncmap_pair_ids = set(
         (await db.execute(select(SyncMap.book_pair_id))).scalars().all()
     )
@@ -673,12 +725,11 @@ async def get_issues(
     for (itype, h), group in by_hash.items():
         if len(group) > 1:
             for it in group:
-                duplicate.append(_item_dict(it, itype, f"{len(group)} copies share hash {h[:12]}…"))
+                duplicate.append(file_item(it, itype, f"{len(group)} copies share hash {h[:12]}…"))
 
     # Possible duplicates (issue #692): content-similarity candidates the
     # exact-hash check above cannot see — see the module comment near
     # `_build_possible_duplicate_category` for the corroboration rule.
-    # `all_pairs` was already loaded above for `sync_map_missing`.
     possible_duplicate = _build_possible_duplicate_category(ebooks, audiobooks, all_pairs)
 
     # Covers: missing (broken/absent) and orphaned (file with no owner).
@@ -696,9 +747,9 @@ async def get_issues(
         if fn:
             referenced.add(fn)
             if not os.path.isfile(os.path.join(covers_dir, fn)):
-                missing_cover.append(_item_dict(item, itype, "Cover reference set but file is missing"))
+                missing_cover.append(file_item(item, itype, "Cover reference set but file is missing"))
         else:
-            missing_cover.append(_item_dict(item, itype, "No cover image"))
+            missing_cover.append(file_item(item, itype, "No cover image"))
 
     orphaned_cover = []
     if os.path.isdir(covers_dir):
@@ -760,6 +811,16 @@ async def get_issues(
         "failed_transcription": failed_transcription,
         "failed_acsm": failed_acsm,
     }
+
+    # Issue #700: a defective paired file whose pair has a job waiting or
+    # running says so, so the operator can pull the job before it runs.
+    job_status = await _live_job_status_by_pair(db)
+    for key in _TRANSCRIPT_SPOILING_CATEGORIES:
+        for item in categories[key]:
+            status = job_status.get(item.get("pair_id"))
+            if status:
+                item["detail"] = f"{item['detail']} — {_LIVE_JOB_NOTES[status]}"
+
     return {
         "categories": categories,
         "counts": {k: len(v) for k, v in categories.items()},

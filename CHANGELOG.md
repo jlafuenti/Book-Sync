@@ -41,6 +41,17 @@ operator must do by hand rather than read about afterwards.
 
 ### Fixed
 
+- Troubleshoot's file-level items now say which pair a file belongs to (#700). Every file-level
+  category (missing, too small, corrupt audio, DRM, unreadable ebook, bad chapter titles,
+  unsupported format, duplicates, possible duplicates, missing cover) reported `pair_id: null`
+  even for a paired file, so a corrupt audiobook read as an unpaired, low-stakes file when its
+  pair was in fact queued for transcription, about to spend hours of worker time on audio that is
+  mostly missing. Those items now carry the file's `pair_id`. For the categories that make a
+  transcript useless (missing, too small, corrupt audio, DRM, unreadable ebook), the detail also
+  ends with "paired, queued for transcription" or "paired, being transcribed now" when the pair
+  has a job waiting or running, so the job can be pulled first. Nothing is stored; the page
+  computes this on every load, at the cost of one extra query against the queue.
+
 - Labels on accent-coloured buttons and badges are readable in every theme (#694). They were
   hard-coded white, which only suits Blueprint's dark violet. On the light accents of Forest
   Night, Ember, Aurora and Slate, white measured about 2.1–2.4:1 against the fill, well under the
