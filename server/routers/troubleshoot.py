@@ -107,11 +107,27 @@ def _item_dict(item, item_type: str, detail: str = "", pair_id: Optional[int] = 
 # duration equality alone would eventually collide by the birthday effect.
 #
 # So every candidate here needs a second, independent signal already on the
-# row — title, author, narrator, ASIN/ISBN — before it is reported, on top of
-# the length/size match. This is report-only: no delete/bulk-delete action is
-# offered for it anywhere (see `web/src/pages/TroubleshootPage.jsx`), because
-# a false positive (two different books that happen to be the same size) is
-# expected, not exceptional, and the operator has to judge each one.
+# row before it is reported, on top of the length/size match. This is
+# report-only: no delete/bulk-delete action is offered for it anywhere (see
+# `web/src/pages/TroubleshootPage.jsx`), because a false positive (two
+# different books that happen to be the same size) is expected, not
+# exceptional, and the operator has to judge each one.
+#
+# For audiobooks, not every signal is strong enough to *qualify* a pair on its
+# own, even though a duration match is already tight. Deployed against a real
+# library, author-or-narrator-only corroboration produced exactly the failure
+# this predicts: two different ~1-hour short stories by the same author, read
+# by the same narrator, whose lengths happened to land a few seconds apart.
+# One author's backlist, and one narrator's whole catalogue, routinely share
+# similar running times — that is not evidence two *specific* files are the
+# same recording. So a title match or a shared ASIN/ISBN is required to
+# qualify an audiobook pair; a shared author or narrator is real corroborating
+# evidence and still lands in `detail`, but never qualifies a pair by itself
+# or together with the other (`_DUP_AUDIO_QUALIFYING_SIGNALS` below). Ebooks
+# keep author/title overlap as sufficient on their own: an exact byte-size
+# match *and* an author or title match is a much rarer coincidence than a
+# duration match on a large audio library, where the birthday effect alone
+# produces close-by pairs by the dozen.
 
 # Below this an audiobook's duration is not trusted as a duplicate signal at
 # all: a few minutes is too short a length for a coincidental match to carry
@@ -127,11 +143,20 @@ _DUP_MIN_AUDIO_DURATION_SECONDS = 30 * 60  # 30 minutes
 # The originating case (issue #692) is a remux 9 s apart over ~33.8 h of
 # audio: 9 / (33.8 * 3600) ≈ 0.0074%. 0.01% relative gives comfortable margin
 # over that without opening the window wide enough to catch the unrelated
-# same-length-by-chance pairs found in the check above. The 10 s floor exists
-# only so short-ish candidates (just above the minimum, where 0.01% is under
-# a fifth of a second) aren't held to an unreasonably tight absolute window.
+# same-length-by-chance pairs found in the check above.
+#
+# The absolute floor exists only so short-ish candidates (just above the
+# minimum, where 0.01% is under a fifth of a second) aren't held to an
+# unreasonably tight absolute window — it is not meant to do the work the
+# relative bound already does for long audio. It was originally 10 s, wider
+# than it needed to be: the remux case that motivates this check is already
+# covered by the 0.01% relative bound alone (12+ s of slack at 33.8 h), and a
+# container remux or re-tag of a ~1-hour book has no reason to drift by
+# anywhere near 10 s. 3 s gives a container remux of a short book the same
+# kind of slack the relative bound gives a long one, without being loose
+# enough to catch two unrelated same-length books at that duration.
 _DUP_AUDIO_RELATIVE_TOLERANCE = 0.0001  # 0.01%
-_DUP_AUDIO_ABSOLUTE_FLOOR_SECONDS = 10
+_DUP_AUDIO_ABSOLUTE_FLOOR_SECONDS = 3
 
 # A dramatization and an unabridged reading of the same title differ hugely in
 # length (typically a fraction vs. the full running time), so this tolerance
@@ -216,18 +241,32 @@ def _dup_values_match(v1, v2) -> bool:
     return bool(v1) and bool(v2) and str(v1).strip().lower() == str(v2).strip().lower()
 
 
+# Signals strong enough to *qualify* an audiobook duration match on their own
+# — a title match or a shared identifier. "same narrator" and "overlapping
+# author" are deliberately excluded: they are real evidence and still appear
+# in `detail`, but neither is specific to one recording (see the module
+# comment above `_DUP_AUDIO_RELATIVE_TOLERANCE`), so `_dup_audio_qualifies`
+# requires at least one of these before a pair is reported.
+_DUP_AUDIO_QUALIFYING_SIGNALS = frozenset({"same ASIN", "same ISBN", "matching title"})
+
+
+def _dup_audio_qualifies(signals: List[str]) -> bool:
+    return any(s in _DUP_AUDIO_QUALIFYING_SIGNALS for s in signals)
+
+
 def _dup_audio_corroboration(a, b) -> List[str]:
-    """Independent signals (beyond duration) that `a` and `b` are the same
-    recording. Order is the display order in `detail`."""
+    """Signals (beyond duration) that `a` and `b` might be the same
+    recording. Order is the display order in `detail`. Not every signal
+    here qualifies a pair by itself — see `_dup_audio_qualifies`."""
     signals = []
     if _dup_values_match(a.asin, b.asin):
         signals.append("same ASIN")
     if _dup_values_match(a.isbn, b.isbn):
         signals.append("same ISBN")
-    if _dup_values_match(a.narrators, b.narrators):
-        signals.append("same narrator")
     if _dup_titles_overlap(a.title, b.title):
         signals.append("matching title")
+    if _dup_values_match(a.narrators, b.narrators):
+        signals.append("same narrator")
     if _dup_authors_overlap(a.author, b.author):
         signals.append("overlapping author")
     return signals
@@ -268,11 +307,13 @@ _DupEdges = Dict[int, Dict[int, Tuple[Optional[int], List[str]]]]
 
 
 def _group_possible_duplicate_audiobooks(audiobooks) -> Tuple[list, _DupEdges]:
-    """Audiobooks whose duration matches within tolerance AND share a second,
-    independent signal (see the module comment above). Returns
-    ``(groups, edges)``: `groups` is a list of item-lists (size >= 2, at least
-    one direct edge each); `edges` carries the per-pair (diff_seconds,
-    signals) used to build `detail`.
+    """Audiobooks whose duration matches within tolerance AND qualify via a
+    title match or a shared ASIN/ISBN (`_dup_audio_qualifies`) — author and
+    narrator matches alone are not enough (see the module comment above).
+    Returns ``(groups, edges)``: `groups` is a list of item-lists (size >= 2,
+    at least one direct edge each); `edges` carries the per-pair
+    (diff_seconds, signals) used to build `detail`, including any
+    non-qualifying signals that still corroborate the match.
 
     Pure in-memory comparisons over rows already loaded by the caller — no
     query, no file access. Candidates are sorted by duration first (O(n log
@@ -306,8 +347,8 @@ def _group_possible_duplicate_audiobooks(audiobooks) -> Tuple[list, _DupEdges]:
             if a.file_hash and b.file_hash and a.file_hash == b.file_hash:
                 continue  # exact duplicate — already the certain `duplicate` category
             signals = _dup_audio_corroboration(a, b)
-            if not signals:
-                continue
+            if not _dup_audio_qualifies(signals):
+                continue  # author/narrator alone is not specific enough — see above
             edges[a.id][b.id] = (diff, signals)
             edges[b.id][a.id] = (diff, signals)
             uf.union(a.id, b.id)

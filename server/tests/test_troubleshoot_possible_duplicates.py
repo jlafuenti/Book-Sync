@@ -58,22 +58,90 @@ async def test_remuxed_audiobook_same_duration_grouped_not_in_duplicate(
         assert "Candidate only" in row["detail"]
 
 
-async def test_near_duration_audiobooks_within_tolerance_grouped_with_narrator_match(
+async def test_near_duration_audiobooks_within_tolerance_grouped_by_title(
     db, make_client, make_user, auth_header
 ):
     """The originating case: two containers of one recording, 9 s apart over
-    ~33.8 h (121680 s). Same narrator corroborates."""
+    ~33.8 h (121680 s). Matching title qualifies the pair; the shared
+    narrator is supporting evidence that also lands in `detail`, but is not
+    what qualifies it (narrator alone does not — see the corroboration
+    tests below)."""
     editor = await make_user(role="editor")
-    a = await make_audiobook(db, title="Some Very Long Book", duration_seconds=121680,
+    a = await make_audiobook(db, title="A Very Long Book", duration_seconds=121680,
                               narrators="Jane Narrator", file_hash="hash-1")
-    b = await make_audiobook(db, title="Some Very Long Book, Retagged", duration_seconds=121671,
+    b = await make_audiobook(db, title="A Very Long Book", duration_seconds=121671,
                               narrators="Jane Narrator", file_hash="hash-2")
 
     cats = await _issues(make_client, editor, auth_header)
 
     assert _ids(cats["possible_duplicate"]) == {a.id, b.id}
     for row in cats["possible_duplicate"]:
+        assert "matching title" in row["detail"]
         assert "same narrator" in row["detail"]
+
+
+async def test_close_duration_audiobooks_matching_only_asin_grouped(
+    db, make_client, make_user, auth_header
+):
+    """Same ASIN qualifies a pair on its own, same as a title match — an
+    identifier is as strong a signal as the title itself."""
+    editor = await make_user(role="editor")
+    a = await make_audiobook(db, title="First Release Title", duration_seconds=3600,
+                              asin="B0TESTASIN01")
+    b = await make_audiobook(db, title="Retitled Re-release", duration_seconds=3598,
+                              asin="B0TESTASIN01")
+
+    cats = await _issues(make_client, editor, auth_header)
+
+    assert _ids(cats["possible_duplicate"]) == {a.id, b.id}
+    for row in cats["possible_duplicate"]:
+        assert "same ASIN" in row["detail"]
+
+
+async def test_close_duration_audiobooks_matching_only_author_and_narrator_not_grouped(
+    db, make_client, make_user, auth_header
+):
+    """Author and narrator matches are real evidence, but neither — nor both
+    together — qualifies a pair on its own: one author's backlist and one
+    narrator's whole catalogue routinely share similar running times, so
+    this alone is exactly the false-positive shape a real library produced.
+    Duration gap (2 s) is comfortably inside tolerance, isolating the
+    corroboration rule from the tolerance/floor tightened below."""
+    editor = await make_user(role="editor")
+    a = await make_audiobook(db, title="A Completely Different Title",
+                              author="A Prolific Author", narrators="A Busy Narrator",
+                              duration_seconds=3600)
+    b = await make_audiobook(db, title="An Unrelated Other Title",
+                              author="A Prolific Author", narrators="A Busy Narrator",
+                              duration_seconds=3598)
+
+    cats = await _issues(make_client, editor, auth_header)
+
+    assert a.id not in _ids(cats["possible_duplicate"])
+    assert b.id not in _ids(cats["possible_duplicate"])
+
+
+async def test_two_different_short_stories_by_the_same_author_not_grouped(
+    db, make_client, make_user, auth_header
+):
+    """The exact false positive found against a real library: two different
+    ~1-hour works by the same author, read by the same narrator, whose
+    lengths merely land 7 s apart. The tightened floor (3 s, not the
+    original 10 s) already excludes this on duration alone; author/narrator
+    could not have rescued it either way (see the isolated corroboration
+    test above)."""
+    editor = await make_user(role="editor")
+    a = await make_audiobook(db, title="A Short Story About the Sea",
+                              author="A Prolific Author", narrators="A Busy Narrator",
+                              duration_seconds=3600)
+    b = await make_audiobook(db, title="A Different Short Story About the Sky",
+                              author="A Prolific Author", narrators="A Busy Narrator",
+                              duration_seconds=3607)
+
+    cats = await _issues(make_client, editor, auth_header)
+
+    assert a.id not in _ids(cats["possible_duplicate"])
+    assert b.id not in _ids(cats["possible_duplicate"])
 
 
 async def test_dramatization_and_unabridged_not_grouped_despite_matching_metadata(
