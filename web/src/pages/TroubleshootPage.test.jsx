@@ -446,13 +446,13 @@ describe('TroubleshootPage verification scan progress', () => {
 // Issue #692: content-similarity candidates — report-only, no delete action.
 describe('TroubleshootPage possible duplicates', () => {
     const pairedRow = {
-        item_type: 'audiobook', item_id: 10, title: 'The Fellowship of the Ring',
-        author: 'J.R.R. Tolkien', file_size: 500000, likely_redundant: false,
+        item_type: 'audiobook', item_id: 10, title: 'Axis Test',
+        author: 'An Author', file_size: 500000, likely_redundant: false,
         detail: 'Possible duplicate — same duration to the second as 1 other audiobook (2:00:00), matched on matching title. Candidate only; review before deleting.',
     }
     const unpairedRow = {
-        item_type: 'audiobook', item_id: 11, title: 'The Fellowship of the Ring',
-        author: 'J.R.R. Tolkien', file_size: 500000, likely_redundant: true,
+        item_type: 'audiobook', item_id: 11, title: 'Axis Test',
+        author: 'An Author', file_size: 500000, likely_redundant: true,
         detail: 'Possible duplicate — same duration to the second as 1 other audiobook (2:00:00), matched on matching title. Candidate only; review before deleting. Not paired to any ebook — the paired copy in this group is likely the one to keep.',
     }
 

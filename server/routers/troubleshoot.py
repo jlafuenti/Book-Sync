@@ -143,7 +143,7 @@ def _audio_duration_tolerance(duration_seconds: float) -> float:
     return max(duration_seconds * _DUP_AUDIO_RELATIVE_TOLERANCE, _DUP_AUDIO_ABSOLUTE_FLOOR_SECONDS)
 
 
-# Trailing series index ("The Way of Kings: 2", "Mistborn - Book 3") or a
+# Trailing series index ("Axis Test: 2", "Axis Test - Book 3") or a
 # dramatization/edition annotation ("(Unabridged)", "(Dramatized)"). Stripped
 # before comparison so two releases of the same title don't score low purely
 # on the suffix — this signal has no author gate the way auto-pairing does, so

@@ -156,8 +156,8 @@ async def test_issues_envelope_and_every_item_shape(
     dup_a_path, dup_b_path = tmp_path / "dup_a.epub", tmp_path / "dup_b.epub"
     dup_a_path.write_bytes(b"x" * 2048)
     dup_b_path.write_bytes(b"x" * 2048)
-    dup_a = await _ebook(db, dup_a_path, title="Fellowship of the Ring")
-    dup_b = await _ebook(db, dup_b_path, title="Fellowship of the Ring")
+    dup_a = await _ebook(db, dup_a_path, title="Axis Test")
+    dup_b = await _ebook(db, dup_b_path, title="Axis Test")
     dup_a.file_size = dup_b.file_size = 999_999
     dup_a.file_hash, dup_b.file_hash = "hash-a", "hash-b"
     # `multi_file_audiobook` → folder row.

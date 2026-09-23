@@ -41,11 +41,11 @@ async def test_remuxed_audiobook_same_duration_grouped_not_in_duplicate(
     """Same duration to the second, different hash (a remux), matching title
     — the exact case issue #692 was filed over."""
     editor = await make_user(role="editor")
-    a = await make_audiobook(db, title="The Fellowship of the Ring",
-                              author="J.R.R. Tolkien", duration_seconds=7200,
+    a = await make_audiobook(db, title="Axis Test",
+                              author="An Author", duration_seconds=7200,
                               file_hash="hash-mp3")
-    b = await make_audiobook(db, title="The Fellowship of the Ring",
-                              author="J.R.R. Tolkien", duration_seconds=7200,
+    b = await make_audiobook(db, title="Axis Test",
+                              author="An Author", duration_seconds=7200,
                               file_hash="hash-m4b")
 
     cats = await _issues(make_client, editor, auth_header)
