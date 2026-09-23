@@ -11,8 +11,8 @@
 }
 
 .filter-pill-btn.filter-pill-open {
-    border-color: var(--accent);
-    color: var(--accent);
+    border-color: var(--accent-ink);
+    color: var(--accent-ink);
     background: var(--accent-light);
 }
 
@@ -65,7 +65,7 @@
 }
 
 .filter-pill-option.active {
-    color: var(--accent);
+    color: var(--accent-ink);
     background: var(--accent-light);
 }
 

@@ -28,6 +28,7 @@ export const THEMES = {
       "--accent-glow":      "rgba(124, 58, 237, 0.4)",
       "--accent-secondary": "#a78bfa",
       "--on-accent":        "#ffffff",
+      "--accent-ink":       "#a78bfa",
     },
   },
 
@@ -54,6 +55,7 @@ export const THEMES = {
       "--accent-glow":      "rgba(34, 197, 94, 0.4)",
       "--accent-secondary": "#14b8a6",
       "--on-accent":        "#080f0a",
+      "--accent-ink":       "#22c55e",
     },
   },
 
@@ -80,6 +82,7 @@ export const THEMES = {
       "--accent-glow":      "rgba(245, 158, 11, 0.4)",
       "--accent-secondary": "#ea580c",
       "--on-accent":        "#0f0905",
+      "--accent-ink":       "#f59e0b",
     },
   },
 
@@ -106,6 +109,7 @@ export const THEMES = {
       "--accent-glow":      "rgba(6, 182, 212, 0.4)",
       "--accent-secondary": "#d946ef",
       "--on-accent":        "#07060f",
+      "--accent-ink":       "#06b6d4",
     },
   },
 
@@ -132,6 +136,7 @@ export const THEMES = {
       "--accent-glow":      "rgba(56, 189, 248, 0.3)",
       "--accent-secondary": "#a78bfa",
       "--on-accent":        "#0c0e12",
+      "--accent-ink":       "#38bdf8",
     },
   },
 }

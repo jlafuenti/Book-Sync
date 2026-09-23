@@ -187,7 +187,7 @@ function LoginPage({ onLogin }) {
                 {canRequestAccess ? (
                     <p style={{ textAlign: 'center', fontSize: '0.85rem', color: 'var(--text-muted)' }}>
                         {isRegistering ? 'Already have an account? ' : "Need an account? "}
-                        <a href="#" onClick={switchMode} style={{ color: 'var(--accent)', textDecoration: 'none' }}>
+                        <a href="#" onClick={switchMode} style={{ color: 'var(--accent-ink)', textDecoration: 'none' }}>
                             {isRegistering ? 'Sign In' : 'Request Access'}
                         </a>
                     </p>
@@ -220,7 +220,7 @@ function LoginPage({ onLogin }) {
                             href="/terms"
                             target="_blank"
                             rel="noopener noreferrer"
-                            style={{ color: 'var(--accent)', textDecoration: 'none' }}
+                            style={{ color: 'var(--accent-ink)', textDecoration: 'none' }}
                         >
                             Terms of use
                         </a>

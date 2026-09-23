@@ -87,7 +87,7 @@
     margin: 0;
     font: inherit;
     font-weight: 500;
-    color: var(--accent);
+    color: var(--accent-ink);
     cursor: pointer;
     text-align: left;
 }

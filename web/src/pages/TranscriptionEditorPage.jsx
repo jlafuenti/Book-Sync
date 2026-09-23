@@ -205,7 +205,7 @@ function TranscriptionEditorPage() {
                                 <div>{formatTime(pt.start_ms)}</div>
                                 <div>↓</div>
                                 <div>{formatTime(pt.end_ms)}</div>
-                                <div style={{ marginTop: '5px', fontSize: '0.75rem', color: 'var(--accent)' }}>
+                                <div style={{ marginTop: '5px', fontSize: '0.75rem', color: 'var(--accent-ink)' }}>
                                     Ch {pt.chapter}, S {pt.sentence}
                                 </div>
                             </div>

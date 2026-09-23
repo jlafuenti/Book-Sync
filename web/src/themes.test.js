@@ -155,6 +155,18 @@ describe('CSS custom properties', () => {
     })
 })
 
+// WCAG 2 relative luminance and contrast ratio, shared by the --on-accent
+// (#694) and --accent-ink (#705) checks below.
+function luminance(hex) {
+    const [r, g, b] = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255)
+        .map((c) => (c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4))
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b
+}
+function contrast(a, b) {
+    const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x)
+    return (hi + 0.05) / (lo + 0.05)
+}
+
 // ---------------------------------------------------------------------------
 // Issue #694: text painted on an accent fill used a hard-coded `white`, which
 // only suits Blueprint's dark violet. The other four themes have light accents
@@ -163,17 +175,6 @@ describe('CSS custom properties', () => {
 // text or icon sitting on `--accent` (or its hover shade), chosen per theme.
 describe('--on-accent', () => {
     const SRC = resolve(dirname(fileURLToPath(import.meta.url)))
-
-    // WCAG 2 relative luminance and contrast ratio.
-    function luminance(hex) {
-        const [r, g, b] = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255)
-            .map((c) => (c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4))
-        return 0.2126 * r + 0.7152 * g + 0.0722 * b
-    }
-    function contrast(a, b) {
-        const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x)
-        return (hi + 0.05) / (lo + 0.05)
-    }
 
     it('every theme declares it, and it clears 4.5:1 on the accent and its hover shade', () => {
         for (const slug of THEME_SLUGS) {
@@ -235,5 +236,83 @@ describe('--on-accent', () => {
         const css = readFileSync(join(SRC, 'index.css'), 'utf-8')
         const rule = /\.book-detail-cover-initial\s*\{([^}]*)\}/.exec(css)[1]
         expect(rule).toMatch(/color\s*:\s*var\(--on-accent\)/)
+    })
+})
+
+// ---------------------------------------------------------------------------
+// Issue #705: the mirror of #694. Blueprint's accent (#7c3aed) used as *ink*
+// on its own dark surfaces measured 2.5-3.3:1 — under 4.5:1 for text and even
+// under the 3:1 WCAG asks of focus rings, active borders and underlines. The
+// other four themes' accents already clear 5.6:1. `--accent-ink` is the colour
+// for anything drawn *in* the accent on a dark surface: text, borders, outlines
+// and focus rings. Accent *fills* keep `--accent` (their labels use
+// `--on-accent`, #694).
+describe('--accent-ink', () => {
+    const SRC = resolve(dirname(fileURLToPath(import.meta.url)))
+
+    function mix(fgHex, bgHex, alpha) {
+        const ch = (h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16))
+        const [f, b] = [ch(fgHex), ch(bgHex)]
+        return '#' + f.map((v, i) => Math.round(v * alpha + b[i] * (1 - alpha))
+            .toString(16).padStart(2, '0')).join('')
+    }
+
+    it('every theme declares it, and it clears 4.5:1 on every surface it is drawn on', () => {
+        for (const slug of THEME_SLUGS) {
+            const { vars } = THEMES[slug]
+            const ink = vars['--accent-ink']
+            expect(ink, `${slug} declares --accent-ink`).toMatch(/^#[0-9a-f]{6}$/i)
+            const surfaces = {
+                '--bg-primary': vars['--bg-primary'],
+                '--bg-secondary': vars['--bg-secondary'],
+                '--bg-card': vars['--bg-card'],
+                '--bg-card-hover': vars['--bg-card-hover'],
+                '--bg-input': vars['--bg-input'],
+                // An active pill: the 15 % --accent-light tint over a card.
+                'accent tint on --bg-card': mix(vars['--accent'], vars['--bg-card'], 0.15),
+            }
+            for (const [name, bg] of Object.entries(surfaces)) {
+                expect(contrast(ink, bg), `${slug}: --accent-ink on ${name}`).toBeGreaterThanOrEqual(4.5)
+            }
+        }
+    })
+
+    function sourceFiles(dir) {
+        return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+            const full = join(dir, entry.name)
+            if (entry.isDirectory()) return sourceFiles(full)
+            if (/\.test\.[jt]sx?$/.test(entry.name)) return []
+            return /\.(css|jsx?)$/.test(entry.name) ? [full] : []
+        })
+    }
+
+    const ACCENT_FILL = /background(?:-color)?\s*:[^;]*var\(--accent(?:-hover)?\)/
+    const ACCENT_TEXT = /(?:^|[;{\s])color\s*:\s*var\(--accent(?:-hover)?\)/
+    const ACCENT_LINE = /(?:^|[;{\s])(?:border[\w-]*|outline[\w-]*|box-shadow)\s*:[^;]*var\(--accent(?:-hover)?\)/
+
+    it('no CSS rule draws text, a border, an outline or a focus ring in the raw accent', () => {
+        const offenders = []
+        for (const file of sourceFiles(SRC).filter((f) => f.endsWith('.css'))) {
+            const text = readFileSync(file, 'utf-8')
+            for (const [, selector, body] of text.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+                const where = `${file.slice(SRC.length + 1)}: ${selector.trim().split('\n').pop().trim()}`
+                if (ACCENT_TEXT.test(body)) offenders.push(`${where} (text)`)
+                // A border on an accent-filled element is the fill's own edge.
+                if (ACCENT_LINE.test(body) && !ACCENT_FILL.test(body)) offenders.push(`${where} (line)`)
+            }
+        }
+        expect(offenders).toEqual([])
+    })
+
+    it('no inline style colours text or a border with the raw accent', () => {
+        const INLINE = /\b(?:color|border\w*|outline\w*)\s*:\s*['"`][^'"`]*var\(--accent(?:-hover)?\)/
+        const offenders = []
+        for (const file of sourceFiles(SRC).filter((f) => /\.jsx?$/.test(f))) {
+            const text = readFileSync(file, 'utf-8')
+            for (const [, body] of text.matchAll(/style=\{\{([\s\S]*?)\}\}/g)) {
+                if (INLINE.test(body)) offenders.push(`${file.slice(SRC.length + 1)}: ${body.trim().slice(0, 60)}`)
+            }
+        }
+        expect(offenders).toEqual([])
     })
 })

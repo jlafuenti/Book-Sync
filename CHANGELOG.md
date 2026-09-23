@@ -41,6 +41,18 @@ operator must do by hand rather than read about afterwards.
 
 ### Fixed
 
+- Accent-coloured text, focus rings and active borders are readable in the default Blueprint
+  theme (#705). Blueprint's violet (`#7c3aed`) was used for them directly, and on its own dark
+  surfaces it measured 2.5–3.3:1: under the 4.5:1 WCAG AA asks of text, and on cards even under
+  the 3:1 it asks of focus rings and other state indicators. That covered the active sidebar link,
+  hovered and active filter pills, the active bottom-nav tab, links and focused inputs. A new
+  theme token, `--accent-ink`, now draws the accent on a dark surface: Blueprint uses its lighter
+  secondary violet (`#a78bfa`, 5.2:1 or better on every surface), and the other four themes keep
+  their own accent, which already passed. Filled buttons and badges keep the darker accent, whose
+  labels #694 fixed. Trade-off: in Blueprint, that text and those borders are now a lighter
+  violet than the filled buttons. A test fails the build if the raw accent is used as text or as a
+  line again.
+
 - The web player no longer shows 0:00, or saves a position of 0, while an audiobook is still
   loading (#697). Between opening a book and the audio being ready, which took over 20 seconds
   on a slow connection, the player sat at `0:00 / -0:00` with play enabled. Pressing play there

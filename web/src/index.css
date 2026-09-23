@@ -32,6 +32,11 @@
        suits only Blueprint's dark violet; the light accents of the other
        themes take their own dark background. themes.test.js pins 4.5:1. */
     --on-accent: #ffffff;
+    /* The accent drawn *on* a dark surface: text, borders, outlines, focus
+       rings (issue #705). Blueprint's #7c3aed is only 2.8:1 on its cards,
+       so it takes its lighter secondary; the other themes use their accent.
+       Fills keep --accent. themes.test.js pins 4.5:1. */
+    --accent-ink: #a78bfa;
 
     --success: #10b981;
     --success-bg: rgba(16, 185, 129, 0.12);
@@ -258,8 +263,8 @@ body {
 
 .nav-link.active {
     background: var(--accent-light);
-    color: var(--accent);
-    border-left: 3px solid var(--accent);
+    color: var(--accent-ink);
+    border-left: 3px solid var(--accent-ink);
 }
 
 .nav-link svg {
@@ -292,7 +297,7 @@ body {
 }
 
 .nav-sub-link.active {
-    color: var(--accent);
+    color: var(--accent-ink);
     background: var(--accent-light);
 }
 
@@ -415,7 +420,7 @@ body {
 
 .global-search-input:focus {
     outline: none;
-    border-color: var(--accent);
+    border-color: var(--accent-ink);
     background: var(--bg-input);
 }
 
@@ -618,7 +623,7 @@ body {
 
 .form-input:focus {
     outline: none;
-    border-color: var(--accent);
+    border-color: var(--accent-ink);
     box-shadow: 0 0 0 3px var(--accent-light);
 }
 
@@ -804,8 +809,8 @@ tr:hover td {
 }
 
 .tab-btn.active {
-    color: var(--accent);
-    border-bottom-color: var(--accent);
+    color: var(--accent-ink);
+    border-bottom-color: var(--accent-ink);
 }
 
 /* ============ Progress ============ */
@@ -914,12 +919,12 @@ tr:hover td {
 }
 
 .upload-zone:hover {
-    border-color: var(--accent);
+    border-color: var(--accent-ink);
     background: var(--accent-light);
 }
 
 .upload-zone.dragging {
-    border-color: var(--accent);
+    border-color: var(--accent-ink);
     background: var(--accent-light);
 }
 
@@ -1042,8 +1047,8 @@ tr:hover td {
 }
 
 .modal-tab.active {
-    color: var(--accent);
-    border-bottom-color: var(--accent);
+    color: var(--accent-ink);
+    border-bottom-color: var(--accent-ink);
 }
 
 .modal-body {
@@ -1114,7 +1119,7 @@ tr:hover td {
     width: 24px;
     height: 24px;
     border: 3px solid var(--border);
-    border-top-color: var(--accent);
+    border-top-color: var(--accent-ink);
     border-radius: 50%;
     animation: spin 0.8s linear infinite;
 }
@@ -1228,7 +1233,7 @@ tr:hover td {
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.5px;
-    color: var(--accent);
+    color: var(--accent-ink);
     margin-bottom: 8px;
 }
 
@@ -1247,7 +1252,7 @@ tr:hover td {
 
 .book-detail-series {
     font-size: 0.9rem;
-    color: var(--accent);
+    color: var(--accent-ink);
     font-weight: 500;
     margin-bottom: 12px;
 }
@@ -1343,7 +1348,7 @@ tr:hover td {
 }
 
 .book-detail-paired-card:hover {
-    border-color: var(--accent);
+    border-color: var(--accent-ink);
 }
 
 .book-detail-paired-icon {
@@ -1373,7 +1378,7 @@ tr:hover td {
 }
 
 .book-detail-paired-title:hover {
-    color: var(--accent);
+    color: var(--accent-ink);
 }
 
 .book-detail-paired-author {
@@ -1534,7 +1539,7 @@ tr:hover td {
 
 .unpaired-count {
     background: var(--accent-light);
-    color: var(--accent);
+    color: var(--accent-ink);
     font-size: 0.75rem;
     font-weight: 700;
     padding: 2px 8px;
@@ -1564,7 +1569,7 @@ tr:hover td {
 
 .unpaired-row-selected {
     background: var(--accent-light);
-    border-left: 3px solid var(--accent);
+    border-left: 3px solid var(--accent-ink);
     padding-left: 13px;
 }
 
@@ -1756,7 +1761,7 @@ tr:hover td {
 }
 
 .continue-card:hover {
-    border-color: var(--accent);
+    border-color: var(--accent-ink);
     background: var(--bg-card-hover);
 }
 
@@ -2039,7 +2044,7 @@ tr:hover td {
     }
 
     .mobile-bottom-nav .nav-tab.active {
-        color: var(--accent);
+        color: var(--accent-ink);
         background: var(--accent-light);
     }
 
@@ -2097,7 +2102,7 @@ tr:hover td {
         border-radius: 50%;
         border: none;
         background: transparent;
-        color: var(--accent);
+        color: var(--accent-ink);
         cursor: pointer;
         transition: background 0.2s ease;
     }
@@ -2161,7 +2166,7 @@ tr:hover td {
         height: 48px;
         border-radius: 50%;
         background: var(--accent-light);
-        color: var(--accent);
+        color: var(--accent-ink);
         display: flex;
         align-items: center;
         justify-content: center;
@@ -2200,7 +2205,7 @@ tr:hover td {
     .mobile-drawer .drawer-link:hover,
     .mobile-drawer .drawer-link.active {
         background: var(--accent-light);
-        color: var(--accent);
+        color: var(--accent-ink);
     }
 
     .mobile-drawer .drawer-link svg {

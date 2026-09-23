@@ -66,7 +66,7 @@
 }
 
 .ebook-toolbar .btn-icon.saved {
-    color: var(--accent);
+    color: var(--accent-ink);
 }
 
 .ebook-toolbar .switch-format-btn {
@@ -80,8 +80,8 @@
 }
 
 .ebook-toolbar .switch-format-btn:hover {
-    border-color: var(--accent);
-    color: var(--accent);
+    border-color: var(--accent-ink);
+    color: var(--accent-ink);
     background: var(--accent-light);
 }
 
@@ -137,7 +137,7 @@
 }
 
 .reader-theme-menu button.active {
-    color: var(--accent);
+    color: var(--accent-ink);
     font-weight: 600;
 }
 
@@ -162,7 +162,7 @@
 
 .font-size-controls button:hover {
     color: var(--text-primary);
-    border-color: var(--accent);
+    border-color: var(--accent-ink);
 }
 
 /* Reader container */
@@ -283,7 +283,7 @@
 }
 
 .ebook-toc-item.active {
-    color: var(--accent);
+    color: var(--accent-ink);
     background: var(--accent-light);
 }
 
@@ -302,7 +302,7 @@
     width: 32px;
     height: 32px;
     border: 3px solid var(--border);
-    border-top-color: var(--accent);
+    border-top-color: var(--accent-ink);
     border-radius: 50%;
     animation: spin 0.8s linear infinite;
 }

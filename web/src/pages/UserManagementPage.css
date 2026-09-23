@@ -106,13 +106,13 @@
 }
 
 .admin-filter-pill-btn:hover {
-    border-color: var(--accent);
+    border-color: var(--accent-ink);
     color: var(--text-primary);
 }
 
 .admin-filter-pill-btn.active {
-    border-color: var(--accent);
-    color: var(--accent);
+    border-color: var(--accent-ink);
+    color: var(--accent-ink);
     background: var(--accent-light);
 }
 
@@ -157,7 +157,7 @@
 }
 
 .admin-filter-pill-option.selected {
-    color: var(--accent);
+    color: var(--accent-ink);
     font-weight: 600;
 }
 
