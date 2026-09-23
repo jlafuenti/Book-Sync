@@ -888,6 +888,8 @@ class TroubleshootItem(StrictResponse):
     format: Optional[str]
     file_size: Optional[int]
     detail: str
+    #: The pair this file belongs to, or null when it is unpaired. Always null
+    #: before issue #700, which made a paired, queued file look unpaired.
     pair_id: Optional[int]
 
 
