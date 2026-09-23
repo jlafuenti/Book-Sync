@@ -177,3 +177,35 @@ async def test_an_orphaned_row_is_removed(db):
     assert cleared == 0
     assert orphans == 1
     assert await _row(db, pair.id) is None
+
+
+# ---------------------------------------------------------------------------
+# Issue #699: a re-checked row records when it was re-checked
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("word_count", [37_734, 87_398], ids=["cleared", "still-flagged"])
+async def test_the_recheck_advances_checked_at(db, monkeypatch, word_count):
+    """Whether the re-check clears the pair or keeps it flagged, the row's
+    `checked_at` must move: a cleared pair that still showed its six-day-old
+    creation time read as though the re-check never ran."""
+    import datetime
+
+    pair, eb, ab = await _pair(db, ebook_size=99_844_954, duration=14_940)
+    await _record_failed_row(db, pair)
+    stale = datetime.datetime(2020, 1, 1)
+    row = await _row(db, pair.id)
+    row.checked_at = stale
+    await db.commit()
+
+    async def fake_estimate_word_count(path):
+        return word_count
+
+    monkeypatch.setattr(library_verify, "estimate_word_count", fake_estimate_word_count)
+
+    pair_id = pair.id
+    await library_verify._recheck_flagged_pairs()
+
+    # The re-check wrote through its own session; drop this one's cached row.
+    db.expire_all()
+    assert (await _row(db, pair_id)).checked_at > stale
