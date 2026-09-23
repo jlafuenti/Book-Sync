@@ -186,13 +186,13 @@
     width: 56px;
     height: 56px;
     background: var(--accent);
-    color: white;
+    color: var(--on-accent);
     border-radius: 50%;
 }
 
 .audio-transport .play-btn:hover {
     background: var(--accent-hover);
-    color: white;
+    color: var(--on-accent);
 }
 
 /* Secondary controls */
@@ -228,7 +228,7 @@
 .speed-btn.active {
     background: var(--accent);
     border-color: var(--accent);
-    color: white;
+    color: var(--on-accent);
 }
 
 .sleep-timer-btn {

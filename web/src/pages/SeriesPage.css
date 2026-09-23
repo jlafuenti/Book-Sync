@@ -126,7 +126,7 @@
 .series-sort-dir-btn.active {
     background: var(--accent);
     border-color: var(--accent);
-    color: white;
+    color: var(--on-accent);
 }
 
 /* ---- Card Grid ---- */
@@ -671,7 +671,7 @@
     .series-mobile-sort-pill.active {
         background: var(--accent);
         border-color: var(--accent);
-        color: white;
+        color: var(--on-accent);
         box-shadow: 0 2px 8px var(--accent-glow);
     }
 
@@ -735,7 +735,7 @@
         top: 12px;
         right: 12px;
         background: var(--accent);
-        color: white;
+        color: var(--on-accent);
         font-size: 9px;
         font-weight: 900;
         padding: 4px 10px;

@@ -28,6 +28,10 @@
     --accent-light: rgba(124, 58, 237, 0.15);
     --accent-glow: rgba(124, 58, 237, 0.4);
     --accent-secondary: #a78bfa;
+    /* Ink for text and icons sitting on an --accent fill (issue #694). White
+       suits only Blueprint's dark violet; the light accents of the other
+       themes take their own dark background. themes.test.js pins 4.5:1. */
+    --on-accent: #ffffff;
 
     --success: #10b981;
     --success-bg: rgba(16, 185, 129, 0.12);
@@ -343,7 +347,7 @@ body {
     justify-content: center;
     font-weight: 600;
     font-size: 0.85rem;
-    color: white;
+    color: var(--on-accent);
 }
 
 .sidebar-user .info {
@@ -538,7 +542,7 @@ body {
 
 .btn-primary {
     background: var(--accent);
-    color: white;
+    color: var(--on-accent);
 }
 
 .btn-primary:hover {
@@ -1204,7 +1208,7 @@ tr:hover td {
 .book-detail-cover-initial {
     font-size: 3.5rem;
     font-weight: 700;
-    color: rgba(255, 255, 255, 0.9);
+    color: var(--on-accent);
     line-height: 1;
 }
 
@@ -2299,7 +2303,7 @@ tr:hover td {
         height: 36px;
         border-radius: 50%;
         background: var(--accent);
-        color: white;
+        color: var(--on-accent);
         border: none;
         display: flex;
         align-items: center;

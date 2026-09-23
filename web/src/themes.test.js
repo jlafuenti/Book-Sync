@@ -154,3 +154,86 @@ describe('CSS custom properties', () => {
         }
     })
 })
+
+// ---------------------------------------------------------------------------
+// Issue #694: text painted on an accent fill used a hard-coded `white`, which
+// only suits Blueprint's dark violet. The other four themes have light accents
+// (green, amber, cyan, sky), where white measured 2.1–2.4:1 against the fill,
+// far under WCAG AA's 4.5:1 for normal text. `--on-accent` is the ink for any
+// text or icon sitting on `--accent` (or its hover shade), chosen per theme.
+describe('--on-accent', () => {
+    const SRC = resolve(dirname(fileURLToPath(import.meta.url)))
+
+    // WCAG 2 relative luminance and contrast ratio.
+    function luminance(hex) {
+        const [r, g, b] = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255)
+            .map((c) => (c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4))
+        return 0.2126 * r + 0.7152 * g + 0.0722 * b
+    }
+    function contrast(a, b) {
+        const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x)
+        return (hi + 0.05) / (lo + 0.05)
+    }
+
+    it('every theme declares it, and it clears 4.5:1 on the accent and its hover shade', () => {
+        for (const slug of THEME_SLUGS) {
+            const { vars } = THEMES[slug]
+            expect(vars['--on-accent'], `${slug} declares --on-accent`).toMatch(/^#[0-9a-f]{6}$/i)
+            for (const fill of ['--accent', '--accent-hover']) {
+                expect(contrast(vars['--on-accent'], vars[fill]), `${slug}: --on-accent on ${fill}`)
+                    .toBeGreaterThanOrEqual(4.5)
+            }
+        }
+    })
+
+    function sourceFiles(dir) {
+        return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+            const full = join(dir, entry.name)
+            if (entry.isDirectory()) return sourceFiles(full)
+            if (/\.test\.[jt]sx?$/.test(entry.name)) return []
+            return /\.(css|jsx?)$/.test(entry.name) ? [full] : []
+        })
+    }
+
+    // A background that is the accent, its hover shade, or a gradient starting
+    // at the accent. `--accent-light`/`--accent-glow` are translucent tints over
+    // the dark page, where white text is fine, so they are not accent fills.
+    const ACCENT_FILL = /background(?:-color)?\s*:[^;]*var\(--accent(?:-hover)?\)/
+    const WHITE_INK = /(?:^|[;{\s])color\s*:\s*(?:white|#fff(?:fff)?|rgba?\(\s*255\s*,\s*255\s*,\s*255)/i
+
+    it('no CSS rule paints white text on an accent fill', () => {
+        const offenders = []
+        for (const file of sourceFiles(SRC).filter((f) => f.endsWith('.css'))) {
+            const text = readFileSync(file, 'utf-8')
+            for (const [, selector, body] of text.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+                if (ACCENT_FILL.test(body) && WHITE_INK.test(body)) {
+                    offenders.push(`${file.slice(SRC.length + 1)}: ${selector.trim().split('\n').pop().trim()}`)
+                }
+            }
+        }
+        expect(offenders).toEqual([])
+    })
+
+    it('no inline style object paints white text on an accent fill', () => {
+        const INLINE_BG = /background\s*:\s*['"`][^'"`]*var\(--accent(?:-hover)?\)/
+        const INLINE_WHITE = /\bcolor\s*:\s*['"](?:white|#fff(?:fff)?)['"]/i
+        const offenders = []
+        for (const file of sourceFiles(SRC).filter((f) => /\.jsx?$/.test(f))) {
+            const text = readFileSync(file, 'utf-8')
+            for (const [, body] of text.matchAll(/style=\{\{([\s\S]*?)\}\}/g)) {
+                if (INLINE_BG.test(body) && INLINE_WHITE.test(body)) {
+                    offenders.push(`${file.slice(SRC.length + 1)}: ${body.trim().slice(0, 60)}`)
+                }
+            }
+        }
+        expect(offenders).toEqual([])
+    })
+
+    it('the placeholder cover initial, on an accent gradient from a separate rule, uses it', () => {
+        // Its colour and its background live in different rules, so the scan
+        // above cannot pair them; this one is pinned by name.
+        const css = readFileSync(join(SRC, 'index.css'), 'utf-8')
+        const rule = /\.book-detail-cover-initial\s*\{([^}]*)\}/.exec(css)[1]
+        expect(rule).toMatch(/color\s*:\s*var\(--on-accent\)/)
+    })
+})

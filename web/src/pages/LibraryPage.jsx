@@ -1395,7 +1395,7 @@ function LibraryPage({ tab }) {
                         onClick={() => setMobileUploadOpen(o => !o)}
                         style={{
                             width: 56, height: 56, borderRadius: '50%',
-                            background: 'var(--accent)', color: 'white', border: 'none',
+                            background: 'var(--accent)', color: 'var(--on-accent)', border: 'none',
                             boxShadow: '0 4px 20px var(--accent-glow)',
                             display: 'flex', alignItems: 'center', justifyContent: 'center',
                             cursor: 'pointer', fontSize: 28, fontWeight: 300,

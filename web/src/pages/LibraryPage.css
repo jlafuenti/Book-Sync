@@ -60,7 +60,7 @@
 .library-filter-pill.active {
     background: var(--accent);
     border-color: var(--accent);
-    color: white;
+    color: var(--on-accent);
     box-shadow: 0 2px 8px var(--accent-glow);
 }
 
@@ -169,7 +169,7 @@
 
 .library-view-btn.active {
     background: var(--accent);
-    color: white;
+    color: var(--on-accent);
     box-shadow: 0 1px 3px rgba(0,0,0,0.3);
 }
 
