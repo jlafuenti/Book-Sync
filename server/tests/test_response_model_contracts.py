@@ -47,13 +47,15 @@ FOLDER_KEYS = ITEM_KEYS | {"file_count", "extension", "imported_track_count"}
 PAIR_KEYS = {"pair_id", "ebook_id", "audiobook_id", "title", "author", "detail"}
 # `orphaned_cover` / `failed_acsm`: a loose file, no DB row behind it.
 FILE_KEYS = {"filename", "file_path", "file_size", "detail"}
+# `possible_duplicate` (issue #692): the item shape plus the pair-aware marker.
+POSSIBLE_DUP_KEYS = ITEM_KEYS | {"likely_redundant"}
 
 # Same set as `CATEGORIES` in `web/src/pages/TroubleshootPage.jsx`.
 CATEGORY_KEYS = {
     "missing", "zero_byte", "chapter_encoding_bad", "audio_corrupt", "ebook_drm",
     "ebook_unreadable", "unsupported_format", "multi_file_audiobook",
-    "sync_map_missing", "duplicate", "missing_cover", "orphaned_cover",
-    "failed_transcription", "failed_acsm",
+    "sync_map_missing", "duplicate", "possible_duplicate", "missing_cover",
+    "orphaned_cover", "failed_transcription", "failed_acsm",
     # Issue #458 — the pair is the finding, not either file on its own, so this
     # carries PAIR_KEYS like failed_transcription rather than an item row.
     "implausible_pair",
@@ -147,6 +149,17 @@ async def test_issues_envelope_and_every_item_shape(
     ab = await _audiobook(db, audio_path)
     pair = BookPair(ebook_id=missing.id, audiobook_id=ab.id, status=PairStatus.ERROR)
     db.add(pair)
+    # `possible_duplicate` → item shape + `likely_redundant` (issue #692):
+    # same file size, different hash, matching title corroborates the match.
+    # Real files on disk (>= the tiny-file floor) so they don't also land in
+    # `missing`/`zero_byte` and change those categories' row counts.
+    dup_a_path, dup_b_path = tmp_path / "dup_a.epub", tmp_path / "dup_b.epub"
+    dup_a_path.write_bytes(b"x" * 2048)
+    dup_b_path.write_bytes(b"x" * 2048)
+    dup_a = await _ebook(db, dup_a_path, title="Axis Test")
+    dup_b = await _ebook(db, dup_b_path, title="Axis Test")
+    dup_a.file_size = dup_b.file_size = 999_999
+    dup_a.file_hash, dup_b.file_hash = "hash-a", "hash-b"
     # `multi_file_audiobook` → folder row.
     db.add(MultiFileAudiobookFolder(
         folder_path=str(tmp_path / "Dune"), extension=".mp3", file_count=12,
@@ -181,6 +194,8 @@ async def test_issues_envelope_and_every_item_shape(
     assert [set(row) for row in cats["failed_transcription"]] == [PAIR_KEYS]
     assert [set(row) for row in cats["orphaned_cover"]] == [FILE_KEYS]
     assert [set(row) for row in cats["failed_acsm"]] == [FILE_KEYS]
+    assert {frozenset(row) for row in cats["possible_duplicate"]} == {frozenset(POSSIBLE_DUP_KEYS)}
+    assert len(cats["possible_duplicate"]) == 2
     # Both books have no cover → two `_item_dict` rows here as well.
     assert {frozenset(row) for row in cats["missing_cover"]} == {frozenset(ITEM_KEYS)}
 

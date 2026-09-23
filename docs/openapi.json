@@ -5164,6 +5164,13 @@
             "title": "Orphaned Cover",
             "type": "array"
           },
+          "possible_duplicate": {
+            "items": {
+              "$ref": "#/components/schemas/TroubleshootPossibleDuplicateItem"
+            },
+            "title": "Possible Duplicate",
+            "type": "array"
+          },
           "sync_map_missing": {
             "items": {
               "$ref": "#/components/schemas/TroubleshootPairItem"
@@ -5198,6 +5205,7 @@
           "sync_map_missing",
           "implausible_pair",
           "duplicate",
+          "possible_duplicate",
           "missing_cover",
           "orphaned_cover",
           "failed_transcription",
@@ -5512,6 +5520,106 @@
           "detail"
         ],
         "title": "TroubleshootPairItem",
+        "type": "object"
+      },
+      "TroubleshootPossibleDuplicateItem": {
+        "additionalProperties": false,
+        "description": "A content-similarity duplicate candidate (issue #692) — matched by\naudiobook duration or ebook file size plus a corroborating metadata\nsignal, never a certainty like `duplicate`. Report-only: no delete/\nbulk-delete action is offered for this category anywhere in the UI.\n\n`likely_redundant` is set when this copy is not part of a `BookPair` while\nanother copy in the same group is — the unpaired copy is the one an\noperator is most likely to remove.",
+        "properties": {
+          "author": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Author"
+          },
+          "detail": {
+            "title": "Detail",
+            "type": "string"
+          },
+          "file_path": {
+            "title": "File Path",
+            "type": "string"
+          },
+          "file_size": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "File Size"
+          },
+          "filename": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Filename"
+          },
+          "format": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Format"
+          },
+          "item_id": {
+            "title": "Item Id",
+            "type": "integer"
+          },
+          "item_type": {
+            "title": "Item Type",
+            "type": "string"
+          },
+          "likely_redundant": {
+            "title": "Likely Redundant",
+            "type": "boolean"
+          },
+          "pair_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pair Id"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "item_type",
+          "item_id",
+          "title",
+          "author",
+          "filename",
+          "file_path",
+          "format",
+          "file_size",
+          "detail",
+          "pair_id",
+          "likely_redundant"
+        ],
+        "title": "TroubleshootPossibleDuplicateItem",
         "type": "object"
       },
       "UnsupportedFileResponse": {

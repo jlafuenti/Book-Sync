@@ -891,6 +891,20 @@ class TroubleshootItem(StrictResponse):
     pair_id: Optional[int]
 
 
+class TroubleshootPossibleDuplicateItem(TroubleshootItem):
+    """A content-similarity duplicate candidate (issue #692) — matched by
+    audiobook duration or ebook file size plus a corroborating metadata
+    signal, never a certainty like `duplicate`. Report-only: no delete/
+    bulk-delete action is offered for this category anywhere in the UI.
+
+    `likely_redundant` is set when this copy is not part of a `BookPair` while
+    another copy in the same group is — the unpaired copy is the one an
+    operator is most likely to remove.
+    """
+
+    likely_redundant: bool
+
+
 class TroubleshootFolderItem(TroubleshootItem):
     """A multi-file audiobook folder (issue #63): the item shape plus the
     folder's own fields. `filename` is always null here."""
@@ -941,6 +955,9 @@ class TroubleshootCategories(StrictResponse):
     #: the finding is the pairing rather than either file on its own.
     implausible_pair: List[TroubleshootPairItem]
     duplicate: List[TroubleshootItem]
+    #: Issue #692 — content-similarity candidates the exact-hash check above
+    #: cannot see (a remux, a re-tag, a metadata write-back). Report-only.
+    possible_duplicate: List[TroubleshootPossibleDuplicateItem]
     missing_cover: List[TroubleshootItem]
     orphaned_cover: List[TroubleshootFileItem]
     failed_transcription: List[TroubleshootPairItem]

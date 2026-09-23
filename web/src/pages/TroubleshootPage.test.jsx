@@ -53,7 +53,8 @@ function issuesWithChapterEncodingBad(rows, extra = {}) {
         missing: [], zero_byte: [], chapter_encoding_bad: rows, audio_corrupt: [],
         ebook_drm: [], ebook_unreadable: [], unsupported_format: [], multi_file_audiobook: [],
         sync_map_missing: [], implausible_pair: [],
-        duplicate: [], missing_cover: [], orphaned_cover: [], failed_transcription: [], failed_acsm: [],
+        duplicate: [], possible_duplicate: [], missing_cover: [], orphaned_cover: [],
+        failed_transcription: [], failed_acsm: [],
         ...extra,
     }
     return { categories, counts: Object.fromEntries(Object.entries(categories).map(([k, v]) => [k, v.length])), total: rows.length + Object.values(extra).reduce((n, v) => n + v.length, 0) }
@@ -439,5 +440,44 @@ describe('TroubleshootPage verification scan progress', () => {
         } finally {
             vi.useRealTimers()
         }
+    })
+})
+
+// Issue #692: content-similarity candidates — report-only, no delete action.
+describe('TroubleshootPage possible duplicates', () => {
+    const pairedRow = {
+        item_type: 'audiobook', item_id: 10, title: 'Axis Test',
+        author: 'An Author', file_size: 500000, likely_redundant: false,
+        detail: 'Possible duplicate — same duration to the second as 1 other audiobook (2:00:00), matched on matching title. Candidate only; review before deleting.',
+    }
+    const unpairedRow = {
+        item_type: 'audiobook', item_id: 11, title: 'Axis Test',
+        author: 'An Author', file_size: 500000, likely_redundant: true,
+        detail: 'Possible duplicate — same duration to the second as 1 other audiobook (2:00:00), matched on matching title. Candidate only; review before deleting. Not paired to any ebook — the paired copy in this group is likely the one to keep.',
+    }
+
+    it('lists the category with its label and per-row detail, with no delete control or bulk select', async () => {
+        getLibraryIssuesMock.mockResolvedValue(
+            issuesWithChapterEncodingBad([], { possible_duplicate: [pairedRow, unpairedRow] })
+        )
+        renderPage()
+
+        fireEvent.click(await screen.findByText(/Possible duplicates \(same length or size\)/))
+
+        expect(await screen.findAllByText(/Candidate only; review before deleting/)).toHaveLength(2)
+        expect(screen.queryByRole('checkbox')).not.toBeInTheDocument()
+        expect(screen.queryByRole('button', { name: 'Delete' })).not.toBeInTheDocument()
+        expect(screen.queryByRole('button', { name: 'Delete Selected' })).not.toBeInTheDocument()
+    })
+
+    it('marks the unpaired copy as likely redundant and leaves the paired copy unmarked', async () => {
+        getLibraryIssuesMock.mockResolvedValue(
+            issuesWithChapterEncodingBad([], { possible_duplicate: [pairedRow, unpairedRow] })
+        )
+        renderPage()
+
+        fireEvent.click(await screen.findByText(/Possible duplicates \(same length or size\)/))
+
+        expect(await screen.findAllByText(/Likely redundant/)).toHaveLength(1)
     })
 })

@@ -11,12 +11,14 @@ integrity checks.
 import asyncio
 import logging
 import os
+import re
 from collections import defaultdict
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel
+from rapidfuzz import fuzz
 from sqlalchemy import delete as sa_delete
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -84,6 +86,391 @@ def _item_dict(item, item_type: str, detail: str = "", pair_id: Optional[int] = 
         "detail": detail,
         "pair_id": pair_id,
     }
+
+
+# ---------------------------------------------------------------------------
+# Possible duplicates (issue #692) — content-similarity candidates
+# ---------------------------------------------------------------------------
+#
+# The `duplicate` category above only catches byte-identical files (same
+# `file_hash`). Real duplicates almost never are: a remux, a re-tag, or
+# Tandem's own EPUB metadata write-back (#533) changes every byte while
+# leaving the same work behind, so the exact-hash check stays near-empty while
+# genuine duplicates accumulate. This section adds two weaker signals —
+# audiobook duration, ebook file size — but neither is trusted alone.
+#
+# Checked against a real library (several hundred audiobooks, all with
+# distinct whole-second durations): dozens of pairs of genuinely *different*
+# books still land within a few seconds of each other purely by chance, and a
+# same-size-different-hash ebook pair can just as easily be two unrelated
+# books that happen to share a byte count. On a library that size, even exact
+# duration equality alone would eventually collide by the birthday effect.
+#
+# So every candidate here needs a second, independent signal already on the
+# row before it is reported, on top of the length/size match. This is
+# report-only: no delete/bulk-delete action is offered for it anywhere (see
+# `web/src/pages/TroubleshootPage.jsx`), because a false positive (two
+# different books that happen to be the same size) is expected, not
+# exceptional, and the operator has to judge each one.
+#
+# For audiobooks, not every signal is strong enough to *qualify* a pair on its
+# own, even though a duration match is already tight. Deployed against a real
+# library, author-or-narrator-only corroboration produced exactly the failure
+# this predicts: two different ~1-hour short stories by the same author, read
+# by the same narrator, whose lengths happened to land a few seconds apart.
+# One author's backlist, and one narrator's whole catalogue, routinely share
+# similar running times — that is not evidence two *specific* files are the
+# same recording. So a title match or a shared ASIN/ISBN is required to
+# qualify an audiobook pair; a shared author or narrator is real corroborating
+# evidence and still lands in `detail`, but never qualifies a pair by itself
+# or together with the other (`_DUP_AUDIO_QUALIFYING_SIGNALS` below). Ebooks
+# keep author/title overlap as sufficient on their own: an exact byte-size
+# match *and* an author or title match is a much rarer coincidence than a
+# duration match on a large audio library, where the birthday effect alone
+# produces close-by pairs by the dozen.
+
+# Below this an audiobook's duration is not trusted as a duplicate signal at
+# all: a few minutes is too short a length for a coincidental match to carry
+# any weight, and folding these out costs almost no real candidates (very few
+# genuine duplicates are this short).
+_DUP_MIN_AUDIO_DURATION_SECONDS = 30 * 60  # 30 minutes
+
+# Duration tolerance: the looser (max) of a relative and an absolute bound,
+# and even a match within this window still needs a corroborating signal
+# (above) before it is reported — see the module comment for why duration
+# alone is not enough on a library of any size.
+#
+# The originating case (issue #692) is a remux 9 s apart over ~33.8 h of
+# audio: 9 / (33.8 * 3600) ≈ 0.0074%. 0.01% relative gives comfortable margin
+# over that without opening the window wide enough to catch the unrelated
+# same-length-by-chance pairs found in the check above.
+#
+# The absolute floor exists only so short-ish candidates (just above the
+# minimum, where 0.01% is under a fifth of a second) aren't held to an
+# unreasonably tight absolute window — it is not meant to do the work the
+# relative bound already does for long audio. It was originally 10 s, wider
+# than it needed to be: the remux case that motivates this check is already
+# covered by the 0.01% relative bound alone (12+ s of slack at 33.8 h), and a
+# container remux or re-tag of a ~1-hour book has no reason to drift by
+# anywhere near 10 s. 3 s gives a container remux of a short book the same
+# kind of slack the relative bound gives a long one, without being loose
+# enough to catch two unrelated same-length books at that duration.
+_DUP_AUDIO_RELATIVE_TOLERANCE = 0.0001  # 0.01%
+_DUP_AUDIO_ABSOLUTE_FLOOR_SECONDS = 3
+
+# A dramatization and an unabridged reading of the same title differ hugely in
+# length (typically a fraction vs. the full running time), so this tolerance
+# — well under a tenth of a percent — never groups them; no separate rule is
+# needed to keep them apart.
+
+
+def _audio_duration_tolerance(duration_seconds: float) -> float:
+    return max(duration_seconds * _DUP_AUDIO_RELATIVE_TOLERANCE, _DUP_AUDIO_ABSOLUTE_FLOOR_SECONDS)
+
+
+# Trailing series index ("Axis Test: 2", "Axis Test - Book 3") or a
+# dramatization/edition annotation ("(Unabridged)", "(Dramatized)"). Stripped
+# before comparison so two releases of the same title don't score low purely
+# on the suffix — this signal has no author gate the way auto-pairing does, so
+# the suffix has to come off up front rather than just costing a few fuzzy
+# points.
+_DUP_TITLE_SUFFIX_RE = re.compile(
+    r"""
+    \s*[:\-–—]\s*(?:book|vol(?:ume)?|part)?\s*\d+(?:\.\d+)?\s*$
+    |
+    \s*\(\s*(?:unabridged|abridged|dramati[sz]ed?|dramati[sz]ation|full[\s-]cast[^)]*)\)\s*$
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
+
+_DUP_TITLE_OVERLAP_THRESHOLD = 85  # rapidfuzz token_set_ratio, 0-100
+
+_DUP_AUTHOR_SUFFIX_TOKENS = {"jr", "sr", "ii", "iii", "iv", "v"}
+
+
+def _dup_strip_title_suffix(title: str) -> str:
+    prev, t = None, title
+    while t != prev:
+        prev = t
+        t = _DUP_TITLE_SUFFIX_RE.sub("", t).strip()
+    return t
+
+
+def _dup_normalize_title(title: Optional[str]) -> str:
+    """Lowercase, drop a trailing series/edition suffix, strip punctuation,
+    drop a leading article."""
+    if not title:
+        return ""
+    t = _dup_strip_title_suffix(title)
+    t = t.lower()
+    t = re.sub(r"[^\w\s]", " ", t)
+    t = re.sub(r"\s+", " ", t).strip()
+    for article in ("the ", "a ", "an "):
+        if t.startswith(article):
+            t = t[len(article):]
+            break
+    return t
+
+
+def _dup_titles_overlap(t1: Optional[str], t2: Optional[str]) -> bool:
+    n1, n2 = _dup_normalize_title(t1), _dup_normalize_title(t2)
+    if not n1 or not n2:
+        return False
+    return n1 == n2 or fuzz.token_set_ratio(n1, n2) >= _DUP_TITLE_OVERLAP_THRESHOLD
+
+
+def _dup_author_surname(author: Optional[str]) -> str:
+    """Last significant name token — tolerant of initials spacing ("J. Q.
+    Sampleton" and "J.Q. Sampleton" both end in "sampleton": removing periods
+    merges unspaced initials into one token but never merges two
+    already-spaced ones) and of a generational suffix ("J. Q. Sampleton" vs
+    "J. Q. Sampleton Jr." both end in "sampleton")."""
+    if not author:
+        return ""
+    t = re.sub(r"[.,]", "", author.lower())
+    tokens = [tok for tok in t.split() if tok not in _DUP_AUTHOR_SUFFIX_TOKENS]
+    return tokens[-1] if tokens else ""
+
+
+def _dup_authors_overlap(a1: Optional[str], a2: Optional[str]) -> bool:
+    s1, s2 = _dup_author_surname(a1), _dup_author_surname(a2)
+    return len(s1) >= 2 and s1 == s2
+
+
+def _dup_values_match(v1, v2) -> bool:
+    return bool(v1) and bool(v2) and str(v1).strip().lower() == str(v2).strip().lower()
+
+
+# Signals strong enough to *qualify* an audiobook duration match on their own
+# — a title match or a shared identifier. "same narrator" and "overlapping
+# author" are deliberately excluded: they are real evidence and still appear
+# in `detail`, but neither is specific to one recording (see the module
+# comment above `_DUP_AUDIO_RELATIVE_TOLERANCE`), so `_dup_audio_qualifies`
+# requires at least one of these before a pair is reported.
+_DUP_AUDIO_QUALIFYING_SIGNALS = frozenset({"same ASIN", "same ISBN", "matching title"})
+
+
+def _dup_audio_qualifies(signals: List[str]) -> bool:
+    return any(s in _DUP_AUDIO_QUALIFYING_SIGNALS for s in signals)
+
+
+def _dup_audio_corroboration(a, b) -> List[str]:
+    """Signals (beyond duration) that `a` and `b` might be the same
+    recording. Order is the display order in `detail`. Not every signal
+    here qualifies a pair by itself — see `_dup_audio_qualifies`."""
+    signals = []
+    if _dup_values_match(a.asin, b.asin):
+        signals.append("same ASIN")
+    if _dup_values_match(a.isbn, b.isbn):
+        signals.append("same ISBN")
+    if _dup_titles_overlap(a.title, b.title):
+        signals.append("matching title")
+    if _dup_values_match(a.narrators, b.narrators):
+        signals.append("same narrator")
+    if _dup_authors_overlap(a.author, b.author):
+        signals.append("overlapping author")
+    return signals
+
+
+def _dup_ebook_corroboration(a, b) -> List[str]:
+    signals = []
+    if _dup_titles_overlap(a.title, b.title):
+        signals.append("matching title")
+    if _dup_authors_overlap(a.author, b.author):
+        signals.append("overlapping author")
+    return signals
+
+
+class _UnionFind:
+    """Minimal union-find over a fixed id set — connected components become
+    the possible-duplicate groups."""
+
+    def __init__(self, ids):
+        self._parent = {i: i for i in ids}
+
+    def find(self, x):
+        while self._parent[x] != x:
+            self._parent[x] = self._parent[self._parent[x]]
+            x = self._parent[x]
+        return x
+
+    def union(self, a, b):
+        ra, rb = self.find(a), self.find(b)
+        if ra != rb:
+            self._parent[ra] = rb
+
+
+# id -> {other_id: (extra_info, [signal, ...])} for the direct pairwise
+# matches that produced a group — `extra_info` is the duration gap in seconds
+# for audiobooks, unused (None) for ebooks.
+_DupEdges = Dict[int, Dict[int, Tuple[Optional[int], List[str]]]]
+
+
+def _group_possible_duplicate_audiobooks(audiobooks) -> Tuple[list, _DupEdges]:
+    """Audiobooks whose duration matches within tolerance AND qualify via a
+    title match or a shared ASIN/ISBN (`_dup_audio_qualifies`) — author and
+    narrator matches alone are not enough (see the module comment above).
+    Returns ``(groups, edges)``: `groups` is a list of item-lists (size >= 2,
+    at least one direct edge each); `edges` carries the per-pair
+    (diff_seconds, signals) used to build `detail`, including any
+    non-qualifying signals that still corroborate the match.
+
+    Pure in-memory comparisons over rows already loaded by the caller — no
+    query, no file access. Candidates are sorted by duration first (O(n log
+    n)); since duration only increases through the sort, the inner loop
+    breaks out as soon as it passes the loosest tolerance any later candidate
+    could have, so the common case (few matches) is a single pass rather than
+    the full O(n^2) grid. A library where most items cluster within the
+    tolerance is the pathological case and still runs in memory only.
+    """
+    candidates = sorted(
+        (ab for ab in audiobooks
+         if ab.duration_seconds and ab.duration_seconds >= _DUP_MIN_AUDIO_DURATION_SECONDS),
+        key=lambda ab: ab.duration_seconds,
+    )
+    if not candidates:
+        return [], {}
+
+    global_cap = _audio_duration_tolerance(candidates[-1].duration_seconds)
+    uf = _UnionFind(ab.id for ab in candidates)
+    edges: _DupEdges = defaultdict(dict)
+
+    for i, a in enumerate(candidates):
+        for b in candidates[i + 1:]:
+            diff = b.duration_seconds - a.duration_seconds
+            if diff > global_cap:
+                break  # sorted ascending — nothing further can be closer
+            tol = max(_audio_duration_tolerance(a.duration_seconds),
+                      _audio_duration_tolerance(b.duration_seconds))
+            if diff > tol:
+                continue
+            if a.file_hash and b.file_hash and a.file_hash == b.file_hash:
+                continue  # exact duplicate — already the certain `duplicate` category
+            signals = _dup_audio_corroboration(a, b)
+            if not _dup_audio_qualifies(signals):
+                continue  # author/narrator alone is not specific enough — see above
+            edges[a.id][b.id] = (diff, signals)
+            edges[b.id][a.id] = (diff, signals)
+            uf.union(a.id, b.id)
+
+    clusters = defaultdict(list)
+    for ab in candidates:
+        if ab.id in edges:
+            clusters[uf.find(ab.id)].append(ab)
+    return [g for g in clusters.values() if len(g) > 1], edges
+
+
+def _group_possible_duplicate_ebooks(ebooks) -> Tuple[list, _DupEdges]:
+    """Ebooks sharing an exact `file_size`, not all sharing `file_hash`, and
+    corroborated by title or author overlap (see the module comment above). A
+    same-size group whose members *all* share one hash is a certain duplicate
+    already, so it is never unioned here and never appears twice."""
+    by_size = defaultdict(list)
+    for eb in ebooks:
+        if eb.file_size:
+            by_size[eb.file_size].append(eb)
+
+    uf = _UnionFind(eb.id for eb in ebooks if eb.file_size)
+    edges: _DupEdges = defaultdict(dict)
+
+    for group in by_size.values():
+        if len(group) < 2:
+            continue
+        for i, a in enumerate(group):
+            for b in group[i + 1:]:
+                if a.file_hash and b.file_hash and a.file_hash == b.file_hash:
+                    continue  # exact duplicate — already the certain `duplicate` category
+                signals = _dup_ebook_corroboration(a, b)
+                if not signals:
+                    continue
+                edges[a.id][b.id] = (None, signals)
+                edges[b.id][a.id] = (None, signals)
+                uf.union(a.id, b.id)
+
+    clusters = defaultdict(list)
+    for eb in ebooks:
+        if eb.file_size and eb.id in edges:
+            clusters[uf.find(eb.id)].append(eb)
+    return [g for g in clusters.values() if len(g) > 1], edges
+
+
+def _dup_hms(seconds: int) -> str:
+    seconds = int(seconds)
+    h, rem = divmod(seconds, 3600)
+    m, s = divmod(rem, 60)
+    return f"{h}:{m:02d}:{s:02d}"
+
+
+def _dup_audio_detail(item, peers: Dict[int, Tuple[int, List[str]]]) -> str:
+    other_count = len(peers)
+    plural = "s" if other_count != 1 else ""
+    max_diff = max(diff for diff, _ in peers.values())
+    signals = sorted({s for _, sigs in peers.values() for s in sigs})
+    hms = _dup_hms(item.duration_seconds)
+    if max_diff == 0:
+        length_phrase = f"same duration to the second as {other_count} other audiobook{plural} ({hms})"
+    else:
+        length_phrase = f"duration within {max_diff}s of {other_count} other audiobook{plural} (~{hms})"
+    return (f"Possible duplicate — {length_phrase}, matched on {', '.join(signals)}. "
+            f"Candidate only; review before deleting.")
+
+
+def _dup_ebook_detail(item, peers: Dict[int, Tuple[None, List[str]]]) -> str:
+    other_count = len(peers)
+    plural = "s" if other_count != 1 else ""
+    signals = sorted({s for _, sigs in peers.values() for s in sigs})
+    return (f"Possible duplicate — same file size as {other_count} other ebook{plural}, "
+            f"different content hash, matched on {', '.join(signals)}. "
+            f"Candidate only; review before deleting.")
+
+
+def _dup_order_pair_aware(group, paired_ids: set) -> List[Tuple[object, bool]]:
+    """Paired members first (never marked); unpaired members after, marked
+    `likely_redundant=True` only when the group also has a paired member to
+    prefer instead — an all-paired or all-unpaired group has no relative
+    preference to report."""
+    paired = [it for it in group if it.id in paired_ids]
+    unpaired = [it for it in group if it.id not in paired_ids]
+    mark_unpaired = bool(paired) and bool(unpaired)
+    return [(it, False) for it in paired] + [(it, mark_unpaired) for it in unpaired]
+
+
+def _possible_dup_item_dict(item, item_type: str, detail: str, likely_redundant: bool) -> dict:
+    d = _item_dict(item, item_type, detail)
+    d["likely_redundant"] = likely_redundant
+    return d
+
+
+def _build_possible_duplicate_category(ebooks, audiobooks, all_pairs) -> list:
+    """The `possible_duplicate` category: content-similarity candidates,
+    pair-aware ordered (paired copy first, unpaired copy marked
+    `likely_redundant` when the group has both)."""
+    paired_ebook_ids = {p.ebook_id for p in all_pairs}
+    paired_audiobook_ids = {p.audiobook_id for p in all_pairs}
+
+    possible_duplicate = []
+
+    audio_groups, audio_edges = _group_possible_duplicate_audiobooks(audiobooks)
+    for group in audio_groups:
+        for item, likely_redundant in _dup_order_pair_aware(group, paired_audiobook_ids):
+            detail = _dup_audio_detail(item, audio_edges[item.id])
+            if likely_redundant:
+                detail += (" Not paired to any ebook — the paired copy in "
+                           "this group is likely the one to keep.")
+            possible_duplicate.append(
+                _possible_dup_item_dict(item, "audiobook", detail, likely_redundant))
+
+    ebook_groups, ebook_edges = _group_possible_duplicate_ebooks(ebooks)
+    for group in ebook_groups:
+        for item, likely_redundant in _dup_order_pair_aware(group, paired_ebook_ids):
+            detail = _dup_ebook_detail(item, ebook_edges[item.id])
+            if likely_redundant:
+                detail += (" Not paired to any audiobook — the paired copy "
+                           "in this group is likely the one to keep.")
+            possible_duplicate.append(
+                _possible_dup_item_dict(item, "ebook", detail, likely_redundant))
+
+    return possible_duplicate
 
 
 # ---------------------------------------------------------------------------
@@ -288,6 +675,12 @@ async def get_issues(
             for it in group:
                 duplicate.append(_item_dict(it, itype, f"{len(group)} copies share hash {h[:12]}…"))
 
+    # Possible duplicates (issue #692): content-similarity candidates the
+    # exact-hash check above cannot see — see the module comment near
+    # `_build_possible_duplicate_category` for the corroboration rule.
+    # `all_pairs` was already loaded above for `sync_map_missing`.
+    possible_duplicate = _build_possible_duplicate_category(ebooks, audiobooks, all_pairs)
+
     # Covers: missing (broken/absent) and orphaned (file with no owner).
     covers_dir = settings.covers_dir
     missing_cover = []
@@ -361,6 +754,7 @@ async def get_issues(
         "sync_map_missing": sync_map_missing,
         "implausible_pair": implausible_pair,
         "duplicate": duplicate,
+        "possible_duplicate": possible_duplicate,
         "missing_cover": missing_cover,
         "orphaned_cover": orphaned_cover,
         "failed_transcription": failed_transcription,
