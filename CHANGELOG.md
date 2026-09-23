@@ -18,6 +18,24 @@ operator must do by hand rather than read about afterwards.
 
 ### Fixed
 
+- A passing words-per-hour plausibility check could still be overruled by the imprecise
+  bytes-per-hour check, permanently flagging heavily illustrated ebooks (picture books, comics,
+  cookbooks) as `implausible_pair` even though their audio narrates them at a completely normal
+  pace (#693). `check_pair_plausibility` now treats a passing word-count verdict as final and
+  skips the byte check entirely when a word count is available; the byte check only ever runs on
+  its own when no word count could be computed for the ebook, and its message now says so
+  explicitly. Trade-off: a pair with a plausible word count is no longer checked by file size at
+  all — the word count is trusted outright as the more precise signal, so it can no longer act as
+  a second line of defense behind a coincidentally plausible-looking word count. Since that verdict
+  is only ever recorded at pair creation, fixing the check alone could not clear a false positive
+  already stored on a running server, so "Library verify" (Troubleshoot → Verify library) now also
+  re-checks any pair whose stored verdict currently says implausible, and clears it if a freshly
+  computed word count now passes; a pair whose stored verdict is already plausible is left alone.
+  The added scan phase also exposed a small pre-existing display bug: the Troubleshoot page's
+  progress bar guessed the total phase count before the server had reported one, so it briefly
+  showed "phase 1 of 3" and then flipped once the real total came back. It no longer guesses — the
+  phase total only renders once the server has actually reported it.
+
 - The web reader left open in a tab now catches up with listening done elsewhere (#683, the web
   half of #682). Before, it kept showing the page from before, because it only worked out where to
   open when the book was first opened, and the first page turn from that stale page was saved as
@@ -26,6 +44,11 @@ operator must do by hand rather than read about afterwards.
   seconds or more since the reader last knew, re-opens the book there the same way a fresh open
   would. Costs one position read each time the tab comes back. A page turned in the moment
   between returning to the tab and that read coming back is not saved.
+
+### Upgrade notes
+
+- Run Library verify (Troubleshoot → Verify library) after deploying this change to clear pairs
+  that were flagged by file size despite a normal word count (#693).
 
 ## [0.5.1] - 2026-09-21
 

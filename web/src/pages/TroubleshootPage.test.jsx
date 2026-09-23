@@ -1,12 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import TroubleshootPage from './TroubleshootPage'
 
 const {
     getLibraryIssuesMock, repairChapterEncodingMock, bulkRepairChapterEncodingMock,
     getLibraryScanProgressMock, dismissMultiFileFolderMock, removeMultiFileTracksMock,
-    scanLibraryMock, getSyncMapAuditMock,
+    scanLibraryMock, getSyncMapAuditMock, startLibraryScanMock,
 } = vi.hoisted(() => ({
     getLibraryIssuesMock: vi.fn(),
     repairChapterEncodingMock: vi.fn(),
@@ -16,11 +16,12 @@ const {
     removeMultiFileTracksMock: vi.fn(),
     scanLibraryMock: vi.fn(),
     getSyncMapAuditMock: vi.fn(),
+    startLibraryScanMock: vi.fn(),
 }))
 
 vi.mock('../api', () => ({
     getLibraryIssues: getLibraryIssuesMock,
-    startLibraryScan: vi.fn(),
+    startLibraryScan: startLibraryScanMock,
     getLibraryScanProgress: getLibraryScanProgressMock,
     cancelLibraryScan: vi.fn(),
     bulkDeleteIssues: vi.fn(),
@@ -67,6 +68,7 @@ beforeEach(() => {
     repairChapterEncodingMock.mockReset()
     bulkRepairChapterEncodingMock.mockReset()
     getLibraryScanProgressMock.mockReset().mockResolvedValue({ running: false })
+    startLibraryScanMock.mockReset().mockResolvedValue({ status: 'started' })
     dismissMultiFileFolderMock.mockReset().mockResolvedValue({ status: 'dismissed' })
     removeMultiFileTracksMock.mockReset().mockResolvedValue({ deleted: 12 })
     scanLibraryMock.mockReset().mockResolvedValue({ new_ebooks: 0, new_audiobooks: 0, auto_matched_pairs: 0, multi_file_folders: 1, message: '' })
@@ -388,5 +390,54 @@ describe('TroubleshootPage sync-map audit', () => {
         fireEvent.click(await screen.findByRole('button', { name: 'Run Sync-Map Audit' }))
 
         await screen.findByText('Sync-map audit failed')
+    })
+})
+
+describe('TroubleshootPage verification scan progress', () => {
+    beforeEach(() => {
+        getLibraryIssuesMock.mockResolvedValue(issuesWithChapterEncodingBad([]))
+    })
+
+    it('does not claim a phase total before the server has reported one', async () => {
+        renderPage()
+
+        fireEvent.click(await screen.findByRole('button', { name: 'Run Verification Scan' }))
+
+        // Right after starting, before the first poll response has come back,
+        // the placeholder must not guess a total. The old code hard-coded
+        // `phase_count: 3` here, which briefly showed "phase 1 of 3" and then
+        // flipped to "of 4" once the real (4-phase, since issue #693 added a
+        // pair-recheck phase) scan reported in — a number this page cannot
+        // know without asking the server.
+        await screen.findByText('Starting…')
+        expect(screen.queryByText(/of \d/)).not.toBeInTheDocument()
+    })
+
+    it('shows the real phase total once the server reports it, not a stale guess', async () => {
+        getLibraryScanProgressMock.mockResolvedValue({
+            running: true, phase_index: 3, phase_count: 4,
+            phase_label: 'Re-checking flagged pairs', current: 2, total: 5,
+        })
+        renderPage()
+
+        vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'setTimeout', 'clearTimeout'] })
+        try {
+            await act(async () => {
+                fireEvent.click(screen.getByRole('button', { name: 'Run Verification Scan' }))
+                await Promise.resolve()
+            })
+            expect(screen.queryByText(/of \d/)).not.toBeInTheDocument()
+
+            // The 1s poll tick picks up the server's real phase count.
+            await act(async () => {
+                vi.advanceTimersByTime(1000)
+                await Promise.resolve()
+            })
+
+            expect(screen.getByText(/of 4/)).toBeInTheDocument()
+            expect(screen.queryByText(/of 3/)).not.toBeInTheDocument()
+        } finally {
+            vi.useRealTimers()
+        }
     })
 })

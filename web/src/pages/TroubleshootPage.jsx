@@ -578,7 +578,14 @@ function TroubleshootPage() {
         setError(null)
         try {
             await startLibraryScan()
-            setScan({ running: true, phase_index: 0, phase_count: 3, phase_label: 'Starting…', current: 0, total: 0 })
+            // No `phase_count` here on purpose: the scan's real phase count comes
+            // from the server on the first poll (`getLibraryScanProgress`), and
+            // hard-coding one here drifted out of sync the moment a phase was
+            // added or removed server-side — this placeholder briefly claimed
+            // "phase 1 of 3" while the server was actually running a 4-phase
+            // scan (issue #693 added a fourth phase). The render below only
+            // shows "of N" once `phase_count` is known.
+            setScan({ running: true, phase_index: 0, phase_label: 'Starting…', current: 0, total: 0 })
             beginPolling()
         } catch (e) { setError(e.message) }
     }
@@ -628,7 +635,7 @@ function TroubleshootPage() {
             {scanning && (
                 <div className="system-card ts-progress">
                     <div className="ts-progress-head">
-                        <span><strong>{scan.phase_label}</strong> — phase {Math.min(scan.phase_index + 1, scan.phase_count)} of {scan.phase_count}</span>
+                        <span><strong>{scan.phase_label}</strong>{scan.phase_count ? ` — phase ${Math.min(scan.phase_index + 1, scan.phase_count)} of ${scan.phase_count}` : ''}</span>
                         <span>{scan.current} / {scan.total} ({pct}%)</span>
                     </div>
                     <div className="progress-bar" style={{ height: 8 }}>
