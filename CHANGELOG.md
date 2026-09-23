@@ -41,6 +41,18 @@ operator must do by hand rather than read about afterwards.
 
 ### Fixed
 
+- The web player no longer shows 0:00, or saves a position of 0, while an audiobook is still
+  loading (#697). Between opening a book and the audio being ready, which took over 20 seconds
+  on a slow connection, the player sat at `0:00 / -0:00` with play enabled. Pressing play there
+  rewound from 0, and the next pause saved position 0 as an audiobook-sourced write, which on a
+  paired book also moved the ebook back to the start. Until the saved position has been applied,
+  the player now shows it (and the book's length) with a spinner, and play, skip and the seek bar
+  are disabled; playback starts by itself at the saved position once the audio is ready, as it
+  always did. A tab close in that window saves the saved position rather than 0, and a second
+  book opened before the first finished loading no longer inherits the first book's start
+  position. Trade-off: on a slow link you cannot start, skip or scrub until the audio has loaded.
+  Positions already overwritten by the old behaviour are not restored.
+
 - Troubleshoot's file-level items now say which pair a file belongs to (#700). Every file-level
   category (missing, too small, corrupt audio, DRM, unreadable ebook, bad chapter titles,
   unsupported format, duplicates, possible duplicates, missing cover) reported `pair_id: null`

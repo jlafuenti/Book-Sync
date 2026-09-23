@@ -105,6 +105,17 @@ export function AudioPlayerProvider({ children }) {
     const flushRef = useRef(() => Promise.resolve())
     // Last time the OS scrubber was fed (Media Session position state).
     const lastPositionStateRef = useRef(0)
+    // Issue #697: the start position play() asked for, in seconds, held from
+    // play() until the `canplay` handler has applied it. Until then the element
+    // sits at 0 with no duration, so anything that reads `audio.currentTime`
+    // would see 0 — and a write of 0 on a paired book moves the ebook back to
+    // the start too. `positionSeconds()` answers with this instead, and the
+    // transport ignores commands while it is set. Null once the audio is ready.
+    const pendingStartRef = useRef(null)
+    // play()'s one-shot start listener, so a second play() before the first
+    // book was ready can detach it rather than let it seek the new book to the
+    // old book's position.
+    const startCanPlayRef = useRef(null)
 
     const [currentAudiobook, setCurrentAudiobook] = useState(null) // { id, title, author, coverPath, durationSeconds, pairId, pairedEbookId }
     const [pairedEbookId, setPairedEbookId] = useState(null)
@@ -125,6 +136,14 @@ export function AudioPlayerProvider({ children }) {
     // again. Without it a network drop, a deleted file or a second failing
     // source just showed a normal-looking paused player.
     const [playbackError, setPlaybackError] = useState(null)
+    // True from play() until the saved position has been applied (issue #697).
+    const [loading, setLoading] = useState(false)
+
+    // Where the player is, for anything that saves or reports it: the pending
+    // start while loading, the element's clock after.
+    const positionSeconds = useCallback(() => (
+        pendingStartRef.current ?? audioRef.current?.currentTime ?? 0
+    ), [])
 
     // Attach to every updatePosition call as `.then(handleConflict)`.
     // Passes the result through unchanged so it stays chainable.
@@ -165,7 +184,7 @@ export function AudioPlayerProvider({ children }) {
         if (appendToLog) lastLogTimeRef.current = Date.now()
         pushInFlightRef.current = true
         return writePosition(positionTarget(ab, 'audiobook'), {
-            audio_position_ms: Math.floor(audio.currentTime * 1000),
+            audio_position_ms: Math.floor(positionSeconds() * 1000),
             append_to_log: appendToLog,
         }, { claimSource: claimFormat ? 'audiobook' : null }).then((result) => {
             lastPushTimeRef.current = Date.now()
@@ -173,7 +192,7 @@ export function AudioPlayerProvider({ children }) {
         }).catch(() => {}).finally(() => {
             pushInFlightRef.current = false
         })
-    }, [handleConflict])
+    }, [handleConflict, positionSeconds])
 
     useEffect(() => {
         flushRef.current = flushPosition
@@ -212,6 +231,9 @@ export function AudioPlayerProvider({ children }) {
         const onPause = () => { setPlaying(false); setPlaybackState('paused') }
         const onCanPlay = () => setPlaybackError(null)
         const onTimeUpdate = () => {
+            // Loading (issue #697): the element's 0 is not a position; keep
+            // showing the saved one until the start seek has landed.
+            if (pendingStartRef.current !== null) return
             setCurrentTime(audio.currentTime)
             const now = Date.now()
             if (now - lastPositionStateRef.current >= POSITION_STATE_INTERVAL_MS) {
@@ -219,7 +241,12 @@ export function AudioPlayerProvider({ children }) {
                 positionState()
             }
         }
-        const onDurationChange = () => { setDuration(audio.duration || 0); positionState() }
+        const onDurationChange = () => {
+            // An emptied element reports no duration; while loading, keep the
+            // book's known length on screen rather than dropping to 0:00.
+            if (audio.duration || pendingStartRef.current === null) setDuration(audio.duration || 0)
+            positionState()
+        }
         const onEnded = () => {
             setPlaying(false)
             setPlaybackState('paused')
@@ -263,7 +290,9 @@ export function AudioPlayerProvider({ children }) {
             const ab = currentAudiobookRef.current
             if (!ab) return
             const wasPlaying = resume === null ? !audio.paused : resume
-            const posSeconds = audio.currentTime
+            // During the load window this is the saved start, not the empty
+            // element's 0 (issue #697).
+            const posSeconds = positionSeconds()
             const rate = audio.playbackRate
             detachPendingCanPlay()
             try {
@@ -274,9 +303,17 @@ export function AudioPlayerProvider({ children }) {
                     // Exact position, no resume rewind: this is a transparent
                     // token refresh, not a user resume (issue #42). Same for
                     // speed — load() may reset playbackRate to default.
+                    // A recovery inside the load window applies the start
+                    // itself, so it finishes what play() began — including
+                    // starting playback (issue #697).
+                    const finishingLoad = pendingStartRef.current !== null
                     audio.currentTime = posSeconds
                     audio.playbackRate = rate
-                    if (wasPlaying) audio.play()
+                    if (finishingLoad) {
+                        pendingStartRef.current = null
+                        setLoading(false)
+                    }
+                    if (wasPlaying || finishingLoad) audio.play()
                     detachPendingCanPlay()
                     recoveringStreamRef.current = false
                     setPlaybackError(null)
@@ -437,7 +474,7 @@ export function AudioPlayerProvider({ children }) {
             if (!ab || !audio) return
             const claimFormat = playingRef.current
             const target = positionTarget(ab, 'audiobook')
-            const positionMs = Math.floor(audio.currentTime * 1000)
+            const positionMs = Math.floor(positionSeconds() * 1000)
             const key = `${target[0]}:${target[1]}:${positionMs}`
             if (lastKeepaliveRef.current === key) return
             lastKeepaliveRef.current = key
@@ -460,7 +497,7 @@ export function AudioPlayerProvider({ children }) {
             window.removeEventListener('beforeunload', onUnload)
             document.removeEventListener('visibilitychange', onVisibilityChange)
         }
-    }, [])
+    }, [positionSeconds])
 
     const play = useCallback(async (audiobookId, audiobook, positionMs = 0, pairedEbookIdArg = null) => {
         setPairedEbookId(pairedEbookIdArg)
@@ -469,6 +506,15 @@ export function AudioPlayerProvider({ children }) {
 
         // If same audiobook, seek to requested position (if any) then resume
         if (currentAudiobook?.id === audiobookId && audio.src) {
+            if (pendingStartRef.current !== null) {
+                // Still loading (issue #697): the start listener will seek and
+                // play; only the target can change.
+                if (positionMs > 0) {
+                    pendingStartRef.current = positionMs / 1000
+                    setCurrentTime(positionMs / 1000)
+                }
+                return
+            }
             if (positionMs > 0) {
                 audio.currentTime = positionMs / 1000
             }
@@ -485,8 +531,28 @@ export function AudioPlayerProvider({ children }) {
             })
         }
 
-        // Load new audiobook
-        const url = await getAudiobookStreamUrl(audiobookId)
+        // Until the start seek lands, show and save the requested position, not
+        // the empty element's 0:00 (issue #697). Set after the flush above,
+        // which still describes the book being left.
+        pendingStartRef.current = positionMs / 1000
+        setLoading(true)
+        setCurrentTime(positionMs / 1000)
+        setDuration(audiobook?.duration_seconds || audiobook?.durationSeconds || 0)
+        if (startCanPlayRef.current) {
+            audio.removeEventListener('canplay', startCanPlayRef.current)
+            startCanPlayRef.current = null
+        }
+
+        // Load new audiobook. A failed mint must not leave the transport
+        // disabled behind a load that will never finish.
+        let url
+        try {
+            url = await getAudiobookStreamUrl(audiobookId)
+        } catch (err) {
+            pendingStartRef.current = null
+            setLoading(false)
+            throw err
+        }
         audio.src = url
         audio.playbackRate = speed
 
@@ -501,17 +567,27 @@ export function AudioPlayerProvider({ children }) {
         setCurrentAudiobook(info)
 
         const onCanPlay = () => {
-            if (positionMs > 0) {
-                audio.currentTime = positionMs / 1000
-            }
-            audio.play()
             audio.removeEventListener('canplay', onCanPlay)
+            startCanPlayRef.current = null
+            // A stream recovery may have applied the start already.
+            if (pendingStartRef.current === null) return
+            if (pendingStartRef.current > 0) {
+                audio.currentTime = pendingStartRef.current
+            }
+            setCurrentTime(pendingStartRef.current)
+            pendingStartRef.current = null
+            setLoading(false)
+            audio.play()
         }
+        startCanPlayRef.current = onCanPlay
         audio.addEventListener('canplay', onCanPlay)
         audio.load()
     }, [currentAudiobook, speed, flushPosition])
 
     const pause = useCallback(() => {
+        // Nothing is playing yet and the saved position is already on the
+        // server; a write here could only restate it (issue #697).
+        if (pendingStartRef.current !== null) return
         audioRef.current?.pause()
         // Save position immediately on pause. Pause is a session boundary —
         // log a history entry and reset the 30-min continuous-playback timer.
@@ -529,6 +605,10 @@ export function AudioPlayerProvider({ children }) {
     // carries an explicit position from Home/Continue, and the stream-error
     // recovery restores the exact position it was interrupted at.
     const togglePlayPause = useCallback(() => {
+        // Loading (issue #697): play starts by itself at the saved position
+        // once the audio is ready; a press now would rewind from the empty
+        // element's 0 and start at the top of the file.
+        if (pendingStartRef.current !== null) return
         if (playing) {
             pause()
             return
@@ -552,7 +632,7 @@ export function AudioPlayerProvider({ children }) {
     }, [])
 
     const seekTo = useCallback((seconds) => {
-        if (audioRef.current) {
+        if (audioRef.current && pendingStartRef.current === null) {
             audioRef.current.currentTime = seconds
             pushPositionState()
             scheduleFlush()
@@ -560,7 +640,7 @@ export function AudioPlayerProvider({ children }) {
     }, [scheduleFlush, pushPositionState])
 
     const skipForward = useCallback((seconds = SKIP_SECONDS) => {
-        if (audioRef.current) {
+        if (audioRef.current && pendingStartRef.current === null) {
             audioRef.current.currentTime = Math.min(
                 audioRef.current.currentTime + seconds,
                 audioRef.current.duration || Infinity
@@ -571,7 +651,7 @@ export function AudioPlayerProvider({ children }) {
     }, [scheduleFlush, pushPositionState])
 
     const skipBackward = useCallback((seconds = SKIP_SECONDS) => {
-        if (audioRef.current) {
+        if (audioRef.current && pendingStartRef.current === null) {
             audioRef.current.currentTime = Math.max(audioRef.current.currentTime - seconds, 0)
             pushPositionState()
             scheduleFlush()
@@ -607,11 +687,21 @@ export function AudioPlayerProvider({ children }) {
 
     const stop = useCallback(() => {
         if (audioRef.current) {
-            // Flush before the src swap resets the clock.
-            flushPosition({ appendToLog: true, claimFormat: playingRef.current })
+            // Flush before the src swap resets the clock — unless the book
+            // never finished loading: nothing played, so there is no session
+            // to log and no position beyond the saved one (issue #697).
+            if (pendingStartRef.current === null) {
+                flushPosition({ appendToLog: true, claimFormat: playingRef.current })
+            }
             audioRef.current.pause()
             audioRef.current.src = ''
         }
+        if (audioRef.current && startCanPlayRef.current) {
+            audioRef.current.removeEventListener('canplay', startCanPlayRef.current)
+        }
+        startCanPlayRef.current = null
+        pendingStartRef.current = null
+        setLoading(false)
         setCurrentAudiobook(null)
         setPlaying(false)
         setCurrentTime(0)
@@ -653,6 +743,7 @@ export function AudioPlayerProvider({ children }) {
         clearStaleConflict,
         playbackError,
         clearPlaybackError,
+        loading,
         retryPlayback,
         play,
         pause,
