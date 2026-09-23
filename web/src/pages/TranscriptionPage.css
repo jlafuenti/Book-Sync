@@ -368,8 +368,8 @@
 
 .transcription-queue-active {
     background: var(--bg-card);
-    border: 1px solid var(--accent);
-    border-left: 4px solid var(--accent);
+    border: 1px solid var(--accent-ink);
+    border-left: 4px solid var(--accent-ink);
     border-radius: var(--radius);
     padding: 16px;
     margin-bottom: 24px;
@@ -544,8 +544,8 @@
 
 .transcription-history-badge.pending {
     background: var(--accent-light);
-    color: var(--accent);
-    border: 1px solid var(--accent);
+    color: var(--accent-ink);
+    border: 1px solid var(--accent-ink);
 }
 
 /* ---- Empty State ---- */
@@ -602,7 +602,7 @@
 
 .transcription-search-input:focus,
 .transcription-search-input:hover {
-    border-color: var(--accent);
+    border-color: var(--accent-ink);
 }
 
 /* ---- Sort pill ---- */
@@ -629,8 +629,8 @@
 
 .transcription-sort-btn:hover,
 .transcription-sort-btn.open {
-    border-color: var(--accent);
-    color: var(--accent);
+    border-color: var(--accent-ink);
+    color: var(--accent-ink);
 }
 
 .transcription-sort-dropdown {
@@ -661,11 +661,11 @@
 
 .transcription-sort-option:hover {
     background: var(--accent-light);
-    color: var(--accent);
+    color: var(--accent-ink);
 }
 
 .transcription-sort-option.active {
-    color: var(--accent);
+    color: var(--accent-ink);
     font-weight: 600;
 }
 
@@ -706,7 +706,7 @@
 }
 
 .transcription-queue-card.drag-over .transcription-card-cover {
-    outline: 2px solid var(--accent);
+    outline: 2px solid var(--accent-ink);
     outline-offset: 2px;
 }
 
@@ -1008,8 +1008,8 @@
 
     .tx-mobile-show-all:active {
         background: var(--accent-light);
-        border-color: var(--accent);
-        color: var(--accent);
+        border-color: var(--accent-ink);
+        color: var(--accent-ink);
     }
 
     /* ---- Queue items ---- */
@@ -1130,7 +1130,7 @@
     /* ---- Mobile Queue / Action buttons ---- */
     .tx-mobile-queue-btn {
         background: var(--bg-card);
-        color: var(--accent);
+        color: var(--accent-ink);
         border: 1px solid var(--border);
         border-radius: 9999px;
         padding: 6px 16px;

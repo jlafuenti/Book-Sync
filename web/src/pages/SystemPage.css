@@ -38,7 +38,7 @@
 }
 
 .system-section-icon {
-    color: var(--accent);
+    color: var(--accent-ink);
     flex-shrink: 0;
 }
 
@@ -75,7 +75,7 @@
     flex-shrink: 0;
 }
 
-.system-stat-icon.purple { background: rgba(124, 58, 237, 0.12); color: var(--accent); }
+.system-stat-icon.purple { background: rgba(124, 58, 237, 0.12); color: var(--accent-ink); }
 .system-stat-icon.blue   { background: rgba(59, 130, 246, 0.12); color: #60a5fa; }
 .system-stat-icon.green  { background: rgba(16, 185, 129, 0.12); color: var(--success); }
 .system-stat-icon.amber  { background: rgba(245, 158, 11, 0.12); color: #f59e0b; }
@@ -258,7 +258,7 @@
     font-weight: 800;
     letter-spacing: 0.05em;
     text-transform: uppercase;
-    color: var(--accent);
+    color: var(--accent-ink);
     background: none;
     border: none;
     cursor: pointer;

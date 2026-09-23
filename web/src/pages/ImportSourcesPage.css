@@ -57,7 +57,7 @@
     align-items: center;
     justify-content: center;
     flex-shrink: 0;
-    color: var(--accent);
+    color: var(--accent-ink);
 }
 
 /* Status pill */
@@ -237,7 +237,7 @@
 .import-summary-toggle {
     background: none;
     border: none;
-    color: var(--accent);
+    color: var(--accent-ink);
     font-size: 0.8rem;
     cursor: pointer;
     padding: 4px 0;
@@ -366,7 +366,7 @@
 }
 
 .acsm-dropzone:hover, .acsm-dropzone.dragging {
-    border-color: var(--accent);
+    border-color: var(--accent-ink);
     background: var(--accent-glow, rgba(124, 58, 237, 0.05));
 }
 
@@ -536,7 +536,7 @@
 
 .acsm-authorize-fields input:focus {
     outline: none;
-    border-color: var(--accent);
+    border-color: var(--accent-ink);
 }
 
 .acsm-authorize-error {
@@ -604,7 +604,7 @@
     background: var(--bg-secondary, rgba(0, 0, 0, 0.3));
     border-radius: var(--radius-sm);
     padding: 8px 10px;
-    color: var(--accent);
+    color: var(--accent-ink);
     word-break: break-all;
     font-size: 0.78rem;
     text-decoration: none;
@@ -613,7 +613,7 @@
 }
 
 .import-modal-url:hover {
-    border-color: var(--accent);
+    border-color: var(--accent-ink);
 }
 
 .import-modal-textarea {
@@ -632,7 +632,7 @@
 
 .import-modal-textarea:focus {
     outline: none;
-    border-color: var(--accent);
+    border-color: var(--accent-ink);
 }
 
 .import-modal-actions {

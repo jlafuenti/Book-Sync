@@ -28,7 +28,7 @@ function SortableHeader({ label, column, sortCol, sortDir, onSort, style }) {
             title={isActive ? `Sorted ${sortDir} — click to ${sortDir === 'asc' ? 'sort descending' : 'remove sort'}` : 'Click to sort'}
         >
             {label}
-            <span style={{ color: 'var(--accent)', fontSize: '0.75em', marginLeft: '2px' }}>{arrow}</span>
+            <span style={{ color: 'var(--accent-ink)', fontSize: '0.75em', marginLeft: '2px' }}>{arrow}</span>
         </th>
     )
 }
@@ -316,7 +316,7 @@ function PairsPage({ tab }) {
                                                             { ebook_id: pair.ebook.id, audiobook_id: pair.audiobook?.id },
                                                             lastFormatByPairId[pair.id],
                                                         )}
-                                                        style={{ color: 'var(--accent)', textDecoration: 'none' }}
+                                                        style={{ color: 'var(--accent-ink)', textDecoration: 'none' }}
                                                     >
                                                         {pair.ebook.title}
                                                     </Link>
@@ -393,7 +393,7 @@ function PairsPage({ tab }) {
                                         {unpairedEbooks.map(ebook => (
                                             <tr key={ebook.id}>
                                                 <td style={{ fontWeight: 500 }}>
-                                                    <Link to={`/book/ebook/${ebook.id}`} style={{ color: 'var(--accent)', textDecoration: 'none' }}>
+                                                    <Link to={`/book/ebook/${ebook.id}`} style={{ color: 'var(--accent-ink)', textDecoration: 'none' }}>
                                                         {ebook.title}
                                                     </Link>
                                                 </td>
@@ -465,7 +465,7 @@ function PairsPage({ tab }) {
                                         {unpairedAudiobooks.map(ab => (
                                             <tr key={ab.id}>
                                                 <td style={{ fontWeight: 500 }}>
-                                                    <Link to={`/book/audiobook/${ab.id}`} style={{ color: 'var(--accent)', textDecoration: 'none' }}>
+                                                    <Link to={`/book/audiobook/${ab.id}`} style={{ color: 'var(--accent-ink)', textDecoration: 'none' }}>
                                                         {ab.title}
                                                     </Link>
                                                 </td>

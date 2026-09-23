@@ -52,7 +52,7 @@ function BookTable({ items, type, selected, onCheck, canEdit, onEdit }) {
                                     <button
                                         style={{
                                             background: 'none', border: 'none', padding: 0,
-                                            color: 'var(--accent)', cursor: 'pointer',
+                                            color: 'var(--accent-ink)', cursor: 'pointer',
                                             textAlign: 'left', fontWeight: 500, fontSize: 'inherit',
                                         }}
                                         onClick={() => onEdit({ book, type })}

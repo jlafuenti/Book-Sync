@@ -54,8 +54,8 @@
 
 .series-sort-btn:hover,
 .series-sort-btn.open {
-    border-color: var(--accent);
-    color: var(--accent);
+    border-color: var(--accent-ink);
+    color: var(--accent-ink);
     background: var(--accent-light);
 }
 
@@ -95,7 +95,7 @@
 }
 
 .series-sort-option.active {
-    color: var(--accent);
+    color: var(--accent-ink);
     background: var(--accent-light);
 }
 
@@ -152,14 +152,14 @@
 }
 
 .series-card:hover {
-    border-color: var(--accent);
+    border-color: var(--accent-ink);
     transform: translateY(-2px);
     box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
 }
 
 .series-card.selected {
-    border-color: var(--accent);
-    box-shadow: 0 0 0 2px var(--accent);
+    border-color: var(--accent-ink);
+    box-shadow: 0 0 0 2px var(--accent-ink);
 }
 
 .series-card-checkbox {
@@ -412,7 +412,7 @@
 }
 
 .series-card-author-link:hover {
-    color: var(--accent);
+    color: var(--accent-ink);
     text-decoration: underline;
 }
 
@@ -569,7 +569,7 @@
 }
 
 .series-list-author:hover {
-    color: var(--accent);
+    color: var(--accent-ink);
     text-decoration: underline;
 }
 

@@ -266,7 +266,7 @@
 
 .home-book-card-dropdown button:hover {
     background: var(--accent-light);
-    color: var(--accent);
+    color: var(--accent-ink);
 }
 
 /* Card text */
@@ -381,7 +381,7 @@
 }
 
 .home-tx-card:hover {
-    border-color: var(--accent);
+    border-color: var(--accent-ink);
     box-shadow: 0 0 12px var(--accent-glow);
 }
 
@@ -502,7 +502,7 @@
         font-weight: 700;
         text-transform: uppercase;
         letter-spacing: 0.2em;
-        color: var(--accent);
+        color: var(--accent-ink);
         margin-bottom: 4px;
     }
 
@@ -534,7 +534,7 @@
     .home-section-header .home-view-all {
         font-size: 0.75rem;
         font-weight: 700;
-        color: var(--accent);
+        color: var(--accent-ink);
         text-decoration: none;
         letter-spacing: 0.05em;
     }

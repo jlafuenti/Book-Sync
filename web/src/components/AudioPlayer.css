@@ -44,7 +44,7 @@
 }
 
 .audio-player-toolbar .btn-icon.active {
-    color: var(--accent);
+    color: var(--accent-ink);
 }
 
 .audio-player-title {
@@ -221,7 +221,7 @@
 }
 
 .speed-btn:hover {
-    border-color: var(--accent);
+    border-color: var(--accent-ink);
     color: var(--text-primary);
 }
 
@@ -244,13 +244,13 @@
 }
 
 .sleep-timer-btn:hover {
-    border-color: var(--accent);
+    border-color: var(--accent-ink);
     color: var(--text-primary);
 }
 
 .sleep-timer-btn.active {
-    border-color: var(--accent);
-    color: var(--accent);
+    border-color: var(--accent-ink);
+    color: var(--accent-ink);
 }
 
 /* Sleep timer dropdown */
@@ -335,7 +335,7 @@
 }
 
 .audio-chapter-item.active {
-    color: var(--accent);
+    color: var(--accent-ink);
     background: var(--accent-light);
 }
 
