@@ -26,7 +26,11 @@ operator must do by hand rather than read about afterwards.
   its own when no word count could be computed for the ebook, and its message now says so
   explicitly. Trade-off: a pair with a plausible word count is no longer checked by file size at
   all — the word count is trusted outright as the more precise signal, so it can no longer act as
-  a second line of defense behind a coincidentally plausible-looking word count.
+  a second line of defense behind a coincidentally plausible-looking word count. Since that verdict
+  is only ever recorded at pair creation, fixing the check alone could not clear a false positive
+  already stored on a running server, so "Library verify" (Troubleshoot → Verify library) now also
+  re-checks any pair whose stored verdict currently says implausible, and clears it if a freshly
+  computed word count now passes; a pair whose stored verdict is already plausible is left alone.
 
 - The web reader left open in a tab now catches up with listening done elsewhere (#683, the web
   half of #682). Before, it kept showing the page from before, because it only worked out where to
@@ -36,6 +40,11 @@ operator must do by hand rather than read about afterwards.
   seconds or more since the reader last knew, re-opens the book there the same way a fresh open
   would. Costs one position read each time the tab comes back. A page turned in the moment
   between returning to the tab and that read coming back is not saved.
+
+### Upgrade notes
+
+- Run Library verify (Troubleshoot → Verify library) after deploying this change to clear pairs
+  that were flagged by file size despite a normal word count (#693).
 
 ## [0.5.1] - 2026-09-21
 
