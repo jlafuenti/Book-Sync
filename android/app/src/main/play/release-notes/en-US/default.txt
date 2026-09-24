@@ -1,4 +1,1 @@
-After listening, including in Android Auto or offline, the ebook now opens on the page where you stopped, even if the reader was left open.
-Tapping the playback notification opens the player for that book.
-Sync data is kept only for downloaded books and removed with the last download. You can remove it per book or clear it all in Account > Storage.
-Old books no longer jump to the top of Continue Reading after a server update.
+While a book you are streaming is still loading, the player now shows where you left off instead of 0:00, and leaving the player before the book has loaded no longer resets your listening position to the start. Skip and the progress bar wait until the book is ready; Play still works and starts where you left off.
