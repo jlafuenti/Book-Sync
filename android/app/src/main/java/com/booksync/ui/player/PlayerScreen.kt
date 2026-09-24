@@ -20,6 +20,8 @@ import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.material3.TabRowDefaults.tabIndicatorOffset
 import androidx.compose.runtime.*
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -153,6 +155,11 @@ class PlayerViewModel @Inject constructor(
 
     private val _positionMs = MutableStateFlow(0L)
     val positionMs = _positionMs.asStateFlow()
+
+    // True while a restore seek is parked until the player is ready (issue
+    // #706): a streamed book is still buffering and the controller reports 0.
+    private val _loading = MutableStateFlow(false)
+    val loading = _loading.asStateFlow()
 
     private val _durationMs = MutableStateFlow(0L)
     val durationMs = _durationMs.asStateFlow()
@@ -353,7 +360,12 @@ class PlayerViewModel @Inject constructor(
     private var coverArtJob: kotlinx.coroutines.Job? = null
     private var savedPositionFromBookmark: Long = 0L
     private var bookmarkLoaded = false
-    private var pendingSeekPosition: Long = -1L  // Seek deferred until player is ready
+    // Seek deferred until player is ready. Setting it drives [loading].
+    private var pendingSeekPosition: Long = -1L
+        set(value) {
+            field = value
+            _loading.value = value >= 0
+        }
     // No heartbeat or 30-min-tick state here: AudioPlayerService owns the one
     // periodic save and the continuous-playback timer that goes with it (see
     // [ContinuousPlaybackLog]). This screen only saves at boundaries it can
@@ -530,24 +542,7 @@ class PlayerViewModel @Inject constructor(
                         _speed.value = params.speed
                     }
                     override fun onPlaybackStateChanged(playbackState: Int) {
-                        // Perform deferred seek when player is ready
-                        if (playbackState == Player.STATE_READY && pendingSeekPosition >= 0) {
-                            val pos = pendingSeekPosition
-                            pendingSeekPosition = -1L
-                            restoreSeek(mediaController, pos)
-                            _positionMs.value = pos
-                        }
-                        // Track / audiobook reached its natural end — log a
-                        // history entry so the session shows up as "finished".
-                        // claimFormat=true: listening all the way to the end is
-                        // the clearest possible consumption signal there is.
-                        // The completion flag itself is written once, by
-                        // AudioPlayerService's STATE_ENDED listener (which also
-                        // fires for Auto/notification playback) — not here too
-                        // (issue #56).
-                        if (playbackState == Player.STATE_ENDED) {
-                            saveBookmark(appendToLog = true, claimFormat = true)
-                        }
+                        onPlayerStateChanged(mediaController, playbackState)
                     }
                     override fun onMediaMetadataChanged(metadata: MediaMetadata) {
                         // Session-provided album art: decode sampled and off
@@ -759,6 +754,32 @@ class PlayerViewModel @Inject constructor(
     private fun mediaUriFor(localFile: java.io.File?, audiobookId: Int): Uri? =
         MediaSourceSelector.select(localFile, serverUrl, audiobookId)?.toUri()
 
+    /**
+     * The controller listener's playback-state handling, callable from the JVM
+     * tests (issue #706), which have no live media session to fire it.
+     */
+    @androidx.annotation.VisibleForTesting
+    internal fun onPlayerStateChanged(mediaController: MediaController, playbackState: Int) {
+        // Perform deferred seek when player is ready
+        if (playbackState == Player.STATE_READY && pendingSeekPosition >= 0) {
+            val pos = pendingSeekPosition
+            pendingSeekPosition = -1L
+            restoreSeek(mediaController, pos)
+            _positionMs.value = pos
+        }
+        // Track / audiobook reached its natural end — log a
+        // history entry so the session shows up as "finished".
+        // claimFormat=true: listening all the way to the end is
+        // the clearest possible consumption signal there is.
+        // The completion flag itself is written once, by
+        // AudioPlayerService's STATE_ENDED listener (which also
+        // fires for Auto/notification playback) — not here too
+        // (issue #56).
+        if (playbackState == Player.STATE_ENDED) {
+            saveBookmark(appendToLog = true, claimFormat = true)
+        }
+    }
+
     // `internal` + VisibleForTesting (issue #217): the loop is the one place this
     // screen touches the controller on a timer, and "it writes nothing" is a rule
     // worth asserting at runtime rather than only by reading the source.
@@ -770,12 +791,16 @@ class PlayerViewModel @Inject constructor(
                 delay(500)
                 val ctrl = controller ?: continue
                 if (ctrl.isConnected) {
-                    _positionMs.value = ctrl.currentPosition
+                    // While the restore seek is parked (issue #706) the
+                    // controller is still buffering and reports 0; the saved
+                    // position stays the position until the seek lands, or
+                    // the screen shows 0:00 and onCleared saves 0.
+                    if (pendingSeekPosition < 0) _positionMs.value = ctrl.currentPosition
                     _durationMs.value = maxOf(_durationMs.value, ctrl.duration.coerceAtLeast(0))
                     _isPlaying.value = ctrl.isPlaying
 
                     // Update current chapter index based on position
-                    updateCurrentChapterIndex(ctrl.currentPosition)
+                    updateCurrentChapterIndex(_positionMs.value)
 
                     // Try loading chapters once the player is ready
                     if (!chaptersLoaded && ctrl.playbackState == Player.STATE_READY) {
@@ -844,6 +869,10 @@ class PlayerViewModel @Inject constructor(
     }
 
     fun seekTo(positionMs: Long) {
+        // Ignored while the restore seek is parked (issue #706): the parked
+        // seek would override it at STATE_READY anyway, and a skip computed
+        // from the buffering controller's 0 is not a position at all.
+        if (pendingSeekPosition >= 0) return
         controller?.seekTo(positionMs)
         _positionMs.value = positionMs
     }
@@ -888,11 +917,13 @@ class PlayerViewModel @Inject constructor(
 
     fun skipForward() {
         val ctrl = controller ?: return
+        if (pendingSeekPosition >= 0) return  // see seekTo (issue #706)
         seekTo(PlaybackOffsets.skipForwardPosition(ctrl.currentPosition, ctrl.duration))
     }
 
     fun skipBackward() {
         val ctrl = controller ?: return
+        if (pendingSeekPosition >= 0) return  // see seekTo (issue #706)
         seekTo(PlaybackOffsets.skipBackPosition(ctrl.currentPosition))
     }
 
@@ -1183,6 +1214,7 @@ fun PlayerScreen(
     val isStandalone       = viewModel.isStandalone
     val isPlaying          by viewModel.isPlaying.collectAsState()
     val positionMs         by viewModel.positionMs.collectAsState()
+    val loading            by viewModel.loading.collectAsState()
     val durationMs         by viewModel.durationMs.collectAsState()
     val speed              by viewModel.speed.collectAsState()
     val sleepTimerMinutes  by viewModel.sleepTimerMinutes.collectAsState()
@@ -1222,6 +1254,10 @@ fun PlayerScreen(
     // question the transport controls should be asking. The rules are pure and
     // live in PlayerTransportState.kt — Compose is not unit-testable here.
     val transportEnabled = transportEnabled(isDownloaded, isOnline, isCasting)
+    // Issue #706: until a streamed book is ready, the restore seek is parked and
+    // the player is at 0. Play stays available (ExoPlayer holds it and the
+    // parked seek lands first); anything that seeks waits.
+    val seekEnabled = transportEnabled && !loading
     val canCast          = castAvailable(isDownloaded)
     val downloadHint     = downloadHintMessage(isDownloaded, isOnline)
 
@@ -1555,7 +1591,7 @@ fun PlayerScreen(
                 value = progress,
                 onValueChange = { viewModel.seekTo((it * durationMs).toLong()) },
                 modifier = Modifier.fillMaxWidth(),
-                enabled = transportEnabled,
+                enabled = seekEnabled,
                 colors = SliderDefaults.colors(
                     thumbColor = colors.accent,
                     activeTrackColor = colors.accent,
@@ -1578,13 +1614,13 @@ fun PlayerScreen(
                 // Prev chapter
                 IconButton(
                     onClick = { viewModel.skipToPreviousChapter() },
-                    enabled = transportEnabled && chapters.isNotEmpty(),
+                    enabled = seekEnabled && chapters.isNotEmpty(),
                 ) {
                     Icon(Icons.Default.SkipPrevious, "Prev chapter", tint = colors.textPrimary, modifier = Modifier.size(28.dp))
                 }
 
                 // Replay 30 s — matches PlaybackOffsets.SKIP_MS.
-                IconButton(onClick = { viewModel.skipBackward() }, enabled = transportEnabled) {
+                IconButton(onClick = { viewModel.skipBackward() }, enabled = seekEnabled) {
                     Icon(Icons.Default.Replay30, "Rewind 30s", tint = colors.textPrimary, modifier = Modifier.size(32.dp))
                 }
 
@@ -1597,6 +1633,15 @@ fun PlayerScreen(
                         .clickable(enabled = transportEnabled) { viewModel.togglePlayback() },
                     contentAlignment = Alignment.Center,
                 ) {
+                    // Loading ring around the play icon (issue #706); the
+                    // button itself stays pressable.
+                    if (loading) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.fillMaxSize().semantics { contentDescription = "Loading" },
+                            color = Color.White,
+                            strokeWidth = 3.dp,
+                        )
+                    }
                     Icon(
                         imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
                         contentDescription = if (isPlaying) "Pause" else "Play",
@@ -1606,14 +1651,14 @@ fun PlayerScreen(
                 }
 
                 // Forward 30 s — matches PlaybackOffsets.SKIP_MS.
-                IconButton(onClick = { viewModel.skipForward() }, enabled = transportEnabled) {
+                IconButton(onClick = { viewModel.skipForward() }, enabled = seekEnabled) {
                     Icon(Icons.Default.Forward30, "Forward 30s", tint = colors.textPrimary, modifier = Modifier.size(32.dp))
                 }
 
                 // Next chapter
                 IconButton(
                     onClick = { viewModel.skipToNextChapter() },
-                    enabled = transportEnabled && chapters.isNotEmpty(),
+                    enabled = seekEnabled && chapters.isNotEmpty(),
                 ) {
                     Icon(Icons.Default.SkipNext, "Next chapter", tint = colors.textPrimary, modifier = Modifier.size(28.dp))
                 }
