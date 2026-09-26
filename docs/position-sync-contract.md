@@ -199,6 +199,13 @@ Every save produces one of two verdicts — there is no "suppress everything":
   the server is stamped with the server's own time instead — never rejected —
   so one device with a wrong clock cannot park a future timestamp that 409s
   every honest write until the wall clock catches up (issue #197).
+- **The server's own stamp handed back is not a capture.** A `captured_at`
+  within 100 ms of the record's `updated_at`, on a record whose capture
+  predates that update by more than an hour, is answered 409 like a stale
+  write (`echoes_server_stamp`, issue #726). Server-side rewrites before the
+  #679 fix, with migration 0024's backfill, gave untouched positions a false
+  "last read"; migration 0027 moved those back, and a client still holding the
+  false date would otherwise find its copy "newer" and push it back.
 - **Resume paths refresh first.** The reader, the player and Android Auto all
   pull the server position (bounded, then fall back to cache) *before* seeking.
   Refreshing afterwards meant a position set elsewhere always arrived too late.

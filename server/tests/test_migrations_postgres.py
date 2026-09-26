@@ -780,3 +780,67 @@ def test_0026_moves_an_orphaned_position_onto_its_pair():
             "SELECT book_pair_id FROM user_progress WHERE id = :id"
         ), {"id": progress_id}).scalar_one()
         assert stamped == pair_id
+
+
+def test_0027_moves_a_false_capture_date_back():
+    """Issue #726: a server rewrite's bump, copied into `captured_at` by 0024,
+    goes back to the account's creation time; `updated_at` stays, and a row a
+    device wrote is untouched.
+
+    0027 changes no schema, so the ORM (today's models) can seed at 0026.
+    """
+    from datetime import datetime
+
+    from alembic import command
+    from sqlalchemy.orm import Session
+
+    from models.book import AudioBook, BookPair, EBook, PairStatus
+    from models.bookmark import Bookmark, BookmarkSource
+    from models.progress import ProgressType, UserProgress
+    from models.user import User
+
+    signed_up = datetime(2026, 4, 23, 2, 15, 3)
+    stamp = datetime(2026, 9, 21, 13, 7, 23, 615241)
+
+    cfg = _alembic_config()
+    engine = _sync_engine()
+    command.upgrade(cfg, "0026_fold_orphan_positions")
+
+    with Session(engine) as session:
+        user = User(username="reader", email="reader@example.com", hashed_password="x",
+                    created_at=signed_up)
+        session.add(user)
+        session.flush()
+        ids = []
+        for n, device in enumerate((None, "phone")):
+            eb = EBook(title="E", filename="e.epub", file_path=f"/x/e726-{n}.epub")
+            ab = AudioBook(title="A", filename="a.m4b", file_path=f"/x/a726-{n}.m4b")
+            session.add_all([eb, ab])
+            session.flush()
+            pair = BookPair(ebook_id=eb.id, audiobook_id=ab.id, status=PairStatus.SYNCED)
+            session.add(pair)
+            session.flush()
+            bookmark = Bookmark(user_id=user.id, book_pair_id=pair.id,
+                                source=BookmarkSource.EBOOK, device_id=device,
+                                updated_at=stamp, captured_at=stamp)
+            progress = UserProgress(user_id=user.id, media_type=ProgressType.EBOOK,
+                                    ebook_id=eb.id, book_pair_id=pair.id, device_id=device,
+                                    updated_at=stamp, captured_at=stamp)
+            session.add_all([bookmark, progress])
+            session.flush()
+            ids.append((bookmark.id, progress.id))
+        session.commit()
+
+    command.upgrade(cfg, "head")
+
+    (repaired_bm, repaired_up), (device_bm, device_up) = ids
+    with engine.begin() as conn:
+        def row(table, row_id):
+            return tuple(conn.execute(text(
+                f"SELECT captured_at, updated_at FROM {table} WHERE id = :id"
+            ), {"id": row_id}).one())
+
+        assert row("bookmarks", repaired_bm) == (signed_up, stamp)
+        assert row("user_progress", repaired_up) == (signed_up, stamp)
+        assert row("bookmarks", device_bm) == (stamp, stamp)
+        assert row("user_progress", device_up) == (stamp, stamp)
