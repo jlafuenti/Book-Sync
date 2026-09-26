@@ -294,7 +294,7 @@ export default function EnhancedMetadataModal({ book, type, onClose, onSave, ini
                                 {type === 'ebook' && (
                                     <div className="form-group">
                                         <label>Print pages</label>
-                                        <input className="form-input" type="number" name="print_page_count" value={formData.print_page_count} onChange={handleChange} />
+                                        <input className="form-input" type="number" min="0" max="100000" step="1" name="print_page_count" value={formData.print_page_count} onChange={handleChange} />
                                     </div>
                                 )}
 

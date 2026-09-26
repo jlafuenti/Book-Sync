@@ -172,7 +172,7 @@ describe('MatchTab print page count compare row (issue #730)', () => {
         const onApply = vi.fn()
         render(<MatchTab currentData={{ print_page_count: null }} onApply={onApply} bookType="ebook" />)
         const inputs = screen.getAllByRole('textbox')
-        fireEvent.change(inputs[0], { target: { value: 'name of the wind' } })
+        fireEvent.change(inputs[0], { target: { value: 'axis test' } })
         fireEvent.click(screen.getByRole('button', { name: 'Search' }))
         fireEvent.click(await screen.findByRole('button', { name: 'Select' }))
 
@@ -184,22 +184,31 @@ describe('MatchTab print page count compare row (issue #730)', () => {
         expect(onApply.mock.calls[0][0].page_count).toBe(412)
     })
 
-    it('shows the current value from print_page_count, not page_count', async () => {
+    it('shows the current value from print_page_count, not page_count, and does not auto-tick a manual value', async () => {
         searchMetadataMock.mockResolvedValue([fullResult({ page_count: 412 })])
-        render(<MatchTab currentData={{ print_page_count: 200 }} onApply={vi.fn()} bookType="ebook" />)
+        const onApply = vi.fn()
+        render(<MatchTab currentData={{ print_page_count: 200 }} onApply={onApply} bookType="ebook" />)
         const inputs = screen.getAllByRole('textbox')
-        fireEvent.change(inputs[0], { target: { value: 'name of the wind' } })
+        fireEvent.change(inputs[0], { target: { value: 'axis test' } })
         fireEvent.click(screen.getByRole('button', { name: 'Search' }))
         fireEvent.click(await screen.findByRole('button', { name: 'Select' }))
 
         expect(screen.getByText('200')).toBeInTheDocument()
+
+        // A manually-set 200 is present locally, so the smart default must
+        // leave the page_count row unticked — applying without touching any
+        // checkbox must not overwrite it with the remote 412.
+        fireEvent.click(screen.getByRole('button', { name: 'Apply Selected' }))
+
+        await waitFor(() => expect(onApply).toHaveBeenCalled())
+        expect(onApply.mock.calls[0][0].page_count).toBeUndefined()
     })
 
     it('does not show the row for audiobooks', async () => {
         searchMetadataMock.mockResolvedValue([fullResult({ page_count: 412 })])
         render(<MatchTab currentData={{}} onApply={vi.fn()} bookType="audiobook" />)
         const inputs = screen.getAllByRole('textbox')
-        fireEvent.change(inputs[0], { target: { value: 'name of the wind' } })
+        fireEvent.change(inputs[0], { target: { value: 'axis test' } })
         fireEvent.click(screen.getByRole('button', { name: 'Search' }))
         fireEvent.click(await screen.findByRole('button', { name: 'Select' }))
 

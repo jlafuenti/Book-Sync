@@ -118,6 +118,11 @@ describe('EnhancedMetadataModal print page count (issue #730)', () => {
         )
         const input = screen.getByText('Print pages').nextElementSibling
         expect(input).toHaveValue(412)
+        // Native validation blocks an out-of-range value before the server's
+        // own 422 (review finding, fix round: "Print pages" is unbounded).
+        expect(input).toHaveAttribute('min', '0')
+        expect(input).toHaveAttribute('max', '100000')
+        expect(input).toHaveAttribute('step', '1')
 
         fireEvent.click(screen.getByRole('button', { name: /Save Details/ }))
 
