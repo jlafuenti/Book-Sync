@@ -16,6 +16,25 @@ operator must do by hand rather than read about afterwards.
 
 ## [Unreleased]
 
+### Fixed
+
+- Next up no longer lists series you never opened, and books you opened once months ago no longer
+  sit among the ones you are reading in Continue Reading (#726). Before the #679 fix, a server-side
+  rewrite of a position (a realign, an unpair, a batch job) moved a timestamp on positions that had
+  never recorded when they were read, and migration 0024 then took that timestamp as the "last
+  read" date. Those dates are now moved back, and the server refuses a device's attempt to restore
+  one: the phone already holds the false date and would otherwise push it back on its next sync,
+  so that write is answered as stale and the phone takes the corrected date.
+
+### Upgrade notes
+
+- Migration `0027_false_capture_dates` moves those "last read" dates back to the latest time the
+  database can vouch for: the position's last recorded move or sync before the false date,
+  otherwise the account's creation time. It touches only positions with no device, a date on or
+  after 2026-07-20 exactly equal to the row's last update, and no recorded move at that time; it
+  changes no schema and has no downgrade step. On the instance this was measured on, it moved 62
+  positions and 66 progress rows across two readers.
+
 ## [0.7.0] - 2026-09-26
 
 ### Added

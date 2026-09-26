@@ -195,6 +195,32 @@ def is_stale(incoming: Optional[datetime], stored: Optional[datetime]) -> bool:
     return incoming < stored
 
 
+# Issue #726. How close a `captured_at` must be to the record's own `updated_at`
+# to be that stamp handed back: Android sends milliseconds, and a projection
+# row's stamp trails its bookmark's by a few ms.
+ECHO_TOLERANCE = timedelta(milliseconds=100)
+# How far the record's capture must predate its last update for the update to
+# be a server-side rewrite rather than an ordinary write's network delay.
+ECHO_MIN_GAP = timedelta(hours=1)
+
+
+def echoes_server_stamp(incoming: Optional[datetime], bookmark: Bookmark) -> bool:
+    """Whether [incoming] is the record's own `updated_at` coming back.
+
+    Before the #679 fix a server-side rewrite bumped `updated_at` on rows with
+    no `captured_at`, and migration 0024 copied it into `captured_at`, so
+    clients were handed the rewrite's time as "last read". Migration 0027 moved
+    those capture times back and left `updated_at` alone. A client that still
+    holds the false stamp and pushes it is not reporting a capture: the write is
+    treated as stale, and the client adopts the stored state from the 409.
+    """
+    if incoming is None or bookmark.captured_at is None or bookmark.updated_at is None:
+        return False
+    if bookmark.updated_at - bookmark.captured_at <= ECHO_MIN_GAP:
+        return False
+    return abs(incoming - bookmark.updated_at) <= ECHO_TOLERANCE
+
+
 def _anchor_of(bookmark: Bookmark) -> Tuple:
     """The fields whose movement invalidates a precise hint.
 
@@ -528,7 +554,10 @@ async def apply_position(
         )
         captured_at = now
 
-    if bookmark is not None and is_stale(captured_at, bookmark.captured_at):
+    if bookmark is not None and (
+        is_stale(captured_at, bookmark.captured_at)
+        or echoes_server_stamp(captured_at, bookmark)
+    ):
         return bookmark, False
 
     stamped = captured_at or now
