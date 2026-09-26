@@ -67,16 +67,20 @@ def _columns(model):
 # ---------- the two tables stay the same table ----------
 
 def test_ebook_and_audiobook_share_common_columns():
-    """The symmetric difference is exactly `duration_seconds`.
+    """The symmetric difference is exactly `duration_seconds` and
+    `print_page_count` — one column genuinely audiobook-only, one genuinely
+    ebook-only (issue #730: an audiobook has no printed page count).
 
-    This fails the moment someone adds a column to one model and not the other —
-    which is how the metadata features drifted apart in the first place.
+    This fails the moment someone adds a column to one model and not the other
+    for any other reason — which is how the metadata features drifted apart in
+    the first place.
     """
     ebook_names = set(_columns(EBook))
     audio_names = set(_columns(AudioBook))
 
-    assert ebook_names ^ audio_names == {"duration_seconds"}
+    assert ebook_names ^ audio_names == {"duration_seconds", "print_page_count"}
     assert "duration_seconds" in audio_names
+    assert "print_page_count" in ebook_names
 
 
 @pytest.mark.parametrize("name", sorted(set(_columns(EBook)) & set(_columns(AudioBook))))
@@ -190,8 +194,15 @@ def test_metadata_update_schema_matches_the_field_list():
     """The PATCH body is the user-facing half of the same list. It stays
     hand-typed (each field needs its own type), so this is the gate: a field
     added to `MEDIA_METADATA_FIELDS` and not to `MetadataUpdate` would be
-    silently unsettable through the API."""
-    assert set(MetadataUpdate.model_fields) == set(MEDIA_METADATA_FIELDS)
+    silently unsettable through the API.
+
+    `print_page_count` is the one deliberate extra (issue #730): it is settable
+    through this same PATCH body, but it is ebook-only and never written back
+    into a file, so it does not belong in `MEDIA_METADATA_FIELDS` — the list
+    the copy-on-write and rescan/enrich code paths share across both media
+    types.
+    """
+    assert set(MetadataUpdate.model_fields) == set(MEDIA_METADATA_FIELDS) | {"print_page_count"}
 
 
 def test_fields_to_compare_is_derived_not_retyped():
@@ -215,8 +226,13 @@ _EXPECTED_EBOOK_RESPONSE_FIELDS = frozenset({
     "uploaded_at", "description", "publisher", "publish_year", "language",
     "genres", "tags", "isbn", "asin", "narrators", "is_explicit",
     "is_abridged", "cover_path", "acknowledged",
+    # issue #730: ebook-only, added directly to EBookResponse (not the shared
+    # MediaResponseBase), since an audiobook has no printed page count.
+    "print_page_count",
 })
-_EXPECTED_AUDIOBOOK_RESPONSE_FIELDS = _EXPECTED_EBOOK_RESPONSE_FIELDS | {"duration_seconds"}
+_EXPECTED_AUDIOBOOK_RESPONSE_FIELDS = (
+    _EXPECTED_EBOOK_RESPONSE_FIELDS - {"print_page_count"} | {"duration_seconds"}
+)
 
 
 def test_ebook_response_field_set_is_unchanged():
