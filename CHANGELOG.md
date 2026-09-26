@@ -16,6 +16,8 @@ operator must do by hand rather than read about afterwards.
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-09-26
+
 ### Added
 
 - The home page's "Continue Series" row is now **Next up** (#716), with the same rule as the
