@@ -16,6 +16,11 @@ operator must do by hand rather than read about afterwards.
 
 ## [Unreleased]
 
+### Added
+
+- Ebooks have a **Print pages** field (#730), set on the edit form or taken from a Google Books
+  match, for the reader's upcoming print-page numbers.
+
 ### Fixed
 
 - Next up no longer lists series you never opened, and books you opened once months ago no longer
@@ -29,6 +34,8 @@ operator must do by hand rather than read about afterwards.
   itself; without it the phone restored some of the false dates.
 
 ### Upgrade notes
+
+- Migration `0028_ebook_print_page_count` adds a nullable column to `ebooks` and fills nothing.
 
 - Migration `0027_false_capture_dates` moves those "last read" dates back to the latest time the
   database can vouch for: the position's last recorded move or sync before the false date,

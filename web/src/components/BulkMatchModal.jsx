@@ -20,7 +20,14 @@ export default function BulkMatchModal({ books, bookType, onClose, onUpdate }) {
     }
 
     const handleApply = async (payload) => {
-        const { coverUrl, ...textFields } = payload
+        const { coverUrl, page_count, ...textFields } = payload
+        // MatchTab's page_count row (ebooks only) applies under its own
+        // result key, but the ebook's field/PATCH key is print_page_count
+        // (issue #730) — the server's MetadataUpdate ignores unknown fields,
+        // so an un-remapped page_count silently never gets written.
+        if (bookType === 'ebook' && page_count !== undefined) {
+            textFields.print_page_count = page_count
+        }
         setApplying(true)
         try {
             const updateFn = bookType === 'ebook' ? updateEbookMetadata : updateAudiobookMetadata

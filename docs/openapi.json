@@ -1847,6 +1847,17 @@
               }
             ]
           },
+          "print_page_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Print Page Count"
+          },
           "publish_year": {
             "anyOf": [
               {
@@ -2096,6 +2107,17 @@
               }
             ],
             "title": "Narrators"
+          },
+          "print_page_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Print Page Count"
           },
           "publish_year": {
             "anyOf": [
@@ -2796,6 +2818,17 @@
             ],
             "title": "Narrators"
           },
+          "page_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Page Count"
+          },
           "publish_year": {
             "anyOf": [
               {
@@ -3087,6 +3120,19 @@
               }
             ],
             "title": "Narrators"
+          },
+          "print_page_count": {
+            "anyOf": [
+              {
+                "maximum": 100000.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Print Page Count"
           },
           "publish_year": {
             "anyOf": [

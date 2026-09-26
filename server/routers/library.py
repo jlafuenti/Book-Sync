@@ -20,7 +20,7 @@ from typing import List, Optional, Tuple, Any
 import asyncio
 import contextlib
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, status, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -974,6 +974,8 @@ class MetadataUpdate(BaseModel):
     asin: Optional[str] = None
     is_explicit: Optional[bool] = None
     is_abridged: Optional[bool] = None
+    # Issue #730. Ebook only. 0 clears; None (omitted) leaves it alone.
+    print_page_count: Optional[int] = Field(None, ge=0, le=100000)
 
 
 # The on-disk writers live in services/tag_writer.py (issue #255). The
@@ -1050,7 +1052,11 @@ async def update_ebook_metadata(
         value = getattr(meta, field)
         if value is not None:
             setattr(book, field, value)
-    
+
+    # Not in MEDIA_METADATA_FIELDS: ebook only, never written into the file.
+    if meta.print_page_count is not None:
+        book.print_page_count = meta.print_page_count or None
+
     # Write metadata back to the file. Rewrites every entry of the EPUB zip,
     # so it crosses to a thread rather than running on the event loop
     # (issue #523).

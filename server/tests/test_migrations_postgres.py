@@ -19,7 +19,7 @@ SQLite job), because the migrations use Postgres-only DDL (JSONB, native enums).
 import os
 
 import pytest
-from sqlalchemy import create_engine, inspect, text
+from sqlalchemy import create_engine, insert, inspect, text
 
 pytestmark = pytest.mark.skipif(
     os.environ.get("RUN_PG_TESTS") != "1",
@@ -690,11 +690,22 @@ def test_0024_backfills_a_null_captured_at_from_updated_at():
         session.flush()
         pair_ids = []
         for n in range(2):
-            eb = EBook(title="E", filename="e.epub", file_path=f"/x/e{n}.epub")
-            ab = AudioBook(title="A", filename="a.m4b", file_path=f"/x/a{n}.m4b")
-            session.add_all([eb, ab])
-            session.flush()
-            pair = BookPair(ebook_id=eb.id, audiobook_id=ab.id, status=PairStatus.SYNCED)
+            # Core insert, naming only the columns this test needs: the DB is
+            # still at 0023 here, and an `EBook(...)`/`AudioBook(...)` ORM
+            # insert names every mapped column, including ones a later
+            # revision adds (e.g. `print_page_count`, issue #730) that do not
+            # exist yet at this point in the upgrade.
+            eb_id = session.execute(
+                insert(EBook.__table__)
+                .values(title="E", filename="e.epub", file_path=f"/x/e{n}.epub")
+                .returning(EBook.__table__.c.id)
+            ).scalar_one()
+            ab_id = session.execute(
+                insert(AudioBook.__table__)
+                .values(title="A", filename="a.m4b", file_path=f"/x/a{n}.m4b")
+                .returning(AudioBook.__table__.c.id)
+            ).scalar_one()
+            pair = BookPair(ebook_id=eb_id, audiobook_id=ab_id, status=PairStatus.SYNCED)
             session.add(pair)
             session.flush()
             captured = None if n == 0 else stamped
@@ -702,7 +713,7 @@ def test_0024_backfills_a_null_captured_at_from_updated_at():
                 Bookmark(user_id=user.id, book_pair_id=pair.id, source=BookmarkSource.EBOOK,
                          updated_at=old, captured_at=captured),
                 UserProgress(user_id=user.id, media_type=ProgressType.EBOOK,
-                             ebook_id=eb.id, book_pair_id=pair.id,
+                             ebook_id=eb_id, book_pair_id=pair.id,
                              updated_at=old, captured_at=captured),
             ])
             pair_ids.append(pair.id)
@@ -744,25 +755,42 @@ def test_0026_moves_an_orphaned_position_onto_its_pair():
 
     with Session(engine) as session:
         user = User(username="reader", email="reader@example.com", hashed_password="x")
-        eb = EBook(title="E", filename="e.epub", file_path="/x/e720.epub")
-        ab = AudioBook(title="A", filename="a.m4b", file_path="/x/a720.m4b")
-        old_ab = AudioBook(title="A0", filename="a0.m4b", file_path="/x/a720-0.m4b")
-        session.add_all([user, eb, ab, old_ab])
+        session.add(user)
         session.flush()
-        pair = BookPair(ebook_id=eb.id, audiobook_id=ab.id, status=PairStatus.SYNCED)
+        # Core insert, naming only the columns this test needs: the DB is
+        # still at 0025 here, and an `EBook(...)`/`AudioBook(...)` ORM insert
+        # names every mapped column, including ones a later revision adds
+        # (e.g. `print_page_count`, issue #730) that do not exist yet at this
+        # point in the upgrade.
+        eb_id = session.execute(
+            insert(EBook.__table__)
+            .values(title="E", filename="e.epub", file_path="/x/e720.epub")
+            .returning(EBook.__table__.c.id)
+        ).scalar_one()
+        ab_id = session.execute(
+            insert(AudioBook.__table__)
+            .values(title="A", filename="a.m4b", file_path="/x/a720.m4b")
+            .returning(AudioBook.__table__.c.id)
+        ).scalar_one()
+        old_ab_id = session.execute(
+            insert(AudioBook.__table__)
+            .values(title="A0", filename="a0.m4b", file_path="/x/a720-0.m4b")
+            .returning(AudioBook.__table__.c.id)
+        ).scalar_one()
+        pair = BookPair(ebook_id=eb_id, audiobook_id=ab_id, status=PairStatus.SYNCED)
         session.add(pair)
         session.flush()
-        orphan = Bookmark(user_id=user.id, audiobook_id=ab.id,
+        orphan = Bookmark(user_id=user.id, audiobook_id=ab_id,
                           source=BookmarkSource.AUDIOBOOK, audio_position_ms=600_000,
                           updated_at=when, captured_at=when)
-        foreign = Bookmark(user_id=user.id, ebook_id=eb.id, audiobook_id=old_ab.id,
+        foreign = Bookmark(user_id=user.id, ebook_id=eb_id, audiobook_id=old_ab_id,
                            source=BookmarkSource.EBOOK, updated_at=when, captured_at=when)
         progress = UserProgress(user_id=user.id, media_type=ProgressType.AUDIOBOOK,
-                                audiobook_id=ab.id, audio_position_ms=600_000,
+                                audiobook_id=ab_id, audio_position_ms=600_000,
                                 updated_at=when, captured_at=when)
         session.add_all([orphan, foreign, progress])
         session.commit()
-        ids = (orphan.id, foreign.id, progress.id, pair.id, eb.id, old_ab.id)
+        ids = (orphan.id, foreign.id, progress.id, pair.id, eb_id, old_ab_id)
 
     command.upgrade(cfg, "head")
 
@@ -813,18 +841,29 @@ def test_0027_moves_a_false_capture_date_back():
         session.flush()
         ids = []
         for n, device in enumerate((None, "phone")):
-            eb = EBook(title="E", filename="e.epub", file_path=f"/x/e726-{n}.epub")
-            ab = AudioBook(title="A", filename="a.m4b", file_path=f"/x/a726-{n}.m4b")
-            session.add_all([eb, ab])
-            session.flush()
-            pair = BookPair(ebook_id=eb.id, audiobook_id=ab.id, status=PairStatus.SYNCED)
+            # Core insert, naming only the columns this test needs: the DB is
+            # still at 0026 here, and an `EBook(...)`/`AudioBook(...)` ORM
+            # insert names every mapped column, including ones a later
+            # revision adds (e.g. `print_page_count`, issue #730) that do not
+            # exist yet at this point in the upgrade.
+            eb_id = session.execute(
+                insert(EBook.__table__)
+                .values(title="E", filename="e.epub", file_path=f"/x/e726-{n}.epub")
+                .returning(EBook.__table__.c.id)
+            ).scalar_one()
+            ab_id = session.execute(
+                insert(AudioBook.__table__)
+                .values(title="A", filename="a.m4b", file_path=f"/x/a726-{n}.m4b")
+                .returning(AudioBook.__table__.c.id)
+            ).scalar_one()
+            pair = BookPair(ebook_id=eb_id, audiobook_id=ab_id, status=PairStatus.SYNCED)
             session.add(pair)
             session.flush()
             bookmark = Bookmark(user_id=user.id, book_pair_id=pair.id,
                                 source=BookmarkSource.EBOOK, device_id=device,
                                 updated_at=stamp, captured_at=stamp)
             progress = UserProgress(user_id=user.id, media_type=ProgressType.EBOOK,
-                                    ebook_id=eb.id, book_pair_id=pair.id, device_id=device,
+                                    ebook_id=eb_id, book_pair_id=pair.id, device_id=device,
                                     updated_at=stamp, captured_at=stamp)
             session.add_all([bookmark, progress])
             session.flush()

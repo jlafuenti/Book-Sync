@@ -290,7 +290,9 @@ class MediaResponseBase(BaseModel):
 
 
 class EBookResponse(MediaResponseBase):
-    pass
+    # Issue #730: pages in the printed edition, ebook-only (not on
+    # `MediaResponseBase`, since audiobooks have no print edition).
+    print_page_count: Optional[int] = None
 
 
 class AudioBookResponse(MediaResponseBase):
@@ -378,6 +380,7 @@ class MatchResult(BaseModel):
     narrators: Optional[str] = None
     asin: Optional[str] = None
     duration_seconds: Optional[int] = None
+    page_count: Optional[int] = None  # printed pages; Google Books only (issue #730)
 
 # ============================================================
 # Sync Map Schemas

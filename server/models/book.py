@@ -105,6 +105,11 @@ class EBook(MediaColumnsMixin, Base):
 
     format: Mapped[str] = mapped_column(String(10), default="epub")  # epub, pdf, etc.
 
+    # Issue #730: pages in the printed edition, for the reader's "actual pages"
+    # when the EPUB embeds no page list. Set by an editor or from a Google Books
+    # match the editor accepted; NULL when unknown.
+    print_page_count: Mapped[int] = mapped_column(Integer, nullable=True)
+
     # `file_path` is the identity key: the scan, the ACSM/convert path and the
     # importers all look a row up by it with `.scalar_one_or_none()`. Every
     # insert is check-then-insert on one worker, so nothing *produces* a

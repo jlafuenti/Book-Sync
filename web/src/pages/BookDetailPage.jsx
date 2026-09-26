@@ -174,6 +174,7 @@ function BookDetailPage() {
         { label: 'Language', value: book.language },
         { label: 'Narrators', value: book.narrators, show: isAudiobook },
         { label: 'ISBN', value: book.isbn },
+        { label: 'Print pages', value: book.print_page_count, show: !isAudiobook },
         { label: 'ASIN', value: book.asin },
         { label: 'Genres', value: book.genres },
         { label: 'Tags', value: book.tags },
