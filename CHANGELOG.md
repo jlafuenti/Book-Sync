@@ -23,6 +23,11 @@ operator must do by hand rather than read about afterwards.
 
 ### Fixed
 
+- The bulk match wizard now writes an ebook's Print pages when the editor ticks that row (#730).
+  It forwarded the match result's `page_count` key straight to the update API instead of
+  `print_page_count`, so the server's `MetadataUpdate` silently ignored it and the field was never
+  saved; the single-book Match tab already remapped this correctly.
+
 - Next up no longer lists series you never opened, and books you opened once months ago no longer
   sit among the ones you are reading in Continue Reading (#726). Before the #679 fix, a server-side
   rewrite of a position (a realign, an unpair, a batch job) moved a timestamp on positions that had
