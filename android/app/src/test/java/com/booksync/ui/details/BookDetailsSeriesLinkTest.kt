@@ -3,6 +3,7 @@ package com.booksync.ui.details
 import com.booksync.data.local.entity.EBookEntity
 import java.io.File
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -98,10 +99,38 @@ class BookDetailsSeriesLinkTest {
             val args = call.substringBefore("\n            )")
             assertTrue(
                 "Each BookDetailsScreen call site must wire onOpenSeries to " +
-                    "Routes.library(series = …), or the name is tappable on some " +
-                    "details pages and dead on others.",
-                args.contains("onOpenSeries = { name -> navController.navigate(Routes.library(series = name)) }"),
+                    "openSeriesInLibrary, or the name is tappable on some details pages " +
+                    "and dead on others.",
+                args.contains("onOpenSeries = openSeriesInLibrary"),
             )
         }
+    }
+
+    /**
+     * Found on the emulator: the details screen sits in the outer nav graph, but
+     * the Library route lives in the bottom-tab graph nested inside Main. Calling
+     * the outer controller's navigate with the Library route threw "Navigation
+     * destination ... cannot be found" and crashed the app. The tap must pop back
+     * to Main and switch tabs on the bottom controller, the same shape as the
+     * tour's GoToTab and Home's See all.
+     */
+    @Test
+    fun `the series link switches tabs on the bottom controller, never the outer one`() {
+        val nav = source("com/booksync/ui/BookSyncNavigation.kt")
+        val helper = nav.substringAfter("val openSeriesInLibrary", "").substringBefore("\n    }")
+
+        assertTrue("openSeriesInLibrary must exist", helper.isNotEmpty())
+        assertTrue(
+            "It must pop the details screen back to Main first.",
+            helper.contains("navController.popBackStack(Routes.MAIN, inclusive = false)"),
+        )
+        assertTrue(
+            "It must navigate the bottom-tab controller, which owns the Library route.",
+            helper.contains("bottomNavController.navigate(Routes.library(series = name))"),
+        )
+        assertFalse(
+            "The outer controller cannot reach the Library route; navigating it there crashes.",
+            Regex("""(?<![A-Za-z])navController\.navigate\(Routes\.library\(""").containsMatchIn(nav),
+        )
     }
 }
