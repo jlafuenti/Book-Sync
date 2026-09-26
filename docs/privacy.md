@@ -147,7 +147,8 @@ is the last time it changed; the full history is in git.
 
 ## Contact
 
-Questions about the app itself: `support@tandembook.com`
+Questions about the app itself: `support@tandembook.com`, or the community Discord at
+<https://discord.gg/nt9xFKFus> (also linked from Account in the app and on the web).
 
 Questions about your account, your library or your data: **the operator of the server you
 sign in to**. We cannot see it and cannot act on it.

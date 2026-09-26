@@ -1,6 +1,7 @@
 import React, { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { deleteAccount } from '../api'
+import { COMMUNITY_DISCORD_URL } from '../lib/community'
 
 const CONFIRM_WORD = 'DELETE'
 
@@ -58,6 +59,22 @@ export default function AccountPage({ user, onAccountDeleted }) {
                 <div style={{ color: 'var(--text-muted)', fontSize: '0.85rem', marginTop: 4 }}>
                     Role: {user?.role || 'user'}
                 </div>
+            </div>
+
+            {/* Issue #714: the community Discord, also on the Android Account screen. */}
+            <h2 style={{ fontSize: '1rem' }}>Community</h2>
+            <div className="card" style={{ padding: 16, marginBottom: 24 }}>
+                <p style={{ fontSize: '0.9rem', marginTop: 0 }}>
+                    Ask questions, report bugs and suggest features on the Tandem Discord.
+                </p>
+                <a
+                    className="btn btn-secondary"
+                    href={COMMUNITY_DISCORD_URL}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                >
+                    Join the community on Discord
+                </a>
             </div>
 
             <h2 style={{ fontSize: '1rem', color: 'var(--error)' }}>

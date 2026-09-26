@@ -130,3 +130,17 @@ describe('AccountPage — delete account', () => {
             .toHaveAttribute('href', '/account-deletion')
     })
 })
+
+// Issue #714: the project's community Discord, reachable from Account on both
+// the web and the Android app. One constant (lib/community.js) holds the invite.
+describe('AccountPage — community link (issue #714)', () => {
+    it('links to the community Discord in a new tab, without leaking the opener', () => {
+        renderPage()
+
+        const link = screen.getByRole('link', { name: /join the community on discord/i })
+        expect(link.getAttribute('href')).toBe('https://discord.gg/nt9xFKFus')
+        expect(link.getAttribute('target')).toBe('_blank')
+        expect(link.getAttribute('rel')).toContain('noopener')
+        expect(link.getAttribute('rel')).toContain('noreferrer')
+    })
+})
