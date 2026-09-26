@@ -328,4 +328,16 @@ describe('SeriesPage ?series= deep link (issue #717)', () => {
         await screen.findByText('Axis Saga')
         await waitFor(() => expect(screen.queryByText('Other Saga')).toBeNull())
     })
+
+    it('opens in the list view with the series expanded, so its books are one glance away', async () => {
+        getEbooksMock.mockResolvedValue([book(11, 'Axis', 1), book(12, 'Axis', 2), book(13, 'Other Saga', 1)])
+        getAudiobooksMock.mockResolvedValue([])
+        getPairsMock.mockResolvedValue([])
+
+        render(<MemoryRouter initialEntries={['/series?series=Axis']}><SeriesPage /></MemoryRouter>)
+
+        expect(await screen.findByText('Book 11')).toBeInTheDocument()
+        expect(screen.getByText('Book 12')).toBeInTheDocument()
+        expect(screen.queryByText('Book 13')).toBeNull()
+    })
 })

@@ -20,7 +20,8 @@ operator must do by hand rather than read about afterwards.
 
 - The series name on a book's details page opens that series (#717). It was plain text, so
   reaching the next book meant going back to Series or Library and finding it by hand. On the web
-  the name links to the Series page filtered to that series (`/series?series=<name>`), with its row
+  the name links to the Series page filtered to that series (`/series?series=<name>`), opened in the
+  list view with its row
   expanded; the book number stays plain text. A pair's series row takes the ebook's series name, so
   when an audiobook's own page spells it differently the link falls back to a case-insensitive
   match, then to a text search, rather than landing on an empty page. The Android app gets the same
