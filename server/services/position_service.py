@@ -195,17 +195,24 @@ def is_stale(incoming: Optional[datetime], stored: Optional[datetime]) -> bool:
     return incoming < stored
 
 
-# Issue #726. How close a `captured_at` must be to the record's own `updated_at`
-# to be that stamp handed back: Android sends milliseconds, and a projection
-# row's stamp trails its bookmark's by a few ms.
+# Issue #726. How close a `captured_at` must be to a server stamp to be that
+# stamp handed back: Android sends milliseconds.
 ECHO_TOLERANCE = timedelta(milliseconds=100)
-# How far the record's capture must predate its last update for the update to
-# be a server-side rewrite rather than an ordinary write's network delay.
+# How far a row's capture must predate its last update for the update to be a
+# server-side rewrite rather than an ordinary write's network delay.
 ECHO_MIN_GAP = timedelta(hours=1)
 
 
-def echoes_server_stamp(incoming: Optional[datetime], bookmark: Bookmark) -> bool:
-    """Whether [incoming] is the record's own `updated_at` coming back.
+def _rewritten(row) -> bool:
+    """A row captured long before its last update: a server-side rewrite."""
+    return (row.captured_at is not None and row.updated_at is not None
+            and row.updated_at - row.captured_at > ECHO_MIN_GAP)
+
+
+async def echoes_server_stamp(
+    db: AsyncSession, incoming: Optional[datetime], bookmark: Bookmark, ref: ScopeRef
+) -> bool:
+    """Whether [incoming] is a server stamp on this record coming back.
 
     Before the #679 fix a server-side rewrite bumped `updated_at` on rows with
     no `captured_at`, and migration 0024 copied it into `captured_at`, so
@@ -213,12 +220,26 @@ def echoes_server_stamp(incoming: Optional[datetime], bookmark: Bookmark) -> boo
     those capture times back and left `updated_at` alone. A client that still
     holds the false stamp and pushes it is not reporting a capture: the write is
     treated as stale, and the client adopts the stored state from the 409.
+
+    The stamp may be the bookmark's or one of its `user_progress` rows': Android
+    pushes a progress row's own capture time, and a batch could write that row
+    seconds after the bookmark. Only a rewritten record is checked, so an
+    ordinary write costs no extra query.
     """
-    if incoming is None or bookmark.captured_at is None or bookmark.updated_at is None:
+    if incoming is None or not _rewritten(bookmark):
         return False
-    if bookmark.updated_at - bookmark.captured_at <= ECHO_MIN_GAP:
-        return False
-    return abs(incoming - bookmark.updated_at) <= ECHO_TOLERANCE
+    stamps = [bookmark.updated_at]
+    media = []
+    if ref.ebook_id is not None:
+        media.append(UserProgress.ebook_id == ref.ebook_id)
+    if ref.audiobook_id is not None:
+        media.append(UserProgress.audiobook_id == ref.audiobook_id)
+    if media:
+        rows = (await db.execute(select(UserProgress).where(
+            UserProgress.user_id == bookmark.user_id, or_(*media),
+        ))).scalars().all()
+        stamps += [row.updated_at for row in rows if _rewritten(row)]
+    return any(abs(incoming - stamp) <= ECHO_TOLERANCE for stamp in stamps)
 
 
 def _anchor_of(bookmark: Bookmark) -> Tuple:
@@ -556,7 +577,7 @@ async def apply_position(
 
     if bookmark is not None and (
         is_stale(captured_at, bookmark.captured_at)
-        or echoes_server_stamp(captured_at, bookmark)
+        or await echoes_server_stamp(db, captured_at, bookmark, ref)
     ):
         return bookmark, False
 
