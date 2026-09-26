@@ -18,6 +18,7 @@ from datetime import datetime, timedelta
 from sqlalchemy import select
 
 from models.bookmark import Bookmark
+from models.progress import UserProgress
 from tests.factories import make_book_pair
 
 REPAIRED = datetime(2026, 4, 23, 2, 15, 3)          # what 0027 restores
@@ -76,6 +77,31 @@ async def test_a_projection_rows_stamp_a_few_ms_off_is_an_echo_too(
                       captured_at=_iso(SERVER_STAMP + timedelta(milliseconds=5)))
 
     assert resp.status_code == 409, resp.text
+
+
+async def test_a_projection_rows_own_stamp_seconds_later_is_an_echo_too(
+    client, make_user, auth_header, db
+):
+    """A batch could write a projection row well after its bookmark (up to 16 s
+    measured on a live instance). The client pushes the progress row's stamp
+    back, so that row's `updated_at` identifies the echo too."""
+    user = await make_user(username="reader")
+    pair = await _repaired_pair_record(client, db, user, auth_header)
+    proj_stamp = SERVER_STAMP + timedelta(seconds=16, milliseconds=459)
+    rows = (await db.execute(
+        select(UserProgress).where(UserProgress.user_id == user.id))).scalars().all()
+    assert rows
+    for row in rows:
+        row.captured_at = REPAIRED
+        row.updated_at = proj_stamp
+    await db.commit()
+
+    resp = await _put(client, user, auth_header, "audiobook", pair.audiobook_id,
+                      audio_position_ms=240, device_id="phone",
+                      captured_at=proj_stamp.isoformat() + "Z")
+
+    assert resp.status_code == 409, resp.text
+    assert resp.json()["captured_at"].startswith("2026-04-23T02:15:03")
 
 
 async def test_a_real_capture_after_the_server_stamp_is_accepted(

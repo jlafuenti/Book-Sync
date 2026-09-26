@@ -24,7 +24,9 @@ operator must do by hand rather than read about afterwards.
   never recorded when they were read, and migration 0024 then took that timestamp as the "last
   read" date. Those dates are now moved back, and the server refuses a device's attempt to restore
   one: the phone already holds the false date and would otherwise push it back on its next sync,
-  so that write is answered as stale and the phone takes the corrected date.
+  so that write is answered as stale and the phone takes the corrected date. That check also recognises
+  the date as held on a book's progress rows, which a batch could stamp seconds after the position
+  itself; without it the phone restored some of the false dates.
 
 ### Upgrade notes
 
