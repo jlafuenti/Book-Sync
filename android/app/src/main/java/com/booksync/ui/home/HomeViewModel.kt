@@ -245,6 +245,12 @@ class HomeViewModel @Inject constructor(
                 // without a pair. Android Auto's Continue Listening merges
                 // the same two sources and drops the duplicate the same way.
                 val pairedAudiobookIds = pairs.map { it.audiobookId }.toSet()
+                // The ebook side of the same duplicate: `getRecentlyReadEbooksFlow`
+                // is not filtered to unpaired books either, so a downloaded paired
+                // ebook with progress showed beside its own pair card. Only a pair
+                // listed here drops its ebook; one with no audio position yet is
+                // not in `pairs` and is shown through its ebook alone.
+                val pairedEbookIds = pairs.map { it.ebookId }.toSet()
 
                 for (pair in pairs) {
                     val bookmark = repository.getBookmark(pair.id)
@@ -301,6 +307,7 @@ class HomeViewModel @Inject constructor(
                     )
                 }
                 for (eb in ebooks) {
+                    if (eb.id in pairedEbookIds) continue
                     val progress = repository.getProgressOnce("ebook", eb.id)
                     items += HomeItem(
                         id = "ebook_${eb.id}",
