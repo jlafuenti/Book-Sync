@@ -115,6 +115,11 @@
     <string name="account_report_problem_desc">Send diagnostic logs, version and device details.</string>
     <string name="report_problem_chooser">Report a problem</string>
 
+    <!-- ============ Community (issue #714) ============ -->
+    <string name="account_community_discord">Join the community on Discord</string>
+    <string name="account_community_discord_desc">Ask questions, report bugs and suggest features.</string>
+    <string name="account_community_no_app">No app on this device can open the Discord link.</string>
+
     <!-- ============ Home empty state (issue #624) ============ -->
     <!-- Home's empty state used to say "library is empty" whenever its own
          four carousels had nothing in them — including for an account whose

@@ -18,6 +18,10 @@ operator must do by hand rather than read about afterwards.
 
 ### Added
 
+- The Account page links to the project's community Discord (#714), where testers ask questions,
+  report bugs and suggest features; the Android app's Account screen has the same link. It opens in
+  a new tab. The invite is a permanent one, also listed under Contact in the privacy policy.
+
 - The series name on a book's details page opens that series (#717). It was plain text, so
   reaching the next book meant going back and finding the series by hand. The name now opens the
   Library filtered to that series, on the web (`/library?series=<name>`, the same place the Series

@@ -1,6 +1,10 @@
 package com.booksync.ui.account
 
+import android.content.ActivityNotFoundException
+import android.content.Context
 import android.content.Intent
+import android.widget.Toast
+import com.booksync.diagnostics.COMMUNITY_DISCORD_URL
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -439,6 +443,13 @@ fun AccountScreen(
                             }
                         },
                     )
+                    Divider()
+                    // Issue #714: the project's community Discord.
+                    ActionRow(
+                        title = stringResource(R.string.account_community_discord),
+                        description = stringResource(R.string.account_community_discord_desc),
+                        onClick = { openCommunityDiscord(reportContext) },
+                    )
                 }
             }
 
@@ -837,4 +848,21 @@ private fun ConfirmDialog(
         },
         containerColor = colors.bgSecondary,
     )
+}
+
+/**
+ * Opens the project's community Discord (issue #714) in whatever handles the
+ * link: the Discord app when installed, otherwise a browser.
+ *
+ * `startActivity` throws `ActivityNotFoundException` when nothing resolves a web
+ * link (a device with no browser, such as the test emulator), so that is caught
+ * and explained rather than allowed to crash the Account screen.
+ */
+internal fun openCommunityDiscord(context: Context) {
+    val intent = Intent(Intent.ACTION_VIEW, COMMUNITY_DISCORD_URL.toUri())
+    try {
+        context.startActivity(intent)
+    } catch (_: ActivityNotFoundException) {
+        Toast.makeText(context, R.string.account_community_no_app, Toast.LENGTH_LONG).show()
+    }
 }

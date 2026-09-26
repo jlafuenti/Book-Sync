@@ -14,6 +14,13 @@ package com.booksync.diagnostics
 /** The project's public support address (issue #609). Also documented in `docs/privacy.md`. */
 const val SUPPORT_EMAIL = "support@tandembook.com"
 
+/**
+ * The project's community Discord (issue #714): a permanent invite, public on
+ * purpose. Opened from the Account screen; the web holds the same value in
+ * `web/src/lib/community.js`, and `docs/privacy.md` lists it under Contact.
+ */
+const val COMMUNITY_DISCORD_URL = "https://discord.gg/nt9xFKFus"
+
 /** Fixed on purpose (issue #609) — the version/device facts belong in the body, not the subject. */
 const val REPORT_PROBLEM_EMAIL_SUBJECT = "Report a Problem"
 

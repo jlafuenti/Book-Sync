@@ -348,6 +348,11 @@ _NON_DESTINATION_HOSTS = {
     # (ServerUrlPolicy.TANDEM_REPO_URL). Handed to the *browser* via an intent —
     # the app itself never requests it, and it carries no user data.
     "github.com",
+    # The community Discord invite on the Account screen (issue #714,
+    # diagnostics/ReportProblemPolicy.kt COMMUNITY_DISCORD_URL). Same as the repo
+    # link above: handed to the Discord app or browser via an ACTION_VIEW intent,
+    # never requested by the app, and it carries no user data.
+    "discord.gg",
     # RFC 2606 placeholders shown in hint text and error messages.
     "example.com",
     "tandem.example.com",
