@@ -637,6 +637,7 @@ fun BookSyncNavigation() {
                 onReadStandalone = { ebookId -> navController.navigate(Routes.readerStandalone(ebookId)) },
                 onListen = { pairId -> pairOpenGate.requestOpen(pairId, "Open anyway") { navController.navigate(Routes.player(pairId)) } },
                 onListenStandalone = { audiobookId -> navController.navigate(Routes.playerStandalone(audiobookId)) },
+                onOpenSeries = { name -> navController.navigate(Routes.library(series = name)) },
             )
         }
         composable(
@@ -649,6 +650,7 @@ fun BookSyncNavigation() {
                 onReadStandalone = { ebookId -> navController.navigate(Routes.readerStandalone(ebookId)) },
                 onListen = { pairId -> pairOpenGate.requestOpen(pairId, "Open anyway") { navController.navigate(Routes.player(pairId)) } },
                 onListenStandalone = { audiobookId -> navController.navigate(Routes.playerStandalone(audiobookId)) },
+                onOpenSeries = { name -> navController.navigate(Routes.library(series = name)) },
             )
         }
         composable(
@@ -661,6 +663,7 @@ fun BookSyncNavigation() {
                 onReadStandalone = { ebookId -> navController.navigate(Routes.readerStandalone(ebookId)) },
                 onListen = { pairId -> pairOpenGate.requestOpen(pairId, "Open anyway") { navController.navigate(Routes.player(pairId)) } },
                 onListenStandalone = { audiobookId -> navController.navigate(Routes.playerStandalone(audiobookId)) },
+                onOpenSeries = { name -> navController.navigate(Routes.library(series = name)) },
             )
         }
     }

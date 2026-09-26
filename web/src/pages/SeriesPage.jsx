@@ -178,6 +178,25 @@ export default function SeriesPage() {
         return { seriesGroups: Object.values(groups), unseriedItems: unsorted }
     }, [ebooks, audiobooks, pairs])
 
+    // Issue #717: the details page links here as /series?series=<name>. Resolve it
+    // against the loaded groups: an exact name first, then a case-insensitive one
+    // (a pair's group takes the ebook's series, and the audiobook's own page may
+    // spell it differently — #712), and failing both, a plain text search, so the
+    // link never lands on an empty page.
+    const deepLinkSeries = searchParams.get('series')
+    useEffect(() => {
+        if (!deepLinkSeries || seriesGroups.length === 0) return
+        const target = deepLinkSeries.toLowerCase()
+        const group = seriesGroups.find(g => g.name === deepLinkSeries)
+            || seriesGroups.find(g => g.name.toLowerCase() === target)
+        if (group) {
+            setSeriesFilter(group.name)
+            setExpandedRows(new Set([group.name]))
+        } else {
+            setSearchTerm(deepLinkSeries)
+        }
+    }, [deepLinkSeries, seriesGroups])
+
     // Options scoped to current activeFilter (before author/series pill filters)
     const baseSeriesForOptions = useMemo(() =>
         seriesGroups.filter(g => {

@@ -85,11 +85,17 @@ data class BookDetailsUi(
         get() = pair?.ebookTitle ?: ebook?.title ?: audiobook?.title ?: ""
     val author: String?
         get() = pair?.ebookAuthor ?: pair?.audiobookAuthor ?: ebook?.author ?: audiobook?.author
+    /**
+     * The series name alone, for the tap-to-open-series link (issue #717): the
+     * Library filter matches on the name, so the "#39" suffix must not ride along.
+     */
+    val seriesName: String?
+        get() = (extendedMeta?.series ?: ebook?.series ?: audiobook?.series)?.takeIf { it.isNotBlank() }
+
     /** Pretty-printed series label, e.g. "Discworld #39". */
     val seriesLabel: String?
         get() {
-            val name = extendedMeta?.series ?: ebook?.series ?: audiobook?.series
-            if (name.isNullOrBlank()) return null
+            val name = seriesName ?: return null
             val idx = extendedMeta?.seriesIndex ?: ebook?.seriesIndex ?: audiobook?.seriesIndex
             val suffix = idx?.let { v ->
                 // Drop trailing .0 for integer indices

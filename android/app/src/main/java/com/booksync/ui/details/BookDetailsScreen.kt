@@ -2,6 +2,8 @@ package com.booksync.ui.details
 
 import androidx.activity.ComponentActivity
 import androidx.compose.foundation.background
+import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -94,6 +96,8 @@ fun BookDetailsScreen(
     onReadStandalone: (ebookId: Int) -> Unit,
     onListen: (pairId: Int) -> Unit,
     onListenStandalone: (audiobookId: Int) -> Unit,
+    /** Tapping the series name (issue #717): the caller opens the Library filtered to it. */
+    onOpenSeries: (String) -> Unit,
     viewModel: BookDetailsViewModel = hiltViewModel(),
 ) {
     val ui by viewModel.uiState.collectAsStateWithLifecycle()
@@ -191,7 +195,7 @@ fun BookDetailsScreen(
                 .padding(horizontal = 16.dp, vertical = 16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-            Hero(ui = ui, serverUrl = viewModel.serverUrl)
+            Hero(ui = ui, serverUrl = viewModel.serverUrl, onOpenSeries = onOpenSeries)
             StatusChipRow(ui = ui)
             ui.description?.let { DescriptionBlock(description = it) }
             PrimaryActionButton(
@@ -409,7 +413,7 @@ fun BookDetailsScreen(
 // ============================================================================
 
 @Composable
-private fun Hero(ui: BookDetailsUi, serverUrl: String) {
+private fun Hero(ui: BookDetailsUi, serverUrl: String, onOpenSeries: (String) -> Unit) {
     val colors = Tandem.colors
     val context = LocalContext.current
     val coverModel = remember(ui.audiobookIdForCover, ui.coverPath, serverUrl) {
@@ -480,9 +484,22 @@ private fun Hero(ui: BookDetailsUi, serverUrl: String) {
             Spacer(Modifier.height(4.dp))
             Text(author, color = colors.textSecondary, fontSize = 14.sp)
         }
-        ui.seriesLabel?.let { s ->
+        // The series name opens that series in the Library (issue #717); the
+        // " #3" suffix stays plain text. Underlined secondary text rather than
+        // the accent, which is too dim as text on the darkest themes (web #705).
+        ui.seriesName?.let { name ->
             Spacer(Modifier.height(4.dp))
-            Text(s, color = colors.textMuted, fontSize = 12.sp)
+            Row {
+                Text(
+                    name,
+                    color = colors.textSecondary,
+                    fontSize = 12.sp,
+                    textDecoration = TextDecoration.Underline,
+                    modifier = Modifier.clickable(onClickLabel = "Open series") { onOpenSeries(name) },
+                )
+                val suffix = ui.seriesLabel?.removePrefix(name).orEmpty()
+                if (suffix.isNotEmpty()) Text(suffix, color = colors.textMuted, fontSize = 12.sp)
+            }
         }
     }
 }

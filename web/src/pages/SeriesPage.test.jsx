@@ -282,3 +282,50 @@ describe('SeriesPage — series-level progress actions (issue #270)', () => {
         expect(updateEbookMetadataMock).not.toHaveBeenCalled()
     })
 })
+
+// Issue #717: the details page links here as /series?series=<name>. That is an
+// exact series filter, not the substring search: "Axis" must not also show
+// "Axis Prime".
+describe('SeriesPage ?series= deep link (issue #717)', () => {
+    const book = (id, series, index) => ({
+        id, title: `Book ${id}`, author: 'An Author', series,
+        series_index: index, cover_path: null, uploaded_at: '2026-01-01',
+    })
+
+    it('shows only the named series', async () => {
+        getEbooksMock.mockResolvedValue([book(1, 'Axis', 1), book(2, 'Axis Prime', 1), book(3, 'Other Saga', 1)])
+        getAudiobooksMock.mockResolvedValue([])
+        getPairsMock.mockResolvedValue([])
+
+        render(<MemoryRouter initialEntries={['/series?series=Axis']}><SeriesPage /></MemoryRouter>)
+
+        await screen.findByText('Axis')
+        await waitFor(() => expect(screen.queryByText('Axis Prime')).toBeNull())
+        await waitFor(() => expect(screen.queryByText('Other Saga')).toBeNull())
+    })
+
+    it('a name with & and # survives the round trip', async () => {
+        getEbooksMock.mockResolvedValue([book(1, 'Axis & Test #Saga', 1), book(2, 'Other Saga', 1)])
+        getAudiobooksMock.mockResolvedValue([])
+        getPairsMock.mockResolvedValue([])
+        const q = new URLSearchParams({ series: 'Axis & Test #Saga' }).toString()
+
+        render(<MemoryRouter initialEntries={[`/series?${q}`]}><SeriesPage /></MemoryRouter>)
+
+        await screen.findByText('Axis & Test #Saga')
+        await waitFor(() => expect(screen.queryByText('Other Saga')).toBeNull())
+    })
+
+    it('falls back to a case-insensitive match, then to a text search, never an empty page', async () => {
+        // A pair's group takes the ebook's series; an audiobook's own details page
+        // may spell it differently (issue #712), so an exact miss must still land.
+        getEbooksMock.mockResolvedValue([book(1, 'Axis Saga', 1), book(2, 'Other Saga', 1)])
+        getAudiobooksMock.mockResolvedValue([])
+        getPairsMock.mockResolvedValue([])
+
+        render(<MemoryRouter initialEntries={['/series?series=axis%20saga']}><SeriesPage /></MemoryRouter>)
+
+        await screen.findByText('Axis Saga')
+        await waitFor(() => expect(screen.queryByText('Other Saga')).toBeNull())
+    })
+})

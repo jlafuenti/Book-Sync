@@ -16,6 +16,16 @@ operator must do by hand rather than read about afterwards.
 
 ## [Unreleased]
 
+### Added
+
+- The series name on a book's details page opens that series (#717). It was plain text, so
+  reaching the next book meant going back to Series or Library and finding it by hand. On the web
+  the name links to the Series page filtered to that series (`/series?series=<name>`), with its row
+  expanded; the book number stays plain text. A pair's series row takes the ebook's series name, so
+  when an audiobook's own page spells it differently the link falls back to a case-insensitive
+  match, then to a text search, rather than landing on an empty page. The Android app gets the same
+  link to its Library filtered to the series.
+
 ## [0.6.0] - 2026-09-23
 
 ### Added
