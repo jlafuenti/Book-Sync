@@ -1,10 +1,15 @@
 package com.booksync.ui.account
 
 import android.content.ActivityNotFoundException
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.widget.Toast
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.TextButton
 import com.booksync.diagnostics.COMMUNITY_DISCORD_URL
+import com.booksync.diagnostics.REPORT_PROBLEM_DISCORD_FORUM
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -136,6 +141,31 @@ fun AccountScreen(
     var confirmClearDownloads  by remember { mutableStateOf(false) }
     var confirmClearSyncData   by remember { mutableStateOf(false) }
     var showDeleteAccount      by remember { mutableStateOf(false) }
+    // Issue #715: Report a problem asks where the report goes.
+    var showReportChoice       by remember { mutableStateOf(false) }
+    val dialogContext = LocalContext.current
+
+    if (showReportChoice) {
+        AlertDialog(
+            onDismissRequest = { showReportChoice = false },
+            title = { Text(stringResource(R.string.account_report_problem)) },
+            text = { Text(stringResource(R.string.report_problem_choose_body, REPORT_PROBLEM_DISCORD_FORUM)) },
+            // Email stays the default: it is the route that carries the logs.
+            confirmButton = {
+                TextButton(onClick = {
+                    showReportChoice = false
+                    viewModel.shareProblemReport { intent -> dialogContext.startActivity(intent) }
+                }) { Text(stringResource(R.string.report_problem_email)) }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    showReportChoice = false
+                    reportToDiscord(dialogContext, viewModel.problemReportTextForDiscord())
+                }) { Text(stringResource(R.string.report_problem_discord)) }
+            },
+            containerColor = colors.bgSecondary,
+        )
+    }
 
     if (showDeleteAccount) {
         DeleteAccountDialog(
@@ -437,11 +467,8 @@ fun AccountScreen(
                     ActionRow(
                         title = stringResource(R.string.account_report_problem),
                         description = stringResource(R.string.account_report_problem_desc),
-                        onClick = {
-                            viewModel.shareProblemReport { intent ->
-                                reportContext.startActivity(intent)
-                            }
-                        },
+                        // Issue #715: email (with logs) or Discord (text only).
+                        onClick = { showReportChoice = true },
                     )
                     Divider()
                     // Issue #714: the project's community Discord.
@@ -865,4 +892,21 @@ internal fun openCommunityDiscord(context: Context) {
     } catch (_: ActivityNotFoundException) {
         Toast.makeText(context, R.string.account_community_no_app, Toast.LENGTH_LONG).show()
     }
+}
+
+/**
+ * Report a problem on Discord (issue #715): the report goes on the clipboard,
+ * a toast says where to paste it, and the community Discord opens. It does not
+ * share into the Discord app, which is what failed on a tester's first try, and
+ * it works without the Discord app installed (a browser opens the invite).
+ */
+internal fun reportToDiscord(context: Context, reportText: String) {
+    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+    clipboard.setPrimaryClip(ClipData.newPlainText("Tandem problem report", reportText))
+    Toast.makeText(
+        context,
+        context.getString(R.string.report_problem_discord_copied, REPORT_PROBLEM_DISCORD_FORUM),
+        Toast.LENGTH_LONG,
+    ).show()
+    openCommunityDiscord(context)
 }

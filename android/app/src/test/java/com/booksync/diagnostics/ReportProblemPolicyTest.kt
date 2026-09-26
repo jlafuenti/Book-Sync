@@ -110,4 +110,39 @@ class ReportProblemPolicyTest {
         assertEquals(1, onePlan.attachments.size)
         assertEquals(0, nonePlan.attachments.size)
     }
+
+    // ---- Discord (issue #715) -------------------------------------------------
+    // A tester on a phone with no mail app got the share sheet, picked Discord,
+    // and it did not load on the first try. Discord is now a named destination:
+    // the report is copied as text and pasted into the community forum, so it
+    // does not depend on a share into the Discord app working.
+
+    @Test
+    fun `the Discord text carries the subject and everything support needs`() {
+        val report = buildProblemReport(ctx, mapOf(LogChannel.APP to "some log"))
+
+        val text = discordReportText(report)
+
+        assertTrue(text.startsWith(report.subject))
+        assertTrue("version", text.contains("1.4.0"))
+        assertTrue("device", text.contains("Pixel 7"))
+        assertTrue("android", text.contains("Android 14"))
+    }
+
+    @Test
+    fun `the Discord text says the logs did not come along, and how to send them`() {
+        val report = buildProblemReport(ctx, mapOf(LogChannel.APP to "some log"))
+
+        val text = discordReportText(report)
+
+        assertTrue(text.contains("not attached"))
+        assertTrue(text.contains("Email"))
+        assertTrue("sanity: the email body does claim the log", report.body.contains(" log attached."))
+        assertFalse("that claim would be untrue in the Discord text", text.contains(" log attached."))
+    }
+
+    @Test
+    fun `the forum the toast names is the community problem forum`() {
+        assertEquals("i-have-a-problem", REPORT_PROBLEM_DISCORD_FORUM)
+    }
 }

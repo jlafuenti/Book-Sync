@@ -1,6 +1,7 @@
 package com.booksync.ui.account
 
 import com.booksync.diagnostics.buildProblemReport
+import com.booksync.diagnostics.discordReportText
 import com.booksync.diagnostics.LogChannel
 import com.booksync.diagnostics.DiagnosticLogger
 import com.booksync.diagnostics.ReportProblemPlan
@@ -451,6 +452,18 @@ class AccountViewModel @Inject constructor(
         val logFiles = plan.attachments.map { diagnosticLogger.getLogFile(it) }
 
         onIntent(buildReportProblemIntent(appContext, plan, logFiles))
+    }
+
+    /**
+     * The same report as text for Discord (issue #715): pasted into a forum
+     * post, so the logs cannot come along; [discordReportText] says so in it.
+     */
+    fun problemReportTextForDiscord(): String {
+        val logTextByChannel = LogChannel.entries.associateWith { channel ->
+            val file = diagnosticLogger.getLogFile(channel)
+            if (file.exists()) runCatching { file.readText() }.getOrDefault("") else ""
+        }
+        return discordReportText(buildProblemReport(deviceCrashContext(), logTextByChannel))
     }
 }
 
