@@ -11,6 +11,7 @@ matcher that is hand-duplicated between the Python server and the Android client
 | `pair_open_target.json` | — (client-side rule) | `BookSyncRepository.resolvePairOpenTarget` |
 | `next_up_cases.json` | — (client-side rule; the web's `lib/nextUp.test.js` is the other half) | `computeNextUp` (`ui/home/NextUp.kt`) |
 | `audio_to_epub_cases.json` | `services/sync_engine.py::audio_to_epub` | `SyncMatcher.pointForAudioPosition` (via `BookSyncRepository.audioToEpubText`) |
+| `reader_progress_cases.json` | — (client-side rule; the web's `lib/readerProgress.test.js` is the other half) | `ReaderProgress` (`ui/reader/ReaderProgress.kt`) |
 
 Because the two implementations are maintained by hand, they can drift silently (this is
 exactly what issues #46 and #41 call out). Both sides are now enforced: the Python suite
@@ -54,6 +55,13 @@ unbreakable. (Phase 2 — the Android `match_cases.json` half — landed with #4
   (issue #200): a map may legitimately start well into the audio, and a silent origin is
   indistinguishable from a real hit on the opening sentence — which is how a re-map used to
   relocate a bookmark to the start of the book.
+- `reader_progress_cases.json` (issue #730): unlike the other fixtures here, this one is a
+  single object, not an array — one key per rule (`next_mode`, `page_in_section`,
+  `resolve_page_label`, `speed`, `add_sample`, `seconds_left`, `time_text`, ...), each holding
+  its own list of cases. Reader progress indicator rules (mode cycling, page-label
+  resolution across ebook/print pagination, reading-speed sampling, time-left estimate). No
+  Python half: the rule is client-side, shared between `web/src/lib/readerProgress.js` and
+  `ReaderProgress.kt`.
 - `normalize_cases.json`: `[{ "input": str, "expected": str }]`.
 - `match_cases.json`: `[{ "name", "sync_points": [{chapter, sentence_index, preview,
   confidence?}], "epub_text", "chapter_hint", "expected_chapter": int|null,
