@@ -1,0 +1,181 @@
+[
+  {
+    "name": "reading book 3 puts book 4 next",
+    "why": "The web's Continue Series rule already did this; it must survive the rework.",
+    "now": "2026-09-26T00:00:00Z",
+    "books": [
+      {"key": "ebook_1", "series": "Axis Saga", "index": 3},
+      {"key": "ebook_2", "series": "Axis Saga", "index": 4},
+      {"key": "ebook_3", "series": "Axis Saga", "index": 5}
+    ],
+    "activity": [{"key": "ebook_1", "completed": false, "at": "2026-09-20T00:00:00Z"}],
+    "expected": [{"series": "Axis Saga", "key": "ebook_2"}]
+  },
+  {
+    "name": "finishing book 3 with nothing started still puts book 4 next",
+    "why": "Issue #716: the moment 'carry on with the series' matters most, which the old web rule missed.",
+    "now": "2026-09-26T00:00:00Z",
+    "books": [
+      {"key": "ebook_1", "series": "Axis Saga", "index": 3},
+      {"key": "ebook_2", "series": "Axis Saga", "index": 4}
+    ],
+    "activity": [{"key": "ebook_1", "completed": true, "at": "2026-09-25T00:00:00Z"}],
+    "expected": [{"series": "Axis Saga", "key": "ebook_2"}]
+  },
+  {
+    "name": "a series untouched for more than 90 days drops out",
+    "why": "Owner's decision on #716. Measured on a real library, the untimed rule listed 26 series for one reader, mostly books opened long ago; 90 days left 4.",
+    "now": "2026-09-26T00:00:00Z",
+    "books": [
+      {"key": "ebook_1", "series": "Axis Saga", "index": 1},
+      {"key": "ebook_2", "series": "Axis Saga", "index": 2}
+    ],
+    "activity": [{"key": "ebook_1", "completed": true, "at": "2026-06-27T00:00:00Z"}],
+    "expected": []
+  },
+  {
+    "name": "89 days is still inside the window",
+    "why": "Pins the boundary so neither platform drifts by a day.",
+    "now": "2026-09-26T00:00:00Z",
+    "books": [
+      {"key": "ebook_1", "series": "Axis Saga", "index": 1},
+      {"key": "ebook_2", "series": "Axis Saga", "index": 2}
+    ],
+    "activity": [{"key": "ebook_1", "completed": true, "at": "2026-06-29T00:00:00Z"}],
+    "expected": [{"series": "Axis Saga", "key": "ebook_2"}]
+  },
+  {
+    "name": "the most recent activity in the series is what counts",
+    "why": "An old finished book next to a recently started one keeps the series in.",
+    "now": "2026-09-26T00:00:00Z",
+    "books": [
+      {"key": "ebook_1", "series": "Axis Saga", "index": 1},
+      {"key": "ebook_2", "series": "Axis Saga", "index": 2},
+      {"key": "ebook_3", "series": "Axis Saga", "index": 3}
+    ],
+    "activity": [
+      {"key": "ebook_1", "completed": true, "at": "2025-01-01T00:00:00Z"},
+      {"key": "ebook_2", "completed": false, "at": "2026-09-24T00:00:00Z"}
+    ],
+    "expected": [{"series": "Axis Saga", "key": "ebook_3"}]
+  },
+  {
+    "name": "series names match regardless of case and outer spaces",
+    "why": "The library holds series whose names differ only by case; they are one series.",
+    "now": "2026-09-26T00:00:00Z",
+    "books": [
+      {"key": "ebook_1", "series": "Axis Saga", "index": 1},
+      {"key": "audiobook_2", "series": " axis saga ", "index": 2}
+    ],
+    "activity": [{"key": "ebook_1", "completed": true, "at": "2026-09-25T00:00:00Z"}],
+    "expected": [{"series": " axis saga ", "key": "audiobook_2"}]
+  },
+  {
+    "name": "a novella numbered 3.5 comes before book 4",
+    "why": "Fractional numbers are common (about 1 in 9 series books in a real library) and sit in series order, so they are the next book.",
+    "now": "2026-09-26T00:00:00Z",
+    "books": [
+      {"key": "ebook_1", "series": "Axis Saga", "index": 3},
+      {"key": "ebook_2", "series": "Axis Saga", "index": 4},
+      {"key": "ebook_3", "series": "Axis Saga", "index": 3.5}
+    ],
+    "activity": [{"key": "ebook_1", "completed": true, "at": "2026-09-25T00:00:00Z"}],
+    "expected": [{"series": "Axis Saga", "key": "ebook_3"}]
+  },
+  {
+    "name": "a missing number is skipped to the next book the library has",
+    "why": "The library holds books 3 and 5; 5 is the next one you can open.",
+    "now": "2026-09-26T00:00:00Z",
+    "books": [
+      {"key": "ebook_1", "series": "Axis Saga", "index": 3},
+      {"key": "ebook_2", "series": "Axis Saga", "index": 5}
+    ],
+    "activity": [{"key": "ebook_1", "completed": true, "at": "2026-09-25T00:00:00Z"}],
+    "expected": [{"series": "Axis Saga", "key": "ebook_2"}]
+  },
+  {
+    "name": "a finished series shows nothing",
+    "why": "No book above the furthest one touched means nothing to suggest.",
+    "now": "2026-09-26T00:00:00Z",
+    "books": [
+      {"key": "ebook_1", "series": "Axis Saga", "index": 1},
+      {"key": "ebook_2", "series": "Axis Saga", "index": 2}
+    ],
+    "activity": [
+      {"key": "ebook_1", "completed": true, "at": "2026-09-20T00:00:00Z"},
+      {"key": "ebook_2", "completed": true, "at": "2026-09-25T00:00:00Z"}
+    ],
+    "expected": []
+  },
+  {
+    "name": "starting mid-series looks forward from there",
+    "why": "The next book is above the furthest one touched, not the first unread one.",
+    "now": "2026-09-26T00:00:00Z",
+    "books": [
+      {"key": "ebook_1", "series": "Axis Saga", "index": 1},
+      {"key": "ebook_2", "series": "Axis Saga", "index": 5},
+      {"key": "ebook_3", "series": "Axis Saga", "index": 6}
+    ],
+    "activity": [{"key": "ebook_2", "completed": false, "at": "2026-09-25T00:00:00Z"}],
+    "expected": [{"series": "Axis Saga", "key": "ebook_3"}]
+  },
+  {
+    "name": "books without a number cannot be placed",
+    "why": "A touched book with no index gives no position to look forward from; an unnumbered candidate cannot be ordered.",
+    "now": "2026-09-26T00:00:00Z",
+    "books": [
+      {"key": "ebook_1", "series": "Axis Saga", "index": null},
+      {"key": "ebook_2", "series": "Axis Saga", "index": 2},
+      {"key": "ebook_3", "series": "Other Saga", "index": 1},
+      {"key": "ebook_4", "series": "Other Saga", "index": null}
+    ],
+    "activity": [
+      {"key": "ebook_1", "completed": true, "at": "2026-09-25T00:00:00Z"},
+      {"key": "ebook_3", "completed": true, "at": "2026-09-25T00:00:00Z"}
+    ],
+    "expected": []
+  },
+  {
+    "name": "books with no series are ignored",
+    "why": "Only series books have a next book.",
+    "now": "2026-09-26T00:00:00Z",
+    "books": [
+      {"key": "ebook_1", "series": null, "index": 1},
+      {"key": "ebook_2", "series": "", "index": 2}
+    ],
+    "activity": [{"key": "ebook_1", "completed": true, "at": "2026-09-25T00:00:00Z"}],
+    "expected": []
+  },
+  {
+    "name": "two books at the same number prefer the pair, then the ebook",
+    "why": "Deterministic on both platforms when a number is shared (a pair and a stray copy).",
+    "now": "2026-09-26T00:00:00Z",
+    "books": [
+      {"key": "ebook_1", "series": "Axis Saga", "index": 1},
+      {"key": "audiobook_9", "series": "Axis Saga", "index": 2},
+      {"key": "ebook_8", "series": "Axis Saga", "index": 2},
+      {"key": "pair_7", "series": "Axis Saga", "index": 2}
+    ],
+    "activity": [{"key": "ebook_1", "completed": true, "at": "2026-09-25T00:00:00Z"}],
+    "expected": [{"series": "Axis Saga", "key": "pair_7"}]
+  },
+  {
+    "name": "series are listed most recently active first",
+    "why": "Matches Continue Reading's ordering, so the row reads the same way.",
+    "now": "2026-09-26T00:00:00Z",
+    "books": [
+      {"key": "ebook_1", "series": "Axis Saga", "index": 1},
+      {"key": "ebook_2", "series": "Axis Saga", "index": 2},
+      {"key": "ebook_3", "series": "Other Saga", "index": 1},
+      {"key": "ebook_4", "series": "Other Saga", "index": 2}
+    ],
+    "activity": [
+      {"key": "ebook_1", "completed": true, "at": "2026-09-10T00:00:00Z"},
+      {"key": "ebook_3", "completed": false, "at": "2026-09-25T00:00:00Z"}
+    ],
+    "expected": [
+      {"series": "Other Saga", "key": "ebook_4"},
+      {"series": "Axis Saga", "key": "ebook_2"}
+    ]
+  }
+]

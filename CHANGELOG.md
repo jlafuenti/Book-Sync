@@ -18,6 +18,17 @@ operator must do by hand rather than read about afterwards.
 
 ### Added
 
+- The home page's "Continue Series" row is now **Next up** (#716), with the same rule as the
+  Android app's new Next up row: the next book in each series you have started or finished a book
+  of in the last 90 days. The old row only counted a series while one of its books was in progress,
+  so finishing book 3 without starting book 4 dropped the series instead of suggesting book 4; and it
+  had no time limit, so a series opened once long ago stayed forever (measured on a real library, one
+  reader's list went from 26 series to 4 with the 90-day limit). The next book is the lowest-numbered
+  one above the furthest you have read, novellas numbered like 3.5 included; a pair counts once; a
+  book merely opened at 0 % does not count as started. A card now opens that book's details page
+  rather than the Series page. Both clients are held to the same test cases
+  (`server/tests/fixtures/sync_parity/next_up_cases.json`).
+
 - The Account page links to the project's community Discord (#714), where testers ask questions,
   report bugs and suggest features; the Android app's Account screen has the same link. It opens in
   a new tab. The invite is a permanent one, also listed under Contact in the privacy policy.

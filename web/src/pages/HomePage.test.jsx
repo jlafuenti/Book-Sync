@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
-import { MemoryRouter } from 'react-router-dom'
+import { MemoryRouter, Routes, Route } from 'react-router-dom'
 import HomePage, { BookCard } from './HomePage'
 
 const {
@@ -627,5 +627,55 @@ describe('HomePage Continue Reading order (issue #679)', () => {
 
         await waitFor(() => expect(continueTitles()).toHaveLength(2))
         expect(continueTitles()[0]).toContain('Newer Book')
+    })
+})
+
+// Issue #716: "Next up" replaces "Continue Series". It also covers a series whose
+// last book you finished, and a card opens that book rather than the Series page.
+describe('HomePage Next up (issue #716)', () => {
+    const recent = new Date(Date.now() - 2 * 86_400_000).toISOString().replace('Z', '')
+    const book = (id, title, index) => ({
+        id, title, author: 'An Author', series: 'Axis', series_index: index,
+        cover_path: null, uploaded_at: '2026-01-01T00:00:00',
+    })
+
+    function renderWithDetails() {
+        return render(
+            <MemoryRouter initialEntries={['/']}>
+                <Routes>
+                    <Route path="/" element={<HomePage />} />
+                    <Route path="/book/:type/:id" element={<div>details for this book</div>} />
+                </Routes>
+            </MemoryRouter>
+        )
+    }
+
+    it('after finishing a book, shows the next one and opens its details', async () => {
+        getEbooksMock.mockResolvedValue([book(1, 'Axis One', 1), book(2, 'Axis Two', 2)])
+        getAllProgressMock.mockResolvedValue([{
+            id: 9, media_type: 'ebook', ebook_id: 1, is_completed: true,
+            epub_progress_percent: 100, updated_at: recent, captured_at: recent,
+        }])
+        renderWithDetails()
+
+        const heading = await screen.findByText('Next up')
+        expect(screen.queryByText('Continue Series')).toBeNull()
+        const section = heading.closest('section')
+        fireEvent.click(within(section).getByText('Axis Two'))
+
+        expect(await screen.findByText('details for this book')).toBeInTheDocument()
+    })
+
+    it('shows no Next up row when nothing in a series was touched in 90 days', async () => {
+        getEbooksMock.mockResolvedValue([book(1, 'Axis One', 1), book(2, 'Axis Two', 2)])
+        getAllProgressMock.mockResolvedValue([{
+            id: 9, media_type: 'ebook', ebook_id: 1, is_completed: true,
+            epub_progress_percent: 100, updated_at: '2025-01-01T00:00:00', captured_at: '2025-01-01T00:00:00',
+        }])
+        renderWithDetails()
+
+        await waitFor(() => expect(getAllProgressMock).toHaveBeenCalled())
+        await screen.findAllByText(/Recently Added|Axis One/)
+        expect(screen.queryByText('Next up')).toBeNull()
     })
 })

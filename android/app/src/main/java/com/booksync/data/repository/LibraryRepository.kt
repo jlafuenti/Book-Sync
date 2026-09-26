@@ -202,6 +202,17 @@ class LibraryRepository @Inject constructor(
     fun getDownloadedAudiobooksAlphabeticalFlow(): Flow<List<AudioBookEntity>> =
         audioBookDao.getDownloadedAudioBooksAlphabetical()
 
+    /**
+     * Every progress row for this account, finished books included (issue #716:
+     * Next up needs the finished ones, which the recently-played flows drop).
+     */
+    fun getAllProgressFlow(): Flow<List<com.booksync.data.local.entity.UserProgressEntity>> =
+        userProgressDao.getAllProgressFlow(scope)
+
+    /** Every pair bookmark for this account (issue #716: a pair's own, freshest position). */
+    fun getAllBookmarksFlow(): Flow<List<com.booksync.data.local.entity.BookmarkEntity>> =
+        bookmarkDao.getAllBookmarksFlow(scope)
+
     /** Pairs that have audio progress, ordered by most recently listened. Used for Android Auto Continue Listening. */
     fun getRecentlyPlayedPairsFlow(): Flow<List<BookPairEntity>> =
         combine(

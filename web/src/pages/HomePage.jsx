@@ -10,6 +10,7 @@ import { switchToEbook } from '../lib/handoff'
 import { handoffPositionMs } from '../lib/playbackOffsets'
 import { resolvePairOpenTarget } from '../lib/pairOpenTarget'
 import { pairSourceFromProgress } from '../utils/pairRouting'
+import { computeNextUp, libraryToNextUpInput } from '../lib/nextUp'
 import useIsMobile from '../hooks/useIsMobile'
 import useCoverSrc from '../hooks/useCoverSrc'
 import EbookReader from '../components/EbookReader'
@@ -357,70 +358,12 @@ function HomePage() {
                 .sort((a, b) => lastRead(b) - lastRead(a))
             setContinueItems(allContinue)
 
-            // --- Build Continue Series items ---
-            // Find ebook IDs and audiobook IDs the user has actual progress on
-            const inProgressMediaIds = new Set()
-            progress.forEach(p => {
-                if (p.is_completed) return
-                if (p.media_type === 'ebook' && (p.epub_progress_percent > 0 || p.epub_chapter > 0)) {
-                    inProgressMediaIds.add(`ebook_${p.ebook_id}`)
-                } else if (p.media_type === 'audiobook' && p.audio_position_ms > 0) {
-                    inProgressMediaIds.add(`audiobook_${p.audiobook_id}`)
-                }
-            })
-
-            // Group all books by series
-            const seriesMap = {}
-            const addToSeries = (book, mediaType) => {
-                if (!book.series) return
-                const key = book.series
-                if (!seriesMap[key]) seriesMap[key] = { name: book.series, author: book.author, books: [] }
-                seriesMap[key].books.push({ ...book, mediaType })
-            }
-            ebooks.forEach(e => addToSeries(e, 'ebook'))
-            audiobooks.forEach(a => addToSeries(a, 'audiobook'))
-
-            // For each series, check if user has progress on at least one book
-            const seriesInProgress = []
-            Object.values(seriesMap).forEach(series => {
-                const hasProgress = series.books.some(b =>
-                    inProgressMediaIds.has(`${b.mediaType}_${b.id}`)
-                )
-                if (!hasProgress) return
-
-                // Find next unread book: skip anything completed OR currently in progress.
-                // Also skip by series_index so a book that exists as both ebook+audiobook
-                // is fully skipped if either version is completed/in-progress.
-                const completedIds = new Set(
-                    progress.filter(p => p.is_completed).map(p =>
-                        p.media_type === 'ebook' ? `ebook_${p.ebook_id}` : `audiobook_${p.audiobook_id}`
-                    )
-                )
-                // Combine completed + in-progress into one skip set
-                const skipIds = new Set([...completedIds, ...inProgressMediaIds])
-                // Find the highest series_index that is done/active — next book must be above it
-                let maxSkippedIndex = -Infinity
-                series.books.forEach(b => {
-                    if (skipIds.has(`${b.mediaType}_${b.id}`) && b.series_index != null) {
-                        if (b.series_index > maxSkippedIndex) maxSkippedIndex = b.series_index
-                    }
-                })
-                const sorted = [...series.books].sort((a, b) => (a.series_index || 0) - (b.series_index || 0))
-                const nextBook = sorted.find(b =>
-                    !skipIds.has(`${b.mediaType}_${b.id}`) &&
-                    b.series_index != null &&
-                    b.series_index > maxSkippedIndex
-                )
-                if (!nextBook) return // all completed or in progress
-
-                seriesInProgress.push({
-                    seriesName: series.name,
-                    author: series.author,
-                    nextBook,
-                    seriesIndex: nextBook.series_index,
-                })
-            })
-            setSeriesItems(seriesInProgress)
+            // --- Build Next up items (issue #716) ---
+            // One rule with the Android app, held to the shared vectors in
+            // server/tests/fixtures/sync_parity/next_up_cases.json: the next book in
+            // every series touched in the last 90 days, finished books included.
+            const { books: nextUpBooks, activity } = libraryToNextUpInput({ ebooks, audiobooks, pairs, progress })
+            setSeriesItems(computeNextUp(nextUpBooks, activity, new Date()))
 
             // --- Recently Added ---
             const allMedia = [
@@ -752,59 +695,53 @@ function HomePage() {
                 )}
             </section>
 
-            {/* ── Continue Series ── */}
+            {/* ── Next up (issue #716) ── */}
             {seriesItems.length > 0 && (
                 <section className="home-section">
                     <div className="home-section-header">
-                        <h3>Continue Series</h3>
+                        <h3>Next up</h3>
                     </div>
                     <Carousel>
-                        {seriesItems.map(s => {
-                            const book = s.nextBook
+                        {seriesItems.map(({ key, book }) => {
+                            // A card opens the book itself; the series name is the
+                            // secondary line, the book's number the badge.
+                            const open = () => navigate(`/book/${book.detailType}/${book.detailId}`)
 
                             if (isMobile) {
                                 return (
-                                    <div
-                                        key={s.seriesName}
-                                        className="home-series-card-mobile"
-                                        onClick={() => navigate('/series')}
-                                    >
-                                        {book?.cover_path ? (
-                                            <CoverImg path={book?.cover_path} alt={s.seriesName} loading="lazy" />
+                                    <div key={key} className="home-series-card-mobile" onClick={open}>
+                                        {book.coverPath ? (
+                                            <CoverImg path={book.coverPath} alt={book.title} loading="lazy" />
                                         ) : (
                                             <div className="series-card-placeholder">
                                                 <span>📖</span>
                                             </div>
                                         )}
                                         <div className="series-card-gradient" />
-                                        <div className="series-card-title">{s.seriesName}</div>
-                                        {s.seriesIndex != null && (
-                                            <div className="series-card-badge">BK {Math.round(s.seriesIndex)}</div>
+                                        <div className="series-card-title">{book.title}</div>
+                                        {book.index != null && (
+                                            <div className="series-card-badge">BK {book.index}</div>
                                         )}
                                     </div>
                                 )
                             }
 
                             return (
-                                <div
-                                    key={s.seriesName}
-                                    className="home-book-card continue-size"
-                                    onClick={() => navigate('/series')}
-                                >
+                                <div key={key} className="home-book-card continue-size" onClick={open}>
                                     <div className="home-book-card-cover">
-                                        {book?.cover_path ? (
-                                            <CoverImg path={book?.cover_path} alt={book?.title} loading="lazy" />
+                                        {book.coverPath ? (
+                                            <CoverImg path={book.coverPath} alt={book.title} loading="lazy" />
                                         ) : (
                                             <div className="home-book-card-placeholder">
                                                 <span>📖</span>
                                             </div>
                                         )}
-                                        {s.seriesIndex != null && (
-                                            <div className="home-book-card-badge">#{Math.round(s.seriesIndex)}</div>
+                                        {book.index != null && (
+                                            <div className="home-book-card-badge">#{book.index}</div>
                                         )}
                                     </div>
-                                    <div className="home-book-card-title" title={s.seriesName}>{s.seriesName}</div>
-                                    {s.author && <div className="home-book-card-author">{s.author}</div>}
+                                    <div className="home-book-card-title" title={book.title}>{book.title}</div>
+                                    <div className="home-book-card-author">{book.series}</div>
                                 </div>
                             )
                         })}
