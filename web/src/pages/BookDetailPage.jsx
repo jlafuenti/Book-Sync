@@ -247,7 +247,9 @@ function BookDetailPage() {
                     {book.author && <p className="book-detail-author">by {book.author}</p>}
                     {book.series && (
                         <p className="book-detail-series">
-                            {book.series}{book.series_index != null ? ` · Book ${book.series_index}` : ''}
+                            {/* Issue #717: the name opens that series in the Library — where the Series page's own cards go, and what the Android link opens; the book number stays text. */}
+                            <Link to={`/library?${new URLSearchParams({ series: book.series })}`}>{book.series}</Link>
+                            {book.series_index != null ? ` · Book ${book.series_index}` : ''}
                         </p>
                     )}
                     {book.description && (

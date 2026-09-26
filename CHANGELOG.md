@@ -16,6 +16,15 @@ operator must do by hand rather than read about afterwards.
 
 ## [Unreleased]
 
+### Added
+
+- The series name on a book's details page opens that series (#717). It was plain text, so
+  reaching the next book meant going back and finding the series by hand. The name now opens the
+  Library filtered to that series, on the web (`/library?series=<name>`, the same place the Series
+  page's own cards lead) and in the Android app, so the series' books are listed straight away; the
+  book number stays plain text. The filter is an exact name match, so a pair whose ebook and
+  audiobook spell the series differently can be missing from the list opened from one of them.
+
 ## [0.6.0] - 2026-09-23
 
 ### Added

@@ -342,6 +342,17 @@ fun BookSyncNavigation() {
     // every request emitted from those screens (quit from the reader: no pop
     // to Main, no cleanup). This composable is always composed.
     val bottomNavController = rememberNavController()
+    // Issue #717: the series name on the details page. Details sits in this outer
+    // graph, but the Library route lives in the bottom-tab graph inside Main, so the
+    // outer controller cannot reach it (navigating it there threw and crashed the
+    // app): pop back to Main, then switch tabs the way Home's "See all" does.
+    val openSeriesInLibrary: (String) -> Unit = { name ->
+        navController.popBackStack(Routes.MAIN, inclusive = false)
+        bottomNavController.navigate(Routes.library(series = name)) {
+            popUpTo(bottomNavController.graph.startDestinationId) { saveState = true }
+            launchSingleTop = true
+        }
+    }
     val tourRepository = remember {
         EntryPointAccessors.fromApplication(
             context.applicationContext,
@@ -637,6 +648,7 @@ fun BookSyncNavigation() {
                 onReadStandalone = { ebookId -> navController.navigate(Routes.readerStandalone(ebookId)) },
                 onListen = { pairId -> pairOpenGate.requestOpen(pairId, "Open anyway") { navController.navigate(Routes.player(pairId)) } },
                 onListenStandalone = { audiobookId -> navController.navigate(Routes.playerStandalone(audiobookId)) },
+                onOpenSeries = openSeriesInLibrary,
             )
         }
         composable(
@@ -649,6 +661,7 @@ fun BookSyncNavigation() {
                 onReadStandalone = { ebookId -> navController.navigate(Routes.readerStandalone(ebookId)) },
                 onListen = { pairId -> pairOpenGate.requestOpen(pairId, "Open anyway") { navController.navigate(Routes.player(pairId)) } },
                 onListenStandalone = { audiobookId -> navController.navigate(Routes.playerStandalone(audiobookId)) },
+                onOpenSeries = openSeriesInLibrary,
             )
         }
         composable(
@@ -661,6 +674,7 @@ fun BookSyncNavigation() {
                 onReadStandalone = { ebookId -> navController.navigate(Routes.readerStandalone(ebookId)) },
                 onListen = { pairId -> pairOpenGate.requestOpen(pairId, "Open anyway") { navController.navigate(Routes.player(pairId)) } },
                 onListenStandalone = { audiobookId -> navController.navigate(Routes.playerStandalone(audiobookId)) },
+                onOpenSeries = openSeriesInLibrary,
             )
         }
     }
