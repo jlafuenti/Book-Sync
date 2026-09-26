@@ -15,7 +15,7 @@ from sqlalchemy import select
 
 from models.bookmark import Bookmark, BookmarkLog, PositionHint
 from models.progress import UserProgress
-from tests.factories import make_book_pair
+from tests.factories import make_book_pair, seed_standalone_position
 
 LOCATOR = '{"href":"ch1.xhtml","locations":{"progression":0.1}}'
 
@@ -82,20 +82,15 @@ async def test_reset_deletes_the_canonical_bookmark_its_hints_and_progress(
     )
     assert put.status_code == 200, put.text
 
-    # Standalone rows for the pair's own ebook/audiobook ids — a real scope a
-    # client can reach independently of the pair (e.g. an unpaired reader view).
-    standalone_ebook = await _put(
-        client, user, auth_header, "ebook", pair.ebook_id,
-        epub_chapter=3, captured_at="2026-07-30T09:00:00Z",
-    )
-    assert standalone_ebook.status_code == 200, standalone_ebook.text
-
-    standalone_audio = await _put(
-        client, user, auth_header, "audiobook", pair.audiobook_id,
-        source="audiobook", audio_position_ms=5000,
-        captured_at="2026-07-30T09:00:00Z",
-    )
-    assert standalone_audio.status_code == 200, standalone_audio.text
+    # Standalone rows for the pair's own ebook/audiobook ids. Since #720 a
+    # write can no longer create them (it folds onto the pair), but databases
+    # still hold them from before, and a survivor would resurrect the position.
+    await seed_standalone_position(db, user.id, "ebook", pair.ebook_id, {
+        "source": "ebook", "epub_chapter": 3, "captured_at": "2026-07-30T09:00:00Z",
+    })
+    await seed_standalone_position(db, user.id, "audiobook", pair.audiobook_id, {
+        "source": "audiobook", "audio_position_ms": 5000, "captured_at": "2026-07-30T09:00:00Z",
+    })
 
     # Sanity: three bookmark rows and one hint exist before reset.
     assert len(await _all_bookmarks(db, user.id)) == 3

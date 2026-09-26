@@ -12,7 +12,7 @@ different one.
 
 import pytest
 
-from tests.factories import make_book_pair
+from tests.factories import make_book_pair, make_ebook
 
 LOCATOR ='{"href":"ch12.xhtml","locations":{"progression":0.4}}'
 CFI = "epubcfi(/6/26!/4/2/2/1:0)"
@@ -440,17 +440,18 @@ async def test_clearing_the_index_moves_the_anchor_so_hints_stop_being_current(
 async def test_standalone_ebook_gets_a_canonical_record(
     client, make_user, auth_header, db
 ):
-    pair = await make_book_pair(db)
+    # An unpaired ebook: a paired one's own-scope write folds onto its pair (#720).
+    ebook = await make_ebook(db, title="Standalone")
     user = await make_user(username="reader")
 
     put = await _put(
-        client, user, auth_header, "ebook", pair.ebook_id,
+        client, user, auth_header, "ebook", ebook.id,
         epub_chapter=4, epub_progress_percent=11.0,
         captured_at="2026-07-30T10:00:00Z",
     )
     assert put.status_code == 200, put.text
 
-    got = await _get(client, user, auth_header, "ebook", pair.ebook_id)
+    got = await _get(client, user, auth_header, "ebook", ebook.id)
     assert got.status_code == 200
     assert got.json()["epub_chapter"] == 4
 

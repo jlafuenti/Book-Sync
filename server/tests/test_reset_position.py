@@ -14,7 +14,7 @@ from sqlalchemy import select
 
 from models.bookmark import Bookmark, PositionHint
 from models.progress import UserProgress
-from tests.factories import make_book_pair, make_ebook, make_audiobook
+from tests.factories import make_book_pair, make_ebook, make_audiobook, seed_standalone_position
 
 LOCATOR = '{"href":"ch1.xhtml","locations":{"progression":0.1}}'
 
@@ -111,11 +111,12 @@ async def test_deleting_a_pair_position_matches_the_legacy_pair_route(
 
     await _put(client, user, auth_header, "pair", pair.id, epub_chapter=12,
                captured_at="2026-07-30T10:00:00Z")
-    await _put(client, user, auth_header, "ebook", pair.ebook_id, epub_chapter=3,
-               captured_at="2026-07-30T09:00:00Z")
-    await _put(client, user, auth_header, "audiobook", pair.audiobook_id,
-               source="audiobook", audio_position_ms=5000,
-               captured_at="2026-07-30T09:00:00Z")
+    # Pre-#720 standalone rows on the pair's own media (a write can no longer
+    # create them; it folds onto the pair).
+    await seed_standalone_position(db, user.id, "ebook", pair.ebook_id, {
+        "source": "ebook", "epub_chapter": 3, "captured_at": "2026-07-30T09:00:00Z"})
+    await seed_standalone_position(db, user.id, "audiobook", pair.audiobook_id, {
+        "source": "audiobook", "audio_position_ms": 5000, "captured_at": "2026-07-30T09:00:00Z"})
     assert len(await _bookmarks(db, user.id)) == 3
 
     resp = await _delete(client, user, auth_header, "pair", pair.id)

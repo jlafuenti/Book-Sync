@@ -27,7 +27,7 @@ from models.sync_map import SyncMap, SyncPoint
 from models.transcript import AudioTranscript
 from services.epub_parser import EpubSentence
 
-from tests.factories import make_book_pair, make_sync_map
+from tests.factories import make_book_pair, make_sync_map, seed_standalone_position
 
 # The transcript the pair already has. Two chapters' worth of audio.
 TRANSCRIPT = [
@@ -373,8 +373,8 @@ class TestRelinkRepointsStandalonePositions:
         admin = await make_user(username="admin", role="admin")
 
         async with make_client(library.router, sync.router) as c:
-            await _put_position(
-                c, reader, auth_header, "ebook", ebook_id, STANDALONE_POSITION)
+            await seed_standalone_position(
+                db, reader.id, "ebook", ebook_id, STANDALONE_POSITION)
             await _stamp_map_version(db, reader.id, ebook_id)
 
             r = await _convert(c, ebook_id, admin, auth_header)
@@ -423,8 +423,8 @@ class TestRelinkRepointsStandalonePositions:
         admin = await make_user(username="admin", role="admin")
 
         async with make_client(library.router, sync.router) as c:
-            await _put_position(
-                c, reader, auth_header, "ebook", ebook_id, STANDALONE_POSITION)
+            await seed_standalone_position(
+                db, reader.id, "ebook", ebook_id, STANDALONE_POSITION)
             await _stamp_map_version(db, reader.id, ebook_id)
 
             r = await _convert(c, ebook_id, admin, auth_header)
@@ -458,8 +458,8 @@ class TestRelinkRepointsStandalonePositions:
         admin = await make_user(username="admin", role="admin")
 
         async with make_client(library.router, sync.router) as c:
-            await _put_position(
-                c, reader, auth_header, "ebook", ebook_id, STANDALONE_POSITION)
+            await seed_standalone_position(
+                db, reader.id, "ebook", ebook_id, STANDALONE_POSITION)
             await _put_position(
                 c, reader, auth_header, "ebook", epub_id,
                 {"source": "ebook", "epub_chapter": 9,
@@ -499,8 +499,8 @@ class TestRelinkRepointsStandalonePositions:
                 {"source": "ebook", "epub_chapter": 1,
                  "captured_at": "2026-07-01T12:00:00Z"},  # older
             )
-            await _put_position(
-                c, reader, auth_header, "ebook", ebook_id, STANDALONE_POSITION)
+            await seed_standalone_position(
+                db, reader.id, "ebook", ebook_id, STANDALONE_POSITION)
 
             r = await _convert(c, ebook_id, admin, auth_header)
             assert r.json()["epub_ebook_id"] == epub_id
@@ -529,12 +529,12 @@ class TestRelinkRepointsStandalonePositions:
         admin = await make_user(username="admin", role="admin")
 
         async with make_client(library.router, sync.router) as c:
-            await _put_position(
-                c, alice, auth_header, "ebook", ebook_id,
+            await seed_standalone_position(
+                db, alice.id, "ebook", ebook_id,
                 dict(STANDALONE_POSITION, epub_chapter=2,
                      epub_progress_percent=20.0))
-            await _put_position(
-                c, bob, auth_header, "ebook", ebook_id,
+            await seed_standalone_position(
+                db, bob.id, "ebook", ebook_id,
                 dict(STANDALONE_POSITION, epub_chapter=7,
                      epub_progress_percent=70.0))
 
@@ -568,8 +568,8 @@ class TestRelinkRepointsStandalonePositions:
         admin = await make_user(username="admin", role="admin")
 
         async with make_client(library.router, sync.router) as c:
-            await _put_position(
-                c, reader, auth_header, "ebook", ebook_id, STANDALONE_POSITION)
+            await seed_standalone_position(
+                db, reader.id, "ebook", ebook_id, STANDALONE_POSITION)
             r = await _convert(c, ebook_id, admin, auth_header)
             new_ebook_id = r.json()["epub_ebook_id"]
 
@@ -643,8 +643,8 @@ class TestRelinkRepointsStandalonePositions:
         admin = await make_user(username="admin", role="admin")
 
         async with make_client(library.router, sync.router) as c:
-            await _put_position(
-                c, reader, auth_header, "ebook", ebook_id, STANDALONE_POSITION)
+            await seed_standalone_position(
+                db, reader.id, "ebook", ebook_id, STANDALONE_POSITION)
             r = await c.delete(
                 f"/api/library/unsupported/{ebook_id}/force",
                 headers=auth_header(admin),

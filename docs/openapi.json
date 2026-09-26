@@ -10741,7 +10741,7 @@
         ]
       },
       "put": {
-        "description": "Apply a whole position atomically.\n\nA stale write returns 409 with the authoritative state and changes\nnothing — not the record, not the hints, not the derived progress rows.",
+        "description": "Apply a whole position atomically.\n\nA stale write returns 409 with the authoritative state and changes\nnothing — not the record, not the hints, not the derived progress rows.\n\nA write addressed to a paired book's own scope lands on its pair (issue\n#720, `resolve_write_scope`); the response then reports the pair scope.",
         "operationId": "put_position_api_sync_position__scope___ident__put",
         "parameters": [
           {

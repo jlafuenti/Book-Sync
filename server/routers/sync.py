@@ -26,7 +26,7 @@ from schemas import (
 )
 from services.position_service import (
     PositionScopeError, apply_position, latest_progress_row, list_positions,
-    read_position, resolve_scope, to_response_dict,
+    read_position, resolve_scope, resolve_write_scope, to_response_dict,
 )
 from routers.auth import get_current_user
 
@@ -465,9 +465,12 @@ async def put_position(
 
     A stale write returns 409 with the authoritative state and changes
     nothing — not the record, not the hints, not the derived progress rows.
+
+    A write addressed to a paired book's own scope lands on its pair (issue
+    #720, `resolve_write_scope`); the response then reports the pair scope.
     """
     try:
-        ref = await resolve_scope(db, scope, ident)
+        ref = await resolve_write_scope(db, scope, ident)
     except PositionScopeError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
 

@@ -40,6 +40,25 @@ operator must do by hand rather than read about afterwards.
   book number stays plain text. The filter is an exact name match, so a pair whose ebook and
   audiobook spell the series differently can be missing from the list opened from one of them.
 
+### Fixed
+
+- A paired book could open at the beginning after being read or listened to (#720). A position
+  saved to a paired book's own ebook or audiobook, rather than to the pair, was stored as a separate
+  record beside the pair's, and opening the pair only reads the pair's record; when that separate
+  record was the only one, the book opened at the start. Such a write now lands on the pair: it is
+  judged against the pair's newest position like any other, and the response names the pair.
+  Reading or resetting a paired book's own ebook or audiobook is unchanged, so resetting one half
+  still leaves the pair's position alone.
+
+### Upgrade notes
+
+- Migration `0026_fold_orphan_positions` moves each position that was a reader's only record for a
+  paired book onto the pair, keeping its place, device and timestamps; the book then opens where it
+  was left. It changes no schema and has no downgrade step. Positions that sit beside a pair
+  position are left as they are, as is a position that also refers to a book outside the pair (what
+  unpairing leaves behind). On the instance this was measured on, 23 positions across three
+  readers moved.
+
 ## [0.6.0] - 2026-09-23
 
 ### Added
