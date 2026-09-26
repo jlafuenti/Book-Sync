@@ -115,6 +115,12 @@
     <string name="account_report_problem_desc">Send diagnostic logs, version and device details.</string>
     <string name="report_problem_chooser">Report a problem</string>
 
+    <!-- ============ Report a problem: email or Discord (issue #715) ============ -->
+    <string name="report_problem_choose_body">Email sends your diagnostic logs to support. Discord is quicker but text only: the report is copied for you to paste into a new post in the %1$s forum.</string>
+    <string name="report_problem_email">Email</string>
+    <string name="report_problem_discord">Discord</string>
+    <string name="report_problem_discord_copied">Report copied. Paste it into a new post in the %1$s forum.</string>
+
     <!-- ============ Community (issue #714) ============ -->
     <string name="account_community_discord">Join the community on Discord</string>
     <string name="account_community_discord_desc">Ask questions, report bugs and suggest features.</string>

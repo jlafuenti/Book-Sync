@@ -65,3 +65,30 @@ fun planReportProblemIntent(report: ProblemReport, mailAppAvailable: Boolean): R
         body = report.body,
         attachments = report.attachedLogs,
     )
+
+/** The community Discord forum a Discord report is pasted into (issue #715). */
+const val REPORT_PROBLEM_DISCORD_FORUM = "i-have-a-problem"
+
+/**
+ * "Report a problem" as text for Discord (issue #715).
+ *
+ * A tester on a phone with no mail app got the generic share sheet, picked
+ * Discord, and it did not load on the first try. So Discord is now a named
+ * destination that does not rely on sharing into the Discord app: this text is
+ * copied to the clipboard and the community Discord opened, for the reader to
+ * paste into a new post in [REPORT_PROBLEM_DISCORD_FORUM].
+ *
+ * Logs cannot come along that way, so the body's "... log attached." line is
+ * replaced with a note saying so and how to send them (the email route still
+ * attaches them). The subject goes first because it carries the version.
+ */
+fun discordReportText(report: ProblemReport): String {
+    val body = report.body.lines().joinToString("\n") { line ->
+        if (line.endsWith(" attached.") && !line.contains("not attached")) {
+            "Logs are not attached here. If asked, send them with Account → Report a problem → Email."
+        } else {
+            line
+        }
+    }
+    return "${report.subject}\n\n$body"
+}
