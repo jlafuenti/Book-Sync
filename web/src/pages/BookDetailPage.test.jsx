@@ -475,3 +475,27 @@ describe('BookDetailPage series link (issue #717)', () => {
         expect(document.querySelector('.book-detail-series')).toBeNull()
     })
 })
+
+// Issue #730: an ebook's printed page count, shown next to ISBN.
+describe('BookDetailPage print page count (issue #730)', () => {
+    it('shows "Print pages 412" for an ebook with the field set', async () => {
+        getEbookMock.mockResolvedValue({
+            id: 900, title: 'Axis Test', author: 'An Author', cover_path: null,
+            format: 'epub', isbn: '9780000000000', print_page_count: 412,
+        })
+        renderPage('/book/ebook/900')
+
+        expect(await screen.findByText('Print pages')).toBeInTheDocument()
+        expect(screen.getByText('412')).toBeInTheDocument()
+    })
+
+    it('does not show a Print pages row for an audiobook', async () => {
+        getAudiobookMock.mockResolvedValue({
+            id: 1538, title: 'Axis Test', author: 'An Author', cover_path: null,
+        })
+        renderPage()
+
+        await screen.findAllByText('Axis Test')
+        expect(screen.queryByText('Print pages')).toBeNull()
+    })
+})

@@ -8,8 +8,15 @@ const MATCH_FIELDS = [
     'genres', 'tags', 'language', 'narrators', 'isbn', 'asin',
 ];
 
+// 'page_count' (Google Books only, ebooks only) is a separate row: the
+// result's field is page_count, but the book's own field is print_page_count
+// (issue #730, Ruling R1). CURRENT_DATA_ALIASES says which currentData key
+// backs a field's "Current (Local)" column when it isn't the field's own name.
+const CURRENT_DATA_ALIASES = { page_count: 'print_page_count' };
+const currentValueFor = (currentData, field) => currentData[CURRENT_DATA_ALIASES[field] || field];
+
 const emptyFieldSelection = () => Object.fromEntries(
-    [...MATCH_FIELDS, 'description', 'cover_url'].map(f => [f, false])
+    [...MATCH_FIELDS, 'page_count', 'description', 'cover_url'].map(f => [f, false])
 );
 
 const hasValue = (v) => v !== null && v !== undefined && v !== '';
@@ -63,13 +70,16 @@ export default function MatchTab({ currentData, onApply, bookType }) {
         }
     };
 
+    // page_count is ebook-only (issue #730, Ruling R1).
+    const compareFields = bookType === 'audiobook' ? MATCH_FIELDS : [...MATCH_FIELDS, 'page_count'];
+
     const handleSelectResult = (result) => {
         setSelectedResult(result);
 
         // Smart defaults: Check fields that are missing locally but present remotely
         const defaults = {};
-        for (const field of [...MATCH_FIELDS, 'description']) {
-            defaults[field] = !hasValue(currentData[field]) && hasValue(result[field]);
+        for (const field of [...compareFields, 'description']) {
+            defaults[field] = !hasValue(currentValueFor(currentData, field)) && hasValue(result[field]);
         }
         defaults.cover_url = !currentData.cover_path && !!result.cover_url;
         setSelectedFields(defaults);
@@ -83,7 +93,7 @@ export default function MatchTab({ currentData, onApply, bookType }) {
 
     const handleApplySelected = () => {
         const payload = {};
-        for (const field of [...MATCH_FIELDS, 'description']) {
+        for (const field of [...compareFields, 'description']) {
             if (selectedFields[field]) payload[field] = selectedResult[field];
         }
         if (selectedFields.cover_url) payload.coverUrl = selectedResult.cover_url;
@@ -281,7 +291,7 @@ export default function MatchTab({ currentData, onApply, bookType }) {
                         </tr>
 
                         {/* Text fields */}
-                        {MATCH_FIELDS.map(field => (
+                        {compareFields.map(field => (
                             <tr key={field}>
                                 <td style={{ textAlign: 'center' }}>
                                     <input
@@ -292,7 +302,7 @@ export default function MatchTab({ currentData, onApply, bookType }) {
                                     />
                                 </td>
                                 <td style={{ textTransform: 'capitalize' }}><strong>{field.replace('_', ' ')}</strong></td>
-                                <td>{hasValue(currentData[field]) ? currentData[field] : <span className="text-muted">Empty</span>}</td>
+                                <td>{hasValue(currentValueFor(currentData, field)) ? currentValueFor(currentData, field) : <span className="text-muted">Empty</span>}</td>
                                 <td>{hasValue(selectedResult[field]) ? selectedResult[field] : <span className="text-muted">Empty</span>}</td>
                             </tr>
                         ))}

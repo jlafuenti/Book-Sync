@@ -15,6 +15,16 @@ vi.mock('../api', () => ({
     enrichAudiobookFromAbs: enrichAudiobookFromAbsMock,
 }))
 
+// MatchTab's own search/compare behavior (including the page_count row) is
+// covered in MatchTab.test.jsx. Here it's stubbed to a button that fires
+// onApply directly, so this file only exercises how the modal maps that
+// payload into its own form state (Ruling R1).
+vi.mock('./MatchTab', () => ({
+    default: ({ onApply }) => (
+        <button onClick={() => onApply({ page_count: 412 })}>apply-match</button>
+    ),
+}))
+
 const book = { id: 1538, title: 'Antiagon Fire', author: 'L. E. Modesitt Jr' }
 
 beforeEach(() => {
@@ -92,5 +102,65 @@ describe('EnhancedMetadataModal dialog semantics (issue #279)', () => {
 
         fireEvent.keyDown(document, { key: 'Escape' })
         expect(onClose).toHaveBeenCalledTimes(1)
+    })
+})
+
+// Issue #730: an ebook's printed page count, editable on the Details tab and
+// fillable from a Google Books match (Ruling R1).
+describe('EnhancedMetadataModal print page count (issue #730)', () => {
+    it('renders "Print pages" holding the current count and saves it as a number', async () => {
+        const onSave = vi.fn().mockResolvedValue({})
+        render(
+            <EnhancedMetadataModal
+                book={{ ...book, print_page_count: 412 }}
+                type="ebook" onClose={vi.fn()} onSave={onSave}
+            />,
+        )
+        const input = screen.getByText('Print pages').nextElementSibling
+        expect(input).toHaveValue(412)
+
+        fireEvent.click(screen.getByRole('button', { name: /Save Details/ }))
+
+        await waitFor(() => expect(onSave).toHaveBeenCalled())
+        const payload = onSave.mock.calls[0][1]
+        expect(payload.print_page_count).toBe(412)
+        expect(typeof payload.print_page_count).toBe('number')
+    })
+
+    it('has no Print pages input for an audiobook', () => {
+        render(
+            <EnhancedMetadataModal book={book} type="audiobook" onClose={vi.fn()} onSave={vi.fn()} />,
+        )
+        expect(screen.queryByText('Print pages')).toBeNull()
+    })
+
+    it('clearing the input saves print_page_count: 0', async () => {
+        const onSave = vi.fn().mockResolvedValue({})
+        render(
+            <EnhancedMetadataModal
+                book={{ ...book, print_page_count: 412 }}
+                type="ebook" onClose={vi.fn()} onSave={onSave}
+            />,
+        )
+        const input = screen.getByText('Print pages').nextElementSibling
+        fireEvent.change(input, { target: { value: '' } })
+
+        fireEvent.click(screen.getByRole('button', { name: /Save Details/ }))
+
+        await waitFor(() => expect(onSave).toHaveBeenCalled())
+        expect(onSave.mock.calls[0][1].print_page_count).toBe(0)
+    })
+
+    it("maps a Match tab result's page_count into the form's print_page_count", () => {
+        render(
+            <EnhancedMetadataModal
+                book={{ ...book, print_page_count: null }}
+                type="ebook" initialTab="Match" onClose={vi.fn()} onSave={vi.fn()}
+            />,
+        )
+        fireEvent.click(screen.getByRole('button', { name: 'apply-match' }))
+
+        const input = screen.getByText('Print pages').nextElementSibling
+        expect(input).toHaveValue(412)
     })
 })

@@ -163,3 +163,46 @@ describe('MatchTab compare view', () => {
         expect(payload.series_index).toBeUndefined()
     })
 })
+
+// Issue #730: Google Books' page_count compares against the ebook's
+// print_page_count under its own key (Ruling R1).
+describe('MatchTab print page count compare row (issue #730)', () => {
+    it('shows a compare row for a result with page_count and applies it as page_count', async () => {
+        searchMetadataMock.mockResolvedValue([fullResult({ page_count: 412 })])
+        const onApply = vi.fn()
+        render(<MatchTab currentData={{ print_page_count: null }} onApply={onApply} bookType="ebook" />)
+        const inputs = screen.getAllByRole('textbox')
+        fireEvent.change(inputs[0], { target: { value: 'name of the wind' } })
+        fireEvent.click(screen.getByRole('button', { name: 'Search' }))
+        fireEvent.click(await screen.findByRole('button', { name: 'Select' }))
+
+        expect(screen.getByText('412')).toBeInTheDocument()
+
+        fireEvent.click(screen.getByRole('button', { name: 'Apply Selected' }))
+
+        await waitFor(() => expect(onApply).toHaveBeenCalled())
+        expect(onApply.mock.calls[0][0].page_count).toBe(412)
+    })
+
+    it('shows the current value from print_page_count, not page_count', async () => {
+        searchMetadataMock.mockResolvedValue([fullResult({ page_count: 412 })])
+        render(<MatchTab currentData={{ print_page_count: 200 }} onApply={vi.fn()} bookType="ebook" />)
+        const inputs = screen.getAllByRole('textbox')
+        fireEvent.change(inputs[0], { target: { value: 'name of the wind' } })
+        fireEvent.click(screen.getByRole('button', { name: 'Search' }))
+        fireEvent.click(await screen.findByRole('button', { name: 'Select' }))
+
+        expect(screen.getByText('200')).toBeInTheDocument()
+    })
+
+    it('does not show the row for audiobooks', async () => {
+        searchMetadataMock.mockResolvedValue([fullResult({ page_count: 412 })])
+        render(<MatchTab currentData={{}} onApply={vi.fn()} bookType="audiobook" />)
+        const inputs = screen.getAllByRole('textbox')
+        fireEvent.change(inputs[0], { target: { value: 'name of the wind' } })
+        fireEvent.click(screen.getByRole('button', { name: 'Search' }))
+        fireEvent.click(await screen.findByRole('button', { name: 'Select' }))
+
+        expect(screen.queryByText('412')).toBeNull()
+    })
+})

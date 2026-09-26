@@ -54,6 +54,8 @@ export default function EnhancedMetadataModal({ book, type, onClose, onSave, ini
         asin: book.asin || '',
         is_explicit: book.is_explicit || false,
         is_abridged: book.is_abridged || false,
+        // Ebooks only (issue #730): the reader's printed page count.
+        ...(type === 'ebook' ? { print_page_count: book.print_page_count || '' } : {}),
     });
 
     // Cover Tab State
@@ -141,6 +143,10 @@ export default function EnhancedMetadataModal({ book, type, onClose, onSave, ini
                 asin: formData.asin || null,
                 is_explicit: formData.is_explicit,
                 is_abridged: formData.is_abridged,
+                // Ebooks only; 0 clears a previously-set count (issue #730).
+                ...(type === 'ebook' ? {
+                    print_page_count: formData.print_page_count === '' ? 0 : parseInt(formData.print_page_count, 10)
+                } : {}),
             });
 
             // If the user selected a remote cover from Match, tell the server to download it
@@ -155,12 +161,15 @@ export default function EnhancedMetadataModal({ book, type, onClose, onSave, ini
     };
 
     const handleMatchApply = (matchPayload) => {
-        const { coverUrl, ...textFields } = matchPayload;
+        const { coverUrl, page_count, ...textFields } = matchPayload;
 
-        // Update all text fields that were checked/selected
+        // Update all text fields that were checked/selected. page_count is
+        // handled separately: MatchTab compares it against print_page_count
+        // (Ruling R1), so it lands there rather than under its own key.
         setFormData(prev => ({
             ...prev,
-            ...textFields
+            ...textFields,
+            print_page_count: page_count ?? prev.print_page_count,
         }));
 
         // Handle cover if selected
@@ -282,6 +291,12 @@ export default function EnhancedMetadataModal({ book, type, onClose, onSave, ini
                                     <label>ASIN</label>
                                     <input className="form-input" name="asin" value={formData.asin} onChange={handleChange} />
                                 </div>
+                                {type === 'ebook' && (
+                                    <div className="form-group">
+                                        <label>Print pages</label>
+                                        <input className="form-input" type="number" name="print_page_count" value={formData.print_page_count} onChange={handleChange} />
+                                    </div>
+                                )}
 
                                 <div className="form-group">
                                     <label>Language</label>
