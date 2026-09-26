@@ -124,6 +124,32 @@ async def resolve_scope(db: AsyncSession, scope: PositionScope, ident: int) -> S
     return ScopeRef(scope, audiobook_id=ident)
 
 
+async def resolve_write_scope(db: AsyncSession, scope: PositionScope, ident: int) -> ScopeRef:
+    """[resolve_scope] for a **write**: a paired book's own scope folds onto its pair.
+
+    Issue #720. A write addressed to `ebook/{id}` or `audiobook/{id}` for a book
+    that is half of a pair used to create a standalone record beside the pair's.
+    Opening the pair reads the pair record, so the position was invisible there
+    (25 books on one live instance had it as their *only* position), and the
+    Android client never downloads a paired book's standalone rows at all.
+    Folding the write gives it the pair's staleness verdict, record and
+    projection. A pair is strictly one-to-one (issue #691), so there is at most
+    one pair to fold onto.
+
+    Writes only. Reads and resets keep their meaning: contract § Reset says a
+    standalone reset "must not wipe the pair's record".
+    """
+    ref = await resolve_scope(db, scope, ident)
+    if ref.scope == PositionScope.PAIR:
+        return ref
+    column = BookPair.ebook_id if ref.scope == PositionScope.EBOOK else BookPair.audiobook_id
+    pair = (await db.execute(select(BookPair).where(column == ident))).scalar_one_or_none()
+    if pair is None:
+        return ref
+    return ScopeRef(PositionScope.PAIR, book_pair_id=pair.id,
+                    ebook_id=pair.ebook_id, audiobook_id=pair.audiobook_id)
+
+
 def _scope_filter(query, user_id: int, ref: ScopeRef):
     query = query.where(Bookmark.user_id == user_id)
     if ref.scope == PositionScope.PAIR:

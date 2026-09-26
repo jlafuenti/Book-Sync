@@ -36,7 +36,9 @@ from services.position_service import invalidate_parse_coordinates_for_ebook
 from services.sync_engine import save_sync_map
 from utils import utcnow
 
-from tests.factories import ensure_users, make_book_pair, make_ebook, make_sync_map
+from tests.factories import (
+    ensure_users, make_book_pair, make_ebook, make_sync_map, seed_standalone_position,
+)
 
 # A map before and after a re-transcription: the same sentences, with two new
 # ones ahead of them, so every index in chapter 0 shifts by two.
@@ -187,7 +189,7 @@ class TestReplaceInvalidatesParseCoordinates:
 
         async with _client() as c:
             await _put(c, reader, auth_header, "pair", pair_id, PAIR_POSITION)
-            await _put(c, other, auth_header, "ebook", ebook_id, STANDALONE_POSITION)
+            await seed_standalone_position(db, other.id, "ebook", ebook_id, STANDALONE_POSITION)
 
             # A standalone row only ever gets a `sync_map_version` from the
             # server, never from the wire — set it directly so the clearing is

@@ -25,7 +25,7 @@ from models.bookmark import Bookmark
 from models.progress import ProgressType, UserProgress
 from routers import library, sync, troubleshoot
 
-from tests.factories import make_book_pair
+from tests.factories import make_book_pair, seed_standalone_position
 
 POSITION = {
     "source": "ebook",
@@ -163,8 +163,8 @@ class TestUnpairDemotesPositions:
 
         async with make_client(library.router, sync.router) as c:
             await _put_position(c, reader, auth_header, "pair", pair_id, pair_pos)
-            await _put_position(
-                c, reader, auth_header, "ebook", ebook_id, standalone_pos)
+            await seed_standalone_position(
+                db, reader.id, "ebook", ebook_id, standalone_pos)
 
             r = await c.delete(
                 f"/api/library/pairs/{pair_id}", headers=auth_header(editor)
@@ -214,8 +214,8 @@ class TestUnpairDemotesPositions:
                         captured_at="2026-08-01T12:00:00Z")
 
         async with make_client(library.router, sync.router) as c:
-            await _put_position(
-                c, reader, auth_header, "ebook", ebook_id, standalone_pos)
+            await seed_standalone_position(
+                db, reader.id, "ebook", ebook_id, standalone_pos)
             await _put_position(c, reader, auth_header, "pair", pair_id, pair_pos)
 
             r = await c.delete(
@@ -260,11 +260,11 @@ class TestUnpairDemotesPositions:
         }
 
         async with make_client(library.router, sync.router) as c:
-            await _put_position(
-                c, reader, auth_header, "audiobook", audiobook_id, old_audio_pos)
+            await seed_standalone_position(
+                db, reader.id, "audiobook", audiobook_id, old_audio_pos)
             await _put_position(c, reader, auth_header, "pair", pair_id, pair_pos)
-            await _put_position(
-                c, reader, auth_header, "ebook", ebook_id, new_ebook_pos)
+            await seed_standalone_position(
+                db, reader.id, "ebook", ebook_id, new_ebook_pos)
 
             r = await c.delete(
                 f"/api/library/pairs/{pair_id}", headers=auth_header(editor)
@@ -311,10 +311,10 @@ class TestUnpairDemotesPositions:
 
         async with make_client(library.router, sync.router) as c:
             await _put_position(c, reader, auth_header, "pair", pair_id, pair_pos)
-            await _put_position(
-                c, reader, auth_header, "ebook", ebook_id, new_ebook_pos)
-            await _put_position(
-                c, reader, auth_header, "audiobook", audiobook_id, new_audio_pos)
+            await seed_standalone_position(
+                db, reader.id, "ebook", ebook_id, new_ebook_pos)
+            await seed_standalone_position(
+                db, reader.id, "audiobook", audiobook_id, new_audio_pos)
 
             r = await c.delete(
                 f"/api/library/pairs/{pair_id}", headers=auth_header(editor)
@@ -448,10 +448,8 @@ class TestDeletingOneMediumKeepsTheOther:
         editor = await make_user(username="editor", role="editor")
 
         async with make_client(library.router, sync.router) as c:
-            await _put_position(
-                c, reader, auth_header, "ebook", ebook_id,
-                {"source": "ebook", "epub_chapter": 4},
-            )
+            await seed_standalone_position(
+                db, reader.id, "ebook", ebook_id, {"source": "ebook", "epub_chapter": 4})
             r = await c.delete(
                 f"/api/library/ebooks/{ebook_id}", headers=auth_header(editor)
             )

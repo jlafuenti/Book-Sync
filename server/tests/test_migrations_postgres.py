@@ -716,3 +716,67 @@ def test_0024_backfills_a_null_captured_at_from_updated_at():
                 f"SELECT book_pair_id, captured_at FROM {table}"
             )).all())
             assert rows == {pair_ids[0]: old, pair_ids[1]: stamped}, table
+
+
+def test_0026_moves_an_orphaned_position_onto_its_pair():
+    """Before issue #720 a write to a paired book's own scope made a standalone
+    row, and when that was the reader's only position the pair opened at the
+    start. 0026 re-homes it onto the pair and stamps its projection; a row that
+    also names a medium outside the pair stays put.
+
+    0026 changes no schema, so the ORM (today's models) can seed at 0025.
+    """
+    from datetime import datetime
+
+    from alembic import command
+    from sqlalchemy.orm import Session
+
+    from models.book import AudioBook, BookPair, EBook, PairStatus
+    from models.bookmark import Bookmark, BookmarkSource
+    from models.progress import ProgressType, UserProgress
+    from models.user import User
+
+    when = datetime(2026, 9, 1, 12, 0, 0)
+
+    cfg = _alembic_config()
+    engine = _sync_engine()
+    command.upgrade(cfg, "0025_book_pairs_one_to_one")
+
+    with Session(engine) as session:
+        user = User(username="reader", email="reader@example.com", hashed_password="x")
+        eb = EBook(title="E", filename="e.epub", file_path="/x/e720.epub")
+        ab = AudioBook(title="A", filename="a.m4b", file_path="/x/a720.m4b")
+        old_ab = AudioBook(title="A0", filename="a0.m4b", file_path="/x/a720-0.m4b")
+        session.add_all([user, eb, ab, old_ab])
+        session.flush()
+        pair = BookPair(ebook_id=eb.id, audiobook_id=ab.id, status=PairStatus.SYNCED)
+        session.add(pair)
+        session.flush()
+        orphan = Bookmark(user_id=user.id, audiobook_id=ab.id,
+                          source=BookmarkSource.AUDIOBOOK, audio_position_ms=600_000,
+                          updated_at=when, captured_at=when)
+        foreign = Bookmark(user_id=user.id, ebook_id=eb.id, audiobook_id=old_ab.id,
+                           source=BookmarkSource.EBOOK, updated_at=when, captured_at=when)
+        progress = UserProgress(user_id=user.id, media_type=ProgressType.AUDIOBOOK,
+                                audiobook_id=ab.id, audio_position_ms=600_000,
+                                updated_at=when, captured_at=when)
+        session.add_all([orphan, foreign, progress])
+        session.commit()
+        ids = (orphan.id, foreign.id, progress.id, pair.id, eb.id, old_ab.id)
+
+    command.upgrade(cfg, "head")
+
+    orphan_id, foreign_id, progress_id, pair_id, eb_id, old_ab_id = ids
+    with engine.begin() as conn:
+        moved = conn.execute(text(
+            "SELECT book_pair_id, ebook_id, audiobook_id, audio_position_ms, updated_at "
+            "FROM bookmarks WHERE id = :id"), {"id": orphan_id}).one()
+        assert tuple(moved) == (pair_id, None, None, 600_000, when)
+        kept = conn.execute(text(
+            "SELECT book_pair_id, ebook_id, audiobook_id FROM bookmarks WHERE id = :id"
+        ), {"id": foreign_id}).one()
+        assert tuple(kept) == (None, eb_id, old_ab_id)
+        stamped = conn.execute(text(
+            "SELECT book_pair_id FROM user_progress WHERE id = :id"
+        ), {"id": progress_id}).scalar_one()
+        assert stamped == pair_id

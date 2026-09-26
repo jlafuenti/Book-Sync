@@ -20,6 +20,16 @@ It is the **only** write path. The older `PUT /sync/bookmark/{pair}` and
 over the same service, so app builds predating the position endpoint kept
 working; they are gone (issue #102).
 
+A write addressed to a **paired** book's own scope (`ebook/{id}` or
+`audiobook/{id}` for a book that is half of a pair) lands on the pair's record:
+the pair's staleness verdict, the pair's row, and a response whose `scope` is
+`pair` (`resolve_write_scope`, issue #720). Readers of a paired book open the
+pair record, so a standalone row beside it was a position nobody would restore
+from. Only writes fold; a read or a reset at the book's own scope keeps its own
+meaning (see Reset). Migration 0026 moved the standalone rows that were a
+reader's only position for a paired book onto the pair; standalone rows that sit
+beside a pair record were left where they are.
+
 > Why: these were once two independent writes with two independent staleness
 > checks. Either could be accepted while the other was rejected, leaving two
 > records that described different positions for the same book, permanently —

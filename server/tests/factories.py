@@ -302,3 +302,27 @@ async def make_sync_map(db, book_pair_id=1, points=None, *, epub_file_hash=None,
         ))
     await db.commit()
     return sm
+
+
+async def seed_standalone_position(db, user_id, scope, ident, body):
+    """A book-scope position on a book that is half of a pair, as legacy data.
+
+    Since issue #720, `PUT /api/sync/position/{ebook|audiobook}/{id}` folds a
+    write on a paired book onto its pair, so the endpoint can no longer create
+    this state. Live databases still hold it (236 such rows on one instance,
+    written before the fold), and the reset, unpair, replace and convert paths
+    must keep handling it, so their tests seed it here, through the same
+    `apply_position` the endpoint used, with the book's own scope forced.
+    """
+    from schemas import PositionScope, PositionUpdate
+    from services.position_service import ScopeRef, apply_position
+
+    kind = PositionScope(scope)
+    ref = ScopeRef(
+        kind,
+        ebook_id=ident if kind == PositionScope.EBOOK else None,
+        audiobook_id=ident if kind == PositionScope.AUDIOBOOK else None,
+    )
+    record, accepted = await apply_position(db, user_id, ref, PositionUpdate(**body))
+    assert accepted, "seeding a standalone position should never be stale"
+    return record
