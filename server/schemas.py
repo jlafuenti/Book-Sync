@@ -380,6 +380,7 @@ class MatchResult(BaseModel):
     narrators: Optional[str] = None
     asin: Optional[str] = None
     duration_seconds: Optional[int] = None
+    page_count: Optional[int] = None  # printed pages; Google Books only (issue #730)
 
 # ============================================================
 # Sync Map Schemas

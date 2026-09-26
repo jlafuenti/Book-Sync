@@ -2818,6 +2818,17 @@
             ],
             "title": "Narrators"
           },
+          "page_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Page Count"
+          },
           "publish_year": {
             "anyOf": [
               {

@@ -252,6 +252,22 @@ async def test_google_books_maps_categories_to_genres(make_client, make_user, au
     assert res["genres"] == "Fiction / Science Fiction, Classics"
 
 
+async def test_google_books_page_count_rides_along(monkeypatch):
+    """Google Books' printed page count carries onto MatchResult (issue #730).
+    A missing or zero pageCount becomes None rather than 0."""
+    def handler(request):
+        return httpx.Response(200, json={"items": [
+            {"id": "g1", "volumeInfo": {"title": "Axis Test", "pageCount": 412}},
+            {"id": "g2", "volumeInfo": {"title": "Axis Test", "pageCount": 0}},
+        ]})
+
+    _patch_outbound_transport(monkeypatch, handler)
+
+    results = await match.fetch_google_books("Axis Test", None)
+
+    assert [r.page_count for r in results] == [412, None]
+
+
 async def test_open_library_maps_subjects_to_tags(make_client, make_user, auth_header, monkeypatch):
     user = await make_user(username="u", role="user")
 

@@ -131,6 +131,7 @@ async def fetch_google_books(query: str, author: Optional[str]) -> List[MatchRes
             isbn=isbn,
             cover_url=cover_url,
             genres=_join_unique(vol.get("categories", [])),
+            page_count=vol.get("pageCount") or None,
         ))
 
     return results
