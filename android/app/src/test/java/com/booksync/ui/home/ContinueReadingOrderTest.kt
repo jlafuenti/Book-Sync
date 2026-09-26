@@ -5,6 +5,7 @@ import androidx.work.WorkManager
 import com.booksync.data.local.entity.AudioBookEntity
 import com.booksync.data.local.entity.BookPairEntity
 import com.booksync.data.local.entity.BookmarkEntity
+import com.booksync.data.local.entity.EBookEntity
 import com.booksync.data.local.entity.UserProgressEntity
 import com.booksync.data.remote.ServerUrlManager
 import com.booksync.data.repository.BookSyncRepository
@@ -276,5 +277,42 @@ class ContinueReadingOrderTest {
         val order = newViewModel().order()
         assertEquals(20, order.size)
         assertEquals(pairs.map { "pair_${it.id}" }.toSet(), order.toSet())
+    }
+
+    private fun ebook(id: Int) = EBookEntity(
+        id = id, title = "E$id", author = null, filename = "e$id.epub", fileSize = null,
+        format = "epub", series = null, seriesIndex = null,
+        uploadedAt = "2026-01-01T00:00:00", isDownloaded = true,
+    )
+
+    /**
+     * The ebook half of #618. `getRecentlyReadEbooksFlow` is not filtered to
+     * books without a pair either, so a downloaded paired ebook with reading
+     * progress showed as an `ebook_M` card beside its own `pair_N` card. On a
+     * live account that was up to 28 second cards in Continue Reading.
+     */
+    @Test
+    fun `a paired ebook whose pair is listed does not appear twice`() {
+        every { repository.getRecentlyPlayedPairsFlow() } returns flowOf(listOf(pair(1)))
+        every { repository.getRecentlyReadEbooksFlow() } returns flowOf(listOf(ebook(1)))
+        coEvery { repository.getProgressOnce("ebook", any()) } returns null
+        coEvery { repository.getBookmark(1) } returns bookmark(1, updatedAt = sep10Iso)
+
+        assertEquals(listOf("pair_1"), newViewModel().order())
+    }
+
+    /**
+     * The pair list only holds pairs with an audio position. A pair read only
+     * in the ebook, with no audio position yet, is listed through its ebook
+     * alone, so that card must stay.
+     */
+    @Test
+    fun `a paired ebook whose pair is not listed keeps its card`() {
+        every { repository.getRecentlyPlayedPairsFlow() } returns flowOf(listOf(pair(1)))
+        every { repository.getRecentlyReadEbooksFlow() } returns flowOf(listOf(ebook(2)))
+        coEvery { repository.getProgressOnce("ebook", any()) } returns null
+        coEvery { repository.getBookmark(1) } returns bookmark(1, updatedAt = sep10Iso)
+
+        assertEquals(setOf("pair_1", "ebook_2"), newViewModel().order().toSet())
     }
 }
