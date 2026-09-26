@@ -178,33 +178,6 @@ export default function SeriesPage() {
         return { seriesGroups: Object.values(groups), unseriedItems: unsorted }
     }, [ebooks, audiobooks, pairs])
 
-    // Issue #717: the details page links here as /series?series=<name>. Resolve it
-    // against the loaded groups: an exact name first, then a case-insensitive one
-    // (a pair's group takes the ebook's series, and the audiobook's own page may
-    // spell it differently — #712), and failing both, a plain text search, so the
-    // link never lands on an empty page.
-    const deepLinkSeries = searchParams.get('series')
-    // Applied once per link: a later data reload (after a bulk edit, say) must not
-    // re-impose a filter the user has since cleared.
-    const appliedDeepLinkRef = useRef(null)
-    useEffect(() => {
-        if (!deepLinkSeries || seriesGroups.length === 0) return
-        if (appliedDeepLinkRef.current === deepLinkSeries) return
-        appliedDeepLinkRef.current = deepLinkSeries
-        const target = deepLinkSeries.toLowerCase()
-        const group = seriesGroups.find(g => g.name === deepLinkSeries)
-            || seriesGroups.find(g => g.name.toLowerCase() === target)
-        if (group) {
-            setSeriesFilter(group.name)
-            // The list view is the one that shows a series' books; the grid would
-            // need another click to reach the next book, which is the point.
-            setViewMode('list')
-            setExpandedRows(new Set([group.name]))
-        } else {
-            setSearchTerm(deepLinkSeries)
-        }
-    }, [deepLinkSeries, seriesGroups])
-
     // Options scoped to current activeFilter (before author/series pill filters)
     const baseSeriesForOptions = useMemo(() =>
         seriesGroups.filter(g => {

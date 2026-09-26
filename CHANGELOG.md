@@ -19,13 +19,11 @@ operator must do by hand rather than read about afterwards.
 ### Added
 
 - The series name on a book's details page opens that series (#717). It was plain text, so
-  reaching the next book meant going back to Series or Library and finding it by hand. On the web
-  the name links to the Series page filtered to that series (`/series?series=<name>`), opened in the
-  list view with its row
-  expanded; the book number stays plain text. A pair's series row takes the ebook's series name, so
-  when an audiobook's own page spells it differently the link falls back to a case-insensitive
-  match, then to a text search, rather than landing on an empty page. The Android app gets the same
-  link to its Library filtered to the series.
+  reaching the next book meant going back and finding the series by hand. The name now opens the
+  Library filtered to that series, on the web (`/library?series=<name>`, the same place the Series
+  page's own cards lead) and in the Android app, so the series' books are listed straight away; the
+  book number stays plain text. The filter is an exact name match, so a pair whose ebook and
+  audiobook spell the series differently can be missing from the list opened from one of them.
 
 ## [0.6.0] - 2026-09-23
 

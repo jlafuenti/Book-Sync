@@ -443,10 +443,13 @@ describe('BookDetailPage opens the reader from router state (issue #267)', () =>
     })
 })
 
-// Issue #717: the series name on the details page opens that series, so the next
-// book is one tap away. Only the name is the link; "· Book N" stays text.
+// Issue #717: the series name on the details page opens that series in the
+// Library, so the next book is one tap away. Only the name is the link; "· Book N"
+// stays text.
 describe('BookDetailPage series link (issue #717)', () => {
-    it('links the series name to the Series page filtered to exactly that series', async () => {
+    it('links the series name to the Library filtered to exactly that series', async () => {
+        // The same destination the Series page's own cards open, and the one
+        // the Android app's link opens.
         getAudiobookMock.mockResolvedValue({
             id: 1538, title: 'A Test Book', author: 'An Author', cover_path: null,
             series: 'Axis & Test #Saga', series_index: 3,
@@ -455,7 +458,7 @@ describe('BookDetailPage series link (issue #717)', () => {
 
         const link = await screen.findByRole('link', { name: 'Axis & Test #Saga' })
         const href = new URL(link.getAttribute('href'), 'http://localhost')
-        expect(href.pathname).toBe('/series')
+        expect(href.pathname).toBe('/library')
         expect(href.searchParams.get('series')).toBe('Axis & Test #Saga')
         expect(link.textContent).not.toMatch(/Book 3/)
         expect(screen.getByText(/· Book 3/)).toBeInTheDocument()
