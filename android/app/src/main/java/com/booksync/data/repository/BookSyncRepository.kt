@@ -97,6 +97,14 @@ class BookSyncRepository @Inject constructor(
     /** See [LibraryRepository.getRecentlyReadEbooksFlow]. */
     fun getRecentlyReadEbooksFlow(): Flow<List<EBookEntity>> = library.getRecentlyReadEbooksFlow()
 
+    /** See [LibraryRepository.getAllProgressFlow] (issue #716). */
+    fun getAllProgressFlow(): Flow<List<com.booksync.data.local.entity.UserProgressEntity>> =
+        library.getAllProgressFlow()
+
+    /** See [LibraryRepository.getAllBookmarksFlow] (issue #716). */
+    fun getAllBookmarksFlow(): Flow<List<com.booksync.data.local.entity.BookmarkEntity>> =
+        library.getAllBookmarksFlow()
+
     /** See [LibraryRepository.lastOpenedTimesFlow]. */
     fun lastOpenedTimesFlow(): Flow<LastOpenedTimes> = library.lastOpenedTimesFlow()
 

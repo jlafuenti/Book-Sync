@@ -9,6 +9,7 @@ matcher that is hand-duplicated between the Python server and the Android client
 | `match_cases.json` | `services/sync_matcher.py::match_text_to_sync_points` | `SyncMatcher.match` |
 | `restore_cases.json` | `services/position_resolver.py::plan_restore` | `PositionResolver.planRestore` |
 | `pair_open_target.json` | — (client-side rule) | `BookSyncRepository.resolvePairOpenTarget` |
+| `next_up_cases.json` | — (client-side rule; the web's `lib/nextUp.test.js` is the other half) | `computeNextUp` (`ui/home/NextUp.kt`) |
 | `audio_to_epub_cases.json` | `services/sync_engine.py::audio_to_epub` | `SyncMatcher.pointForAudioPosition` (via `BookSyncRepository.audioToEpubText`) |
 
 Because the two implementations are maintained by hand, they can drift silently (this is
@@ -37,6 +38,12 @@ unbreakable. (Phase 2 — the Android `match_cases.json` half — landed with #4
   pair* on the web. The web keyed on the two `user_progress` rows' `updated_at` until
   issue #215; a pair-scoped write stamps both in one loop, so that comparison always tied
   and every pair opened in the reader.
+- `next_up_cases.json` (issue #716): `[{ "name", "why", "now", "books": [{key, series,
+  index}], "activity": [{key, completed, at}], "expected": [{series, key}] }]`. The home
+  screen's "Next up" row: the next book in each series touched in the last 90 days.
+  `books` are already one per openable book (`pair_N`, `ebook_N`, `audiobook_N`); how
+  each client reduces its own library to them (a pair counts once, 0 % progress is not
+  activity) is tested on its side. No Python half: the rule is client-side.
 - `audio_to_epub_cases.json`: `[{ "name", "why", "points": [{chapter, sentence_index,
   audio_start_ms}], "audio_position_ms", "expected_point_index": int|null }]`. Which point an
   audio position lands on — `expected_point_index` indexes `points` **as written**, so a case can

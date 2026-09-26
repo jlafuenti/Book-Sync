@@ -331,6 +331,25 @@ class HomeViewModel @Inject constructor(
             .map { pairs -> pairs.sortedByDescending { it.id }.take(10) }
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), emptyList())
 
+    // --- Next up (issue #716) ------------------------------------------------
+    /**
+     * The next book in each series touched in the last 90 days, finished books
+     * included. The rule is [computeNextUp], shared with the web. It reads the
+     * whole library rather than the recently-played flows behind Continue
+     * Reading, because those drop finished books, the case that matters most.
+     */
+    val nextUpItems: StateFlow<List<HomeItem>> =
+        combine(
+            repository.getPairsFlow(),
+            repository.getEbooksFlow(),
+            repository.getAudiobooksFlow(),
+            repository.getAllProgressFlow(),
+            repository.getAllBookmarksFlow(),
+        ) { pairs, ebooks, audiobooks, progress, bookmarks ->
+            val (books, activity) = libraryToNextUpInput(pairs, ebooks, audiobooks, progress, bookmarks)
+            computeNextUp(books, activity, System.currentTimeMillis()).map { it.toHomeItem() }
+        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), emptyList())
+
     // --- New Pairs ----------------------------------------------------------
     val newPairs: StateFlow<List<BookPairEntity>> =
         repository.getNewPairsFlow()

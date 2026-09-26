@@ -98,6 +98,7 @@ fun HomeScreen(
 ) {
     val colors = Tandem.colors
     val continueItems by viewModel.continueItems.collectAsState()
+    val nextUpItems by viewModel.nextUpItems.collectAsState()
     val recentlyAdded by viewModel.recentlyAdded.collectAsState()
     val newPairs by viewModel.newPairs.collectAsState()
     val queueItems by viewModel.queueItems.collectAsState()
@@ -219,6 +220,9 @@ fun HomeScreen(
         val sections = buildList<TourAnchor?> {
             if (versionBanner != null) add(null)
             if (continueItems.isNotEmpty()) add(TourAnchor.HomeContinueReading)
+            // Next up (issue #716) sits between these two rows; without its slot
+            // here the tour would scroll one row short of Recently Added.
+            if (nextUpItems.isNotEmpty()) add(null)
             if (recentlyAdded.isNotEmpty()) add(TourAnchor.HomeRecentlyAdded)
             if (newPairs.isNotEmpty()) add(null)
             if (queueItems.isNotEmpty()) add(TourAnchor.HomeInQueue)
@@ -255,6 +259,36 @@ fun HomeScreen(
                                 HomeItem.MediaType.PAIR      -> item.pairId?.let(openPair)
                                 HomeItem.MediaType.EBOOK     -> item.ebookId?.let(onOpenEbook)
                                 HomeItem.MediaType.AUDIOBOOK -> item.audiobookId?.let(onOpenAudiobook)
+                            }
+                        },
+                        onItemOverflow = { item ->
+                            scope.launch {
+                                overflowTarget = item.toOverflowTarget(
+                                    recentlyAdded = recentlyAdded,
+                                    newPairs = newPairs,
+                                    activeTxPairIds = activeTxPairIds,
+                                    progress = viewModel.progressSummary(item),
+                                )
+                            }
+                        },
+                    )
+                }
+            }
+
+            // Issue #716: the next book in each series you are reading. Same cards
+            // as Continue Reading, but a tap opens the book's details: it has not
+            // been started, so there is no place to resume.
+            if (nextUpItems.isNotEmpty()) {
+                item {
+                    SectionHeader(title = "Next up", onSeeAll = null)
+                    ContinueRow(
+                        items = nextUpItems,
+                        serverUrl = viewModel.serverUrl,
+                        onItemClick = { item ->
+                            when (item.mediaType) {
+                                HomeItem.MediaType.PAIR      -> item.pairId?.let(onOpenPairDetails)
+                                HomeItem.MediaType.EBOOK     -> item.ebookId?.let(onOpenEbookDetails)
+                                HomeItem.MediaType.AUDIOBOOK -> item.audiobookId?.let(onOpenAudiobookDetails)
                             }
                         },
                         onItemOverflow = { item ->
