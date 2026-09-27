@@ -109,6 +109,10 @@ class EBook(MediaColumnsMixin, Base):
     # when the EPUB embeds no page list. Set by an editor or from a Google Books
     # match the editor accepted; NULL when unknown.
     print_page_count: Mapped[int] = mapped_column(Integer, nullable=True)
+    # Issue #739: when the Google Books fill job last looked this ebook up,
+    # found or not, so a later run skips it instead of spending the daily quota
+    # on the same miss again. NULL means never tried.
+    print_pages_looked_up_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)
 
     # `file_path` is the identity key: the scan, the ACSM/convert path and the
     # importers all look a row up by it with `.scalar_one_or_none()`. Every

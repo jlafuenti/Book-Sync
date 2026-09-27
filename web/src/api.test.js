@@ -2063,3 +2063,33 @@ describe('deleteAccount() (issue #146)', () => {
             .rejects.toThrow('Failed to delete account (502)')
     })
 })
+
+describe('print page count fill (issue #739)', () => {
+    const ok = body => vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => body })
+
+    it('reads the status', async () => {
+        const fetchMock = ok({ running: false, remaining: 3 })
+        vi.stubGlobal('fetch', fetchMock)
+        const { getPrintPageFillStatus } = await import('./api')
+        expect(await getPrintPageFillStatus()).toEqual({ running: false, remaining: 3 })
+        expect(fetchMock.mock.calls[0][0]).toBe('/api/library/print-pages/status')
+    })
+
+    it('starts and cancels with POSTs', async () => {
+        const fetchMock = ok({ status: 'started' })
+        vi.stubGlobal('fetch', fetchMock)
+        const { startPrintPageFill, cancelPrintPageFill } = await import('./api')
+        await startPrintPageFill()
+        await cancelPrintPageFill()
+        expect(fetchMock).toHaveBeenCalledWith('/api/library/print-pages/start', expect.objectContaining({ method: 'POST' }))
+        expect(fetchMock).toHaveBeenCalledWith('/api/library/print-pages/cancel', expect.objectContaining({ method: 'POST' }))
+    })
+
+    it('passes on the server\'s reason when the start is refused', async () => {
+        vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+            ok: false, status: 409, json: async () => ({ detail: 'Print page counts are already being looked up.' }),
+        }))
+        const { startPrintPageFill } = await import('./api')
+        await expect(startPrintPageFill()).rejects.toThrow('already being looked up')
+    })
+})

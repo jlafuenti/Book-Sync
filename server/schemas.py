@@ -992,6 +992,28 @@ class LibraryScanProgress(StrictResponse):
     last_error: Optional[str]
 
 
+class PrintPagesProgress(StrictResponse):
+    """`services.print_pages` state as `GET /api/library/print-pages/status`
+    reports it (issue #739), plus how many ebooks the next run would look up.
+    `stopped_reason` is null for a run that finished, else `quota`, `errors`,
+    `cancelled` or `error`. Timestamps are ISO-8601 strings."""
+
+    running: bool
+    current: int
+    total: int
+    found: int
+    no_match: int
+    errors: int
+    remaining: int
+    started_at: Optional[str]
+    finished_at: Optional[str]
+    cancel_requested: bool
+    stopped_reason: Optional[str]
+    message: Optional[str]
+    last_error: Optional[str]
+    api_key_configured: bool
+
+
 class RequeueResult(ActionResult):
     pair_id: int
 
