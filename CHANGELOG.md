@@ -40,6 +40,10 @@ operator must do by hand rather than read about afterwards.
 
 ### Fixed
 
+- In a book whose page list names a chapter file that exists in two folders (`a/ch1.xhtml`,
+  `b/ch1.xhtml`), the web reader's print page numbers no longer attach to whichever came first;
+  an exact path wins, and an ambiguous one is left out (#736). Two tabs counting pages at once no
+  longer overwrite each other's saved counts.
 - The web reader's first page turns in a large book no longer stutter while it works out page
   numbers (#736): the background page count now waits until the reader has finished its own pass
   over the book, and a count already saved on the device still applies at once. Closing a book, and

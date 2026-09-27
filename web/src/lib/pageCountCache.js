@@ -32,7 +32,25 @@ export function readCounts(key) {
     }
 }
 
+// Two tabs counting at once could each read the store, add their entry and
+// write, the second dropping the first's (issue #736). Where the browser has
+// Web Locks, the read-modify-write runs under one cross-tab lock; without them
+// (or if the lock is refused) it runs directly, as before - the worst case
+// there is a recount. Returns a promise that settles once written.
 export function writeCounts(key, value) {
+    const write = () => writeNow(key, value)
+    let locks = null
+    try { locks = globalThis.navigator?.locks } catch { locks = null }
+    if (!locks?.request) {
+        write()
+        return Promise.resolve()
+    }
+    return Promise.resolve()
+        .then(() => locks.request(STORAGE_KEY, write))
+        .catch(write)
+}
+
+function writeNow(key, value) {
     try {
         const store = readStore()
         // Delete before reinserting so an existing key moves to the end —
