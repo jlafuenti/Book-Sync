@@ -151,6 +151,9 @@ class BookSyncRepository @Inject constructor(
     /** See [LibraryRepository.getEbookById]. */
     suspend fun getEbookById(ebookId: Int): EBookEntity? = library.getEbookById(ebookId)
 
+    /** See [LibraryRepository.fetchPrintPageCount] (issue #730). */
+    suspend fun fetchPrintPageCount(ebookId: Int): Result<Int?> = library.fetchPrintPageCount(ebookId)
+
     /** See [LibraryRepository.getAudiobookById]. */
     suspend fun getAudiobookById(audiobookId: Int): AudioBookEntity? = library.getAudiobookById(audiobookId)
 

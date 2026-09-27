@@ -1,10 +1,14 @@
 package com.booksync.ui.reader
 
 import android.os.Bundle
+import android.os.Handler
+import android.os.SystemClock
 import android.util.Log
 import android.view.MenuItem
 import android.view.View
 import android.view.ViewGroup
+import android.webkit.WebView
+import android.widget.FrameLayout
 import android.widget.SeekBar
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
@@ -15,6 +19,7 @@ import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.ViewCompositionStrategy
 import androidx.core.net.toUri
 import androidx.core.view.ViewCompat
+import androidx.core.view.doOnNextLayout
 import androidx.core.view.WindowInsetsCompat
 import androidx.lifecycle.lifecycleScope
 import com.booksync.R
@@ -30,6 +35,8 @@ import com.booksync.data.sync.HINT_READIUM_LOCATOR
 import com.booksync.data.sync.StoredPosition
 import com.booksync.data.sync.planRestore
 import com.booksync.data.util.NetworkMonitor
+import com.booksync.diagnostics.DiagnosticLogger
+import com.booksync.diagnostics.LogChannel
 import com.booksync.ui.components.TranscriptionStatusDialog
 import com.booksync.ui.tour.TourAnchor
 import com.booksync.ui.tour.TourAnchorRegistry
@@ -44,8 +51,15 @@ import com.google.android.material.snackbar.Snackbar
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.launch
@@ -58,6 +72,8 @@ import org.readium.r2.navigator.preferences.ReadingProgression
 import org.readium.r2.shared.ExperimentalReadiumApi
 import org.readium.r2.shared.publication.Locator
 import org.readium.r2.shared.publication.Publication
+import org.readium.r2.shared.publication.Link
+import org.readium.r2.shared.publication.epub.pageList
 import org.readium.r2.shared.util.AbsoluteUrl
 import org.readium.r2.shared.util.Try
 import org.readium.r2.shared.util.Url
@@ -71,7 +87,9 @@ import org.readium.r2.shared.util.resource.TransformingResource
 import org.readium.r2.shared.util.toAbsoluteUrl
 import org.readium.r2.streamer.PublicationOpener
 import org.readium.r2.streamer.parser.DefaultPublicationParser
+import java.io.File
 import javax.inject.Inject
+import kotlin.coroutines.resume
 
 /**
  * Activity hosting the Readium EpubNavigatorFragment for real EPUB rendering.
@@ -112,12 +130,23 @@ class ReaderActivity : AppCompatActivity() {
         // the view to the pre-change locator (re-layout finishes drawing in
         // ~200-400 ms; the go() must land after it or Readium re-lays again).
         private const val RELAYOUT_RESTORE_DELAY_MS = 800L
+        // How long the page count waits after the first locator, a settings
+        // change or a size change before capturing the live page (issue #730):
+        // long enough for Readium to have re-laid out, and it folds a burst of
+        // changes (stepping the font size) into one count.
+        private const val PAGE_COUNT_DEBOUNCE_MS = 750L
+        // How long to wait for the hidden counter to take a new size.
+        private const val PAGE_COUNTER_LAYOUT_TIMEOUT_MS = 1000L
+        // How many times a failed page count is retried for the same layout.
+        private const val PAGE_COUNT_MAX_RETRIES = 2
     }
 
     @Inject lateinit var repository: BookSyncRepository
     @Inject lateinit var dictionaryRepository: com.booksync.data.repository.DictionaryRepository
     @Inject lateinit var tokenManager: TokenManager
     @Inject lateinit var networkMonitor: NetworkMonitor
+    /** The shareable app log; the progress indicator's page-count drift goes here (issue #730). */
+    @Inject lateinit var diagnosticLogger: DiagnosticLogger
 
     /**
      * The app-scoped walkthrough engine and its anchor registry (issue #597
@@ -286,6 +315,55 @@ class ReaderActivity : AppCompatActivity() {
     private lateinit var progressText: TextView
     private lateinit var progressSlider: SeekBar
 
+    // ============ Progress indicator state (issue #730) ============
+
+    /** Mode, page mode, speed samples and print page counts, in the shared reader prefs file. */
+    private val progressPrefs: ReaderProgressPrefs by lazy {
+        ReaderProgressPrefs(getSharedPreferences(ReaderDisplaySettings.PREFS_NAME, MODE_PRIVATE))
+    }
+
+    /** Everything the tap-to-cycle indicator shows; see [ReaderProgressState]. */
+    private val progressState: ReaderProgressState by lazy { ReaderProgressState(progressPrefs) }
+
+    private val pageCountCache: PageCountCache by lazy { PageCountCache(File(filesDir, "page_counts")) }
+
+    /** The reading order's hrefs, as locator hrefs are compared against them. */
+    private var spineHrefs: List<String> = emptyList()
+
+    /** The book's embedded page list, resolved against [spineHrefs] once per open. */
+    private var pageListInputs = ReaderProgressInputs.PageList(emptyList(), emptyList())
+
+    /** The EPUB file's size: part of the page count's cache key. */
+    private var ebookFileLength = 0L
+
+    /** The hidden WebView that counts pages, created on the first count. */
+    private var pageCounter: PageCounterWebView? = null
+    private var probeJob: Job? = null
+    private var pageCountTriggerJob: Job? = null
+    private var pageCountJob: Job? = null
+    private var pageCountSettingsJob: Job? = null
+
+    /** The cache key of the counts on show, and of the count running, if any. */
+    private var countedKey: String? = null
+    private var countingKey: String? = null
+
+    /** Set by the first locator emission; the page count waits for it. */
+    private var pageCountStarted = false
+
+    /**
+     * Set once a capture got as far as a cache key. Until then each locator
+     * retries it (the first page shown may not have been capturable - a
+     * resource outside the reading order, a page still loading); after it,
+     * only a settings or size change recounts.
+     */
+    private var pageLayoutCaptured = false
+
+    /** Failed counts per layout key, so a failing layout is retried at most [PAGE_COUNT_MAX_RETRIES] times. */
+    private val pageCountFailures = mutableMapOf<String, Int>()
+
+    /** The ebook this reader shows, standalone or paired: the page count and print data are per ebook. */
+    private val progressEbookId: Int get() = if (isStandalone) ebookId else pair?.ebookId ?: 0
+
     override fun onCreate(savedInstanceState: Bundle?) {
         pairId = intent.getIntExtra(EXTRA_PAIR_ID, 0)
         ebookId = intent.getIntExtra(EXTRA_EBOOK_ID, 0)
@@ -358,7 +436,11 @@ class ReaderActivity : AppCompatActivity() {
         progressText = findViewById(R.id.progress_text)
         progressSlider = findViewById(R.id.progress_slider)
 
-
+        // Tap to cycle percent / pages / chapter / time (issue #730); the mode persists.
+        progressText.setOnClickListener {
+            progressState.cycle()
+            renderProgress()
+        }
 
         // Back button
         toolbar.setNavigationIcon(androidx.appcompat.R.drawable.abc_ic_ab_back_material)
@@ -398,6 +480,8 @@ class ReaderActivity : AppCompatActivity() {
                 if (fromUser) {
                     val pct = (progress / 10.0).toInt()
                     progressText.text = "$pct%"
+                    // The indicator's accessible name follows the drag (issue #730).
+                    progressText.contentDescription = "Reading progress: $pct%"
                 }
             }
         })
@@ -554,6 +638,8 @@ class ReaderActivity : AppCompatActivity() {
 
                 Log.d(TAG, "Publication opened: ${pub.metadata.title}, readingOrder=${pub.readingOrder.size} items")
                 publication = pub
+                ebookFileLength = withContext(Dispatchers.IO) { ebookFile.length() }
+                initProgressIndicator(pub)
 
                 // Pull the server's position before restoring (issue #40) —
                 // bounded (issue #167), so a black-hole network can't stall a
@@ -645,6 +731,7 @@ class ReaderActivity : AppCompatActivity() {
 
                 Log.d(TAG, "Navigator ready, starting position tracking")
                 startPositionTracking()
+                navigator?.let { startPageCountTriggers(it) }
                 // Wrap WebView's parent so we can intercept the floating selection
                 // ActionMode at creation time (no-op if already installed in onCreate).
                 installSelectionInterceptor()
@@ -941,6 +1028,11 @@ class ReaderActivity : AppCompatActivity() {
 
                 // Update progress UI
                 updateProgressUI(locator)
+                val shownAtMs = System.currentTimeMillis()
+                // The page count starts once the first locator has settled
+                // (issue #730), so it never competes with the open itself.
+                pageCountStarted = true
+                if (!pageLayoutCaptured && pageCountTriggerJob?.isActive != true) requestPageCount()
 
                 // A configuration change (rotation, dark-mode toggle, split
                 // screen — handled in place since issue #163) re-lays out the
@@ -951,6 +1043,7 @@ class ReaderActivity : AppCompatActivity() {
                 // next real page turn saves normally.
                 if (System.currentTimeMillis() - lastConfigChangeAtMs < RELAYOUT_ECHO_WINDOW_MS) {
                     programmaticTarget = locator
+                    probeLivePage(shownAtMs, userTurn = false)
                     return@collect
                 }
 
@@ -974,6 +1067,9 @@ class ReaderActivity : AppCompatActivity() {
                 if (!isEcho) {
                     savePolicy.onUserNavigation()
                 }
+                // The live page and chapter numbers; a reading-speed sample
+                // only for the user's own page turns (issue #730).
+                probeLivePage(shownAtMs, userTurn = !isEcho)
 
                 // Debounced position save
                 val now = System.currentTimeMillis()
@@ -987,25 +1083,31 @@ class ReaderActivity : AppCompatActivity() {
 
 
     private fun updateProgressUI(locator: Locator) {
-        val totalProg = locator.locations.totalProgression ?: return
-        val pct = (totalProg * 100).toInt()
-
-        // Find chapter title from publication TOC
         val pub = publication ?: return
-        val chapterTitle = pub.tableOfContents
-            .lastOrNull { toc -> locator.href.toString().contains(toc.href.toString()) }
-            ?.title
+        val totalProg = locator.locations.totalProgression
+        progressState.onLocator(
+            sectionIndex = ReaderProgressInputs.sectionIndexOf(spineHrefs, locator.href.toString()),
+            progression = locator.locations.progression,
+            fraction = totalProg,
+        )
 
-        val progressStr = if (chapterTitle != null) {
-            "$chapterTitle · $pct%"
-        } else {
-            "$pct%"
+        if (totalProg != null) {
+            val pct = (totalProg * 100).toInt()
+            // Find chapter title from publication TOC
+            val chapterTitle = pub.tableOfContents
+                .lastOrNull { toc -> locator.href.toString().contains(toc.href.toString()) }
+                ?.title
+            progressState.percentText = if (chapterTitle != null) "$chapterTitle · $pct%" else "$pct%"
+            if (!isSeeking) progressSlider.progress = (totalProg * 1000).toInt()
         }
+        renderProgress()
+    }
 
-        if (!isSeeking) {
-            progressText.text = progressStr
-            progressSlider.progress = (totalProg * 1000).toInt()
-        }
+    /** Shows [progressState] in the indicator; the slider owns the text while it is dragged. */
+    private fun renderProgress() {
+        if (isSeeking) return
+        progressText.text = progressState.text()
+        progressText.contentDescription = progressState.contentDescription()
     }
 
     private fun goToProgress(progress: Double) {
@@ -1063,6 +1165,251 @@ class ReaderActivity : AppCompatActivity() {
         Log.d(TAG, "applyTourReaderJump: jumping tour reader open to ${(progress * 100).toInt()}% -> $locator")
         programmaticTarget = locator
         nav.go(locator, animated = false)
+    }
+
+    // ============ Progress indicator (issue #730) ============
+    //
+    // The pure rules live in ReaderProgressState; this section only feeds it:
+    // print data at open, the live page probe per locator, and the hidden page
+    // count after the first locator and whenever the layout can have changed.
+
+    /** Print data at open: the stored print page count, refreshed from the server, and the page list. */
+    private fun initProgressIndicator(pub: Publication) {
+        spineHrefs = pub.readingOrder.map { it.href.toString() }
+        val pageList = pub.pageList
+        pageListInputs = ReaderProgressInputs.pageList(
+            spineHrefs,
+            hrefs = pageList.map { it.href.toString() },
+            labels = pageList.map { it.title.orEmpty() },
+        )
+        progressState.setPageList(pageListInputs.entries, pageListInputs.labels)
+
+        val id = progressEbookId
+        if (id <= 0) return
+        progressState.printPageCount = progressPrefs.printPageCount(id)
+        if (!networkMonitor.isOnline.value) return
+        lifecycleScope.launch {
+            // A failed request keeps the stored count; a success replaces it,
+            // and a success with null (cleared on the server) clears it.
+            val fresh = repository.fetchPrintPageCount(id).getOrElse { return@launch }
+            progressPrefs.setPrintPageCount(id, fresh)
+            progressState.printPageCount = fresh
+            renderProgress()
+        }
+    }
+
+    /**
+     * Asks the live page which CSS column it shows and which of this section's
+     * page-list markers it has passed ([LivePageProbe]), then records the page
+     * as shown at [shownAtMs]. A newer locator cancels an older probe.
+     */
+    private fun probeLivePage(shownAtMs: Long, userTurn: Boolean) {
+        probeJob?.cancel()
+        val nav = navigator ?: return
+        val section = progressState.sectionIndex
+        if (section < 0) return
+        probeJob = lifecycleScope.launch {
+            val script = LivePageProbe.script(pageListInputs.fragmentsIn(section))
+            val result = try {
+                LivePageProbe.parse(nav.evaluateJavascript(script))
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.w(TAG, "Live page probe failed", e)
+                null
+            }
+            // Readium's evaluateJavascript is not cancellable (it ends in a
+            // plain suspendCoroutine), so a probe a newer locator cancelled
+            // still gets here; stop it now. onProbed also drops an answer for
+            // a section the reader has left. Without an answer, the page
+            // recorded is the locator's estimate.
+            ensureActive()
+            val probed = progressState.onProbed(section, result, shownAtMs, userTurn)
+            if (!probed.accepted) return@launch
+            probed.drift?.let { logPageCountDrift(it) }
+            renderProgress()
+        }
+    }
+
+    /** One line in the app log per section whose live page count differs from the counted one. */
+    private fun logPageCountDrift(drift: ReaderProgressState.Drift) {
+        val line = "Page count drift: section ${drift.sectionIndex} counted ${drift.counted} pages, " +
+            "live reader shows ${drift.probed}"
+        // The app log writes to a file when capture is on: off the main thread.
+        lifecycleScope.launch(Dispatchers.IO) { diagnosticLogger.i(LogChannel.APP, TAG, line) }
+    }
+
+    /** Recounts after a settings change or a size change of the reader, once the first locator is in. */
+    private fun startPageCountTriggers(nav: EpubNavigatorFragment) {
+        pageCountSettingsJob?.cancel()
+        pageCountSettingsJob = lifecycleScope.launch {
+            nav.settings.collect { if (pageCountStarted) requestPageCount() }
+        }
+        findViewById<View>(R.id.navigator_container)
+            .addOnLayoutChangeListener { _, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom ->
+                val resized = right - left != oldRight - oldLeft || bottom - top != oldBottom - oldTop
+                if (resized && pageCountStarted) requestPageCount()
+            }
+    }
+
+    /**
+     * Debounced: a burst of triggers makes one capture. A capture that could
+     * not run yet (no laid-out WebView, the page turned mid-capture, the live
+     * page not answering) is tried once more, so the first locator's capture is
+     * not lost when no further locator follows; after that, each locator
+     * retries it until one gets through.
+     */
+    private fun requestPageCount(retryIfAbsorbed: Boolean = true) {
+        pageCountTriggerJob?.cancel()
+        pageCountTriggerJob = lifecycleScope.launch {
+            delay(PAGE_COUNT_DEBOUNCE_MS)
+            capturePageLayoutAndCount()
+            if (!pageLayoutCaptured && retryIfAbsorbed) requestPageCount(retryIfAbsorbed = false)
+        }
+    }
+
+    /**
+     * Captures the live reader's layout ([LiveHeadCapture]) and its WebView's
+     * size, and takes the counts for that layout from the cache or, on a miss,
+     * from the hidden [PageCounterWebView]. A new layout cancels the count
+     * running for the old one; the same layout leaves it alone.
+     */
+    private suspend fun capturePageLayoutAndCount() {
+        val nav = navigator ?: return
+        val pub = publication ?: return
+        val id = progressEbookId.takeIf { it > 0 } ?: return
+        val live = liveReaderWebView(nav) ?: return
+        val width = live.width
+        val height = live.height
+        if (width <= 0 || height <= 0) return
+
+        val href = nav.currentLocator.value.href.toString()
+        val link = pub.readingOrder.getOrNull(ReaderProgressInputs.sectionIndexOf(spineHrefs, href)) ?: return
+        val raw = readResourceText(pub, link) ?: return
+        val captured = try {
+            val result = nav.evaluateJavascript(LiveHeadCapture.script(ReaderProgressInputs.rawHead(raw)))
+            // Not cancellable either (see probeLivePage): a trigger job
+            // replaced while this ran must stop here, not mark the layout
+            // captured.
+            currentCoroutineContext().ensureActive()
+            LiveHeadCapture.parse(result)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.w(TAG, "Live head capture failed", e)
+            null
+        } ?: return
+        // The head diff is only right against the resource it was read from;
+        // requestPageCount tries again.
+        if (nav.currentLocator.value.href.toString() != href) return
+
+        val hrefs = pub.readingOrder.map { it.url().toString() }
+        val key = pageCountCache.key(
+            ebookId = id,
+            spineSignature = ReaderProgressInputs.spineSignature(spineHrefs, ebookFileLength),
+            style = ReaderProgressInputs.layoutStyle(captured.style),
+            widthPx = width,
+            heightPx = height,
+        )
+        pageLayoutCaptured = true
+        if (key == countingKey || (key == countedKey && progressState.counts != null)) return
+
+        val cached = pageCountCache.load(id, key)
+        if (cached != null && cached.counts.size == hrefs.size) {
+            pageCountJob?.cancel()
+            countingKey = null
+            applyCounts(key, cached)
+            return
+        }
+
+        pageCountJob?.cancel()
+        countingKey = key
+        countedKey = null
+        // Counts for another layout would be wrong; show "…" until this one is in.
+        progressState.counts = null
+        renderProgress()
+        val pubLang = nav.settings.value.language?.code ?: pub.metadata.languages.firstOrNull()
+        pageCountJob = lifecycleScope.launch {
+            try {
+                val counter = pageCounterSized(pub, width, height)
+                val startedAt = SystemClock.elapsedRealtime()
+                val result = counter.count(captured.style, captured.head, hrefs, pubLang, captured.dir)
+                Log.d(TAG, "Page count: ${result.counts.sum()} pages in ${hrefs.size} resources at ${width}x$height, " +
+                    "${SystemClock.elapsedRealtime() - startedAt} ms")
+                applyCounts(key, result)
+                try {
+                    pageCountCache.save(id, key, result)
+                } catch (e: Exception) {
+                    Log.w(TAG, "Could not cache the page count", e)
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.w(TAG, "Page count failed", e)
+                // Let the next locator capture and count again, a bounded
+                // number of times per layout.
+                val failures = (pageCountFailures[key] ?: 0) + 1
+                pageCountFailures[key] = failures
+                if (failures <= PAGE_COUNT_MAX_RETRIES) pageLayoutCaptured = false
+            } finally {
+                if (countingKey == key) countingKey = null
+            }
+        }
+    }
+
+    private fun applyCounts(key: String, counts: Counts) {
+        countedKey = key
+        progressState.counts = counts
+        renderProgress()
+    }
+
+    /** A resource's markup, read on the IO dispatcher; null if it cannot be read. */
+    private suspend fun readResourceText(pub: Publication, link: Link): String? =
+        withContext(Dispatchers.IO) {
+            try {
+                val resource = pub.get(link) ?: return@withContext null
+                try {
+                    resource.read().getOrNull()?.let { String(it, Charsets.UTF_8) }
+                } finally {
+                    resource.close()
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Could not read ${link.href}", e)
+                null
+            }
+        }
+
+    /**
+     * The WebView Readium is showing the book in. Its size, not the navigator
+     * container's, is what the counter must match: Readium can pad the
+     * container for window insets. Every page the pager holds has the same size.
+     */
+    private fun liveReaderWebView(nav: EpubNavigatorFragment): WebView? =
+        nav.view?.let { findLaidOutWebView(it) }
+
+    private fun findLaidOutWebView(view: View): WebView? {
+        if (view is WebView) return view.takeIf { it.width > 0 && it.height > 0 }
+        if (view is ViewGroup) {
+            for (i in 0 until view.childCount) findLaidOutWebView(view.getChildAt(i))?.let { return it }
+        }
+        return null
+    }
+
+    /** The hidden counter, created on first use in [R.id.page_counter_host] and laid out at [width] x [height]. */
+    private suspend fun pageCounterSized(pub: Publication, width: Int, height: Int): PageCounterWebView {
+        val counter = pageCounter ?: PageCounterWebView(this, pub).also { created ->
+            pageCounter = created
+            findViewById<FrameLayout>(R.id.page_counter_host).addView(created, FrameLayout.LayoutParams(width, height))
+        }
+        if (counter.width != width || counter.height != height) {
+            counter.layoutParams = FrameLayout.LayoutParams(width, height)
+            withTimeoutOrNull(PAGE_COUNTER_LAYOUT_TIMEOUT_MS) {
+                suspendCancellableCoroutine { cont ->
+                    counter.doOnNextLayout { if (cont.isActive) cont.resume(Unit) }
+                }
+            }
+        }
+        return counter
     }
 
     // ============ Bookmark save/restore ============
@@ -1597,7 +1944,7 @@ class ReaderActivity : AppCompatActivity() {
 
     private fun showDisplaySettings() {
         val nav = navigator ?: return
-        displaySettings.showDialog(this, nav, edgeTapSettings)
+        displaySettings.showDialog(this, nav, edgeTapSettings, progressState) { renderProgress() }
     }
 
     // ============ Text Selection Sync ============
@@ -1896,6 +2243,19 @@ class ReaderActivity : AppCompatActivity() {
         if (!isStandalone && pairId != 0) SyncMapInUse.unregister(pairId)
         positionSaveJob?.cancel()
         tourNavJob?.cancel()
+        // The page counter (issue #730): cancelling the count loads about:blank
+        // on the main thread, so the WebView is destroyed after that has run.
+        probeJob?.cancel()
+        pageCountTriggerJob?.cancel()
+        pageCountJob?.cancel()
+        pageCountSettingsJob?.cancel()
+        pageCounter?.let { counter ->
+            pageCounter = null
+            Handler(mainLooper).post {
+                (counter.parent as? ViewGroup)?.removeView(counter)
+                counter.destroy()
+            }
+        }
         // Both reader view anchors are this Activity's alone to publish
         // (issue #597 §2) — clear them so a stale rect from a finished reader
         // never survives into the next screen the tour spotlights. Same

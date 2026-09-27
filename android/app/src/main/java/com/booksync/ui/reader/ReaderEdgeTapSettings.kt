@@ -24,7 +24,7 @@ import android.content.Context
 class ReaderEdgeTapSettings(private val context: Context) {
 
     private companion object {
-        const val PREFS_NAME = "reader_display"
+        const val PREFS_NAME = ReaderDisplaySettings.PREFS_NAME
         const val KEY_ENABLED = "edge_tap_enabled"
     }
 

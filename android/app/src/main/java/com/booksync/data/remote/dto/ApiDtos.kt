@@ -195,7 +195,11 @@ data class EBookResponse(
     // Server-side "seen" flag (issue #222). Defaults to true so a server too old
     // to send it leaves the phone's own acknowledged_items table alone rather
     // than declaring the whole library new.
-    val acknowledged: Boolean = true
+    val acknowledged: Boolean = true,
+    // Print page count for the tap-to-cycle progress indicator's "print" page
+    // mode (issue #730). Nullable: EPUBs without a page-list source have none,
+    // and the default handles a server too old to send the field at all.
+    val print_page_count: Int? = null
 )
 
 @Serializable

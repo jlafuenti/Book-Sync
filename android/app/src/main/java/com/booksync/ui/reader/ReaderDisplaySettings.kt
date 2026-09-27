@@ -21,13 +21,18 @@ import org.readium.r2.navigator.preferences.Theme
  */
 class ReaderDisplaySettings(private val context: Context) {
 
-    private companion object {
-        const val PREFS_NAME = "reader_display"
-        const val KEY_FONT_SIZE = "font_size"
-        const val KEY_THEME = "theme"
-        const val KEY_FONT_FAMILY = "font_family"
-        const val KEY_LINE_SPACING = "line_spacing"
-        const val KEY_MARGINS = "margins"
+    companion object {
+        /**
+         * The `SharedPreferences` file every per-device reader setting shares:
+         * these display preferences, [ReaderEdgeTapSettings] and
+         * [ReaderProgressPrefs].
+         */
+        internal const val PREFS_NAME = "reader_display"
+        private const val KEY_FONT_SIZE = "font_size"
+        private const val KEY_THEME = "theme"
+        private const val KEY_FONT_FAMILY = "font_family"
+        private const val KEY_LINE_SPACING = "line_spacing"
+        private const val KEY_MARGINS = "margins"
     }
 
     /** Cumulative preferences, so changes don't wipe each other. */
@@ -119,8 +124,18 @@ class ReaderDisplaySettings(private val context: Context) {
      * (issue #585) rather than a field here — it isn't an [EpubPreferences]
      * value pushed to [nav] — but its toggle lives in this same dialog's
      * Display tab since it is still "how the reader behaves."
+     *
+     * The "Page numbers: Ebook / Print" row (issue #730) sets
+     * [ReaderProgressState.pageMode], which persists it through
+     * [ReaderProgressPrefs]; [onProgressChanged] re-renders the indicator.
      */
-    fun showDialog(activity: Activity, nav: EpubNavigatorFragment, edgeTapSettings: ReaderEdgeTapSettings) {
+    fun showDialog(
+        activity: Activity,
+        nav: EpubNavigatorFragment,
+        edgeTapSettings: ReaderEdgeTapSettings,
+        progressState: ReaderProgressState,
+        onProgressChanged: () -> Unit,
+    ) {
         val dialogView = activity.layoutInflater.inflate(R.layout.dialog_display_settings, null)
 
         // Tab switching
@@ -279,6 +294,16 @@ class ReaderDisplaySettings(private val context: Context) {
         switchEdgeTap.isChecked = edgeTapSettings.enabled
         switchEdgeTap.setOnCheckedChangeListener { _, isChecked ->
             edgeTapSettings.setEnabled(isChecked)
+        }
+
+        // Page numbers: ebook or print (issue #730)
+        val pageModeGroup = dialogView.findViewById<com.google.android.material.button.MaterialButtonToggleGroup>(R.id.page_mode_group)
+        pageModeGroup.check(if (progressState.pageMode == "print") R.id.btn_page_mode_print else R.id.btn_page_mode_ebook)
+        pageModeGroup.addOnButtonCheckedListener { _, checkedId, isChecked ->
+            if (isChecked) {
+                progressState.pageMode = if (checkedId == R.id.btn_page_mode_print) "print" else "ebook"
+                onProgressChanged()
+            }
         }
 
         val dialog = MaterialAlertDialogBuilder(activity)

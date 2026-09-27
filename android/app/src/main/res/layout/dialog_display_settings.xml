@@ -452,6 +452,48 @@
                     android:layout_height="wrap_content" />
             </LinearLayout>
 
+            <!-- Page numbers in the progress indicator (issue #730) -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="16dp"
+                android:orientation="horizontal"
+                android:gravity="center_vertical">
+
+                <TextView
+                    android:layout_width="0dp"
+                    android:layout_weight="1"
+                    android:layout_height="wrap_content"
+                    android:text="Page numbers"
+                    android:textSize="15sp" />
+
+                <com.google.android.material.button.MaterialButtonToggleGroup
+                    android:id="@+id/page_mode_group"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    app:singleSelection="true"
+                    app:selectionRequired="true">
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/btn_page_mode_ebook"
+                        style="@style/Widget.Material3.Button.OutlinedButton"
+                        android:layout_width="wrap_content"
+                        android:layout_height="48dp"
+                        android:text="Ebook"
+                        android:insetTop="0dp"
+                        android:insetBottom="0dp" />
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/btn_page_mode_print"
+                        style="@style/Widget.Material3.Button.OutlinedButton"
+                        android:layout_width="wrap_content"
+                        android:layout_height="48dp"
+                        android:text="Print"
+                        android:insetTop="0dp"
+                        android:insetBottom="0dp" />
+                </com.google.android.material.button.MaterialButtonToggleGroup>
+            </LinearLayout>
+
         </LinearLayout>
 
     </FrameLayout>
