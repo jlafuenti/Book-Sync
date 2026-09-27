@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, waitFor, act } from '@testing-library/react'
+import { render, screen, waitFor, act } from '@testing-library/react'
 import EbookReader from './EbookReader'
 
 const {
@@ -265,5 +265,87 @@ describe('EbookReader — a tab left open re-anchors after listening elsewhere (
         setVisibility('visible')
         await act(async () => { await new Promise(r => setTimeout(r, 50)) })
         expect(getPositionMock).toHaveBeenCalledTimes(1)
+    })
+})
+
+describe('EbookReader — no percent before epub.js has its locations (issue #733)', () => {
+    // Until book.locations.generate() finishes, epub.js 0.3.93 reports
+    // start.location = -1 and start.percentage = 0. That 0 used to show as
+    // "0.0%" and be saved as epub_progress_percent: 0, which Home and
+    // Continue Reading then displayed, and which could clear a completion.
+
+    async function open() {
+        const { book, rendition, handlers } = makeFakeBook(['cover.xhtml', 'ch1.xhtml', 'ch2.xhtml'])
+        ePubMock.mockReturnValue(book)
+        const utils = render(
+            <EbookReader
+                ebookId={7} pairId={42}
+                initialChapter={null} initialTextPreview={null}
+                bookTitle="Test Book" onClose={vi.fn()}
+            />
+        )
+        await waitFor(() => expect(rendition.display).toHaveBeenCalled())
+        return { ...utils, handlers }
+    }
+
+    const at = (cfi, location, percentage) => ({
+        start: { cfi, location, percentage, displayed: { page: 1, total: 1 }, href: 'ch1.xhtml' },
+    })
+    const indicator = () => screen.getByRole('button', { name: /^Reading progress/ })
+    const settle = () => act(async () => { await new Promise(r => setTimeout(r, 2300)) })
+
+    it('shows … rather than 0.0% while the locations are being generated', async () => {
+        const { handlers } = await open()
+        act(() => { handlers.relocated(at('cfi-a', -1, 0)) })
+
+        expect(indicator()).toHaveTextContent('…')
+        expect(indicator()).not.toHaveTextContent('0.0%')
+
+        act(() => { handlers.relocated(at('cfi-a', 120, 0.5)) })
+        expect(indicator()).toHaveTextContent('50.0%')
+    })
+
+    it('saves a page turned in that window without a percent, then adds it once known', async () => {
+        const { handlers } = await open()
+        act(() => { handlers.relocated(at('cfi-a', -1, 0)) })
+        await settle()
+
+        await waitFor(() => expect(updatePositionMock).toHaveBeenCalledTimes(1))
+        const first = updatePositionMock.mock.calls[0][2]
+        expect(first).toMatchObject({ epub_chapter: 1, hint: { value: 'cfi-a' } })
+        // Undefined, which JSON.stringify leaves out of the request: the
+        // server then keeps the stored percent.
+        expect(first.epub_progress_percent).toBeUndefined()
+        expect(JSON.parse(JSON.stringify(first))).not.toHaveProperty('epub_progress_percent')
+
+        // Generation finishes and epub.js re-reports the same page, now with
+        // its real percent: this one is written, though the page is unchanged.
+        act(() => { handlers.relocated(at('cfi-a', 120, 0.5)) })
+        await settle()
+
+        await waitFor(() => expect(updatePositionMock).toHaveBeenCalledTimes(2))
+        expect(updatePositionMock.mock.calls[1][2]).toMatchObject({ epub_progress_percent: 50, hint: { value: 'cfi-a' } })
+    })
+
+    it('still skips a re-report of the same page once its percent has been written', async () => {
+        const { handlers } = await open()
+        act(() => { handlers.relocated(at('cfi-a', 120, 0.5)) })
+        await settle()
+        await waitFor(() => expect(updatePositionMock).toHaveBeenCalledTimes(1))
+
+        act(() => { handlers.relocated(at('cfi-a', 121, 0.501)) })
+        await settle()
+
+        expect(updatePositionMock).toHaveBeenCalledTimes(1)
+    })
+
+    it('the flush on leaving the page omits an unknown percent too', async () => {
+        const { handlers, unmount } = await open()
+        act(() => { handlers.relocated(at('cfi-a', -1, 0)) })
+
+        unmount()
+
+        await waitFor(() => expect(updatePositionMock).toHaveBeenCalledTimes(1))
+        expect(updatePositionMock.mock.calls[0][2].epub_progress_percent).toBeUndefined()
     })
 })

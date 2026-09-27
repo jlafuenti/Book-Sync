@@ -117,7 +117,9 @@ async function setupReader(bodyText) {
     // and the current spine index (ref) that doSave reads from.
     act(() => {
         handlers.relocated({
-            start: { cfi: 'cfi-test', percentage: 0.5, displayed: { page: 1, total: 1 }, href: 'ch1.xhtml' },
+            // A real location index: epub.js has its locations, so the percent is
+            // known (issue #733).
+            start: { cfi: 'cfi-test', location: 60, percentage: 0.5, displayed: { page: 1, total: 1 }, href: 'ch1.xhtml' },
         })
     })
 
@@ -563,7 +565,7 @@ describe('EbookReader — pending save flushes on unmount (issue #158)', () => {
         fireEvent.click(screen.getByTitle('Next page'))
         act(() => {
             handlers.relocated({
-                start: { cfi: 'cfi-test-2', percentage: 0.75, displayed: { page: 1, total: 1 }, href: 'ch1.xhtml' },
+                start: { cfi: 'cfi-test-2', location: 90, percentage: 0.75, displayed: { page: 1, total: 1 }, href: 'ch1.xhtml' },
             })
         })
 
@@ -657,7 +659,7 @@ describe('EbookReader — page-lifecycle keepalive (issue #158)', () => {
         // The position moves → the next event writes again.
         act(() => {
             handlers.relocated({
-                start: { cfi: 'cfi-test-2', percentage: 0.6, displayed: { page: 1, total: 1 }, href: 'ch1.xhtml' },
+                start: { cfi: 'cfi-test-2', location: 72, percentage: 0.6, displayed: { page: 1, total: 1 }, href: 'ch1.xhtml' },
             })
         })
         act(() => { window.dispatchEvent(new Event('pagehide')) })
