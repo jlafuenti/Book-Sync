@@ -321,15 +321,66 @@ object ReaderProgressInputs {
      * whatever follows `#`, possibly empty (an empty one never counts as passed,
      * as on the web).
      */
+    /**
+     * The reading-order index of a page-list path: an exact spine href wins;
+     * otherwise the suffix rule (either side ending in `/` + the other), but
+     * only when exactly one spine item fits - `ch1.xhtml` against `a/ch1.xhtml`
+     * and `b/ch1.xhtml` is ambiguous and resolves to none rather than to
+     * whichever came first. The web's `printPages.js` `spineIndexForPath`
+     * (issue #736).
+     */
+    fun spineIndexForPath(path: String, spineHrefs: List<String>): Int {
+        if (path.isEmpty()) return -1
+        val exact = spineHrefs.indexOf(path)
+        if (exact >= 0) return exact
+        var found = -1
+        spineHrefs.forEachIndexed { i, sh ->
+            if (sh.isNotEmpty() && (path.endsWith("/$sh") || sh.endsWith("/$path"))) {
+                if (found >= 0) return -1
+                found = i
+            }
+        }
+        return found
+    }
+
+    /**
+     * A resource's text, decoded with the charset it declares rather than
+     * assuming UTF-8 (issue #736): a byte order mark, else the XML
+     * declaration's `encoding`, else a `<meta charset>` or `http-equiv`
+     * Content-Type, else UTF-8. An unknown charset name falls back to UTF-8.
+     */
+    fun decodeText(bytes: ByteArray): String {
+        fun startsWith(vararg b: Int) = bytes.size >= b.size && b.indices.all { bytes[it] == b[it].toByte() }
+        when {
+            startsWith(0xEF, 0xBB, 0xBF) -> return String(bytes, 3, bytes.size - 3, Charsets.UTF_8)
+            startsWith(0xFF, 0xFE) -> return String(bytes, 2, bytes.size - 2, Charsets.UTF_16LE)
+            startsWith(0xFE, 0xFF) -> return String(bytes, 2, bytes.size - 2, Charsets.UTF_16BE)
+        }
+        // The declarations are ASCII in every charset a book would use, so read
+        // the start as Latin-1 to find them.
+        val head = String(bytes, 0, minOf(bytes.size, 2048), Charsets.ISO_8859_1)
+        val declared = XML_ENCODING.find(head)?.groupValues?.get(1)
+            ?: META_CHARSET.find(head)?.groupValues?.get(1)
+        val charset = declared?.let {
+            try {
+                java.nio.charset.Charset.forName(it.trim())
+            } catch (e: IllegalArgumentException) {
+                null
+            }
+        } ?: Charsets.UTF_8
+        return String(bytes, charset)
+    }
+
+    private val XML_ENCODING = Regex("""^\s*<\?xml[^>]*\bencoding\s*=\s*["']([^"']+)["']""", RegexOption.IGNORE_CASE)
+    private val META_CHARSET = Regex("""<meta\b[^>]*\bcharset\s*=\s*["']?([A-Za-z0-9._:-]+)""", RegexOption.IGNORE_CASE)
+
     fun pageList(spineHrefs: List<String>, hrefs: List<String>, labels: List<String>): PageList {
         val entries = mutableListOf<Pair<Int, String>>()
         val kept = mutableListOf<String>()
         hrefs.zip(labels).forEach { (href, label) ->
             val path = href.substringBefore('#')
             val fragment = if ('#' in href) href.substringAfter('#') else ""
-            val index = spineHrefs.indexOfFirst { sh ->
-                sh.isNotEmpty() && (path == sh || path.endsWith("/$sh") || sh.endsWith("/$path"))
-            }
+            val index = spineIndexForPath(path, spineHrefs)
             if (index >= 0) {
                 entries += index to fragment
                 kept += label

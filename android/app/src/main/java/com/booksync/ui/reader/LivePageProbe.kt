@@ -29,30 +29,23 @@ object LivePageProbe {
     private val json = Json { ignoreUnknownKeys = true }
 
     /**
-     * The JS to evaluate in the live page. `fragments` are element ids (from
-     * `publication.pageList` hrefs in the current resource) to test against the
-     * current column; the script reports which of them are at or before it.
+     * The JS to evaluate in the live page: [source], the text of
+     * `assets/tandem/live-probe.js`, then a call to the function it defines with
+     * `fragments` - element ids (from `publication.pageList` hrefs in the
+     * current resource) to test against the current column. The probe lives in
+     * an asset since issue #736 so it can be tested as JS, right-to-left
+     * included (web/src/androidReaderScripts.test.js).
      *
-     * The `FRAGMENTS` array literal is built with kotlinx.serialization, never
-     * by string concatenation, so an id containing `"` or `\` cannot break the
-     * script.
+     * The array literal is built with kotlinx.serialization, never by string
+     * concatenation, so an id containing `"` or `\` cannot break the script.
      */
-    fun script(fragments: List<String>): String {
+    fun script(fragments: List<String>, source: String): String {
         val fragmentsLiteral = Json.encodeToString(ListSerializer(String.serializer()), fragments)
-        return """
-            (() => {
-              const se = document.scrollingElement, w = window.innerWidth;
-              const col = Math.round(se.scrollLeft / w);
-              const out = { page: col + 1, total: Math.max(1, Math.round(se.scrollWidth / w)), before: [] };
-              const FRAGMENTS = $fragmentsLiteral;
-              for (const id of FRAGMENTS) {
-                const el = document.getElementById(id);
-                if (el && Math.floor((el.getBoundingClientRect().left + se.scrollLeft) / w) <= col) out.before.push(id);
-              }
-              return JSON.stringify(out);
-            })()
-        """.trimIndent()
+        return "$source\n;window.tandemLiveProbe($fragmentsLiteral)\n"
     }
+
+    /** Where [script]'s source ships, relative to the APK's assets. */
+    const val SOURCE_ASSET = "tandem/live-probe.js"
 
     data class Result(val page: Int, val total: Int, val fragmentsBeforeOrAt: Set<String>)
 

@@ -103,8 +103,11 @@ class PageCountCache(
          * whenever `assets/tandem/page-counter.js`, [PageCounterRequests] or
          * [LiveHeadCapture] change how pages are laid out or counted, so counts
          * cached by the old logic are not reused.
+         *
+         * 3: remote resources blocked and non-UTF-8 chapters decoded by their
+         * own charset (issue #736).
          */
-        const val COUNTER_VERSION = 2
+        const val COUNTER_VERSION = 3
 
         private val json = Json { ignoreUnknownKeys = true }
 

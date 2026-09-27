@@ -13,31 +13,29 @@ import org.junit.Test
 class LivePageProbeTest {
 
     // ---- script ----
+    // The probe itself is assets/tandem/live-probe.js (issue #736), tested in
+    // web/src/androidReaderScripts.test.js; script() only appends the call.
 
     @Test
-    fun `script embeds fragments as a JSON array literal`() {
-        val js = LivePageProbe.script(listOf("p1", "p2"))
-        assertEquals(true, js.contains("""["p1","p2"]"""))
-        assertEquals(true, js.contains("FRAGMENTS"))
+    fun `script is the probe source followed by a call with the fragments`() {
+        val js = LivePageProbe.script(listOf("p1", "p2"), source = "/*probe*/")
+        assertEquals(true, js.startsWith("/*probe*/"))
+        assertEquals(true, js.trimEnd().endsWith("""window.tandemLiveProbe(["p1","p2"])"""))
     }
 
     @Test
     fun `script escapes a fragment containing a quote and a backslash`() {
-        val js = LivePageProbe.script(listOf("""a"b\c"""))
+        val js = LivePageProbe.script(listOf("""a"b\c"""), source = "")
         // kotlinx.serialization must produce a valid JSON string literal, not raw
         // concatenation - the array literal contains an escaped quote and backslash.
         assertEquals(true, js.contains("""a\"b\\c"""))
-        // And the substitution must not have been done by naive string concatenation
-        // (which would break the JS with an unescaped quote).
         assertEquals(false, js.contains("""["a"b\c"]"""))
     }
 
     @Test
-    fun `script contains the fixed template shape`() {
-        val js = LivePageProbe.script(emptyList())
-        assertEquals(true, js.contains("scrollingElement"))
-        assertEquals(true, js.contains("innerWidth"))
-        assertEquals(true, js.contains("JSON.stringify(out)"))
+    fun `the shipped probe defines the function script calls`() {
+        val source = java.io.File("src/main/assets/tandem/live-probe.js").readText()
+        assertEquals(true, source.contains("window.tandemLiveProbe = function"))
     }
 
     // ---- parse ----
@@ -159,6 +157,26 @@ class LivePageProbeTest {
     fun `printListAt parses a label with leading spaces like parseInt`() {
         val result = LivePageProbe.printListAt(listOf(1 to "a"), listOf("  7"), sectionIndex = 5, before = emptySet())
         assertEquals(ReaderProgress.PrintList("7", "7", "7"), result)
+    }
+
+    // Issue #736: signs and leading zeros, as JS parseInt reads them.
+
+    @Test
+    fun `printListAt reads a plus-signed label like parseInt`() {
+        val result = LivePageProbe.printListAt(listOf(1 to "a"), listOf("+5"), sectionIndex = 5, before = emptySet())
+        assertEquals(ReaderProgress.PrintList("5", "5", "5"), result)
+    }
+
+    @Test
+    fun `printListAt reads a zero-padded label like parseInt`() {
+        val result = LivePageProbe.printListAt(listOf(1 to "a"), listOf("007"), sectionIndex = 5, before = emptySet())
+        assertEquals(ReaderProgress.PrintList("7", "7", "7"), result)
+    }
+
+    @Test
+    fun `printListAt reads a negative label like parseInt`() {
+        val result = LivePageProbe.printListAt(listOf(1 to "a"), listOf("-3"), sectionIndex = 5, before = emptySet())
+        assertEquals(ReaderProgress.PrintList("-3", "-3", "-3"), result)
     }
 
     @Test

@@ -50,10 +50,11 @@ class PageCounterRequestsTest {
     }
 
     @Test
-    fun `other hosts and schemes map to None`() {
-        assertEquals(Route.None, PageCounterRequests.route("https://example.com/a.css"))
+    fun `other hosts are blocked, other schemes left to the WebView`() {
+        // Remote resources are blocked since issue #736; plain http is never ours.
+        assertEquals(Route.Blocked, PageCounterRequests.route("https://example.com/a.css"))
+        assertEquals(Route.Blocked, PageCounterRequests.route("http://readium_package/a.xhtml"))
         assertEquals(Route.None, PageCounterRequests.route("about:blank"))
-        assertEquals(Route.None, PageCounterRequests.route("http://readium_package/a.xhtml"))
         assertEquals(Route.None, PageCounterRequests.route("https://readium_package/"))
         assertEquals(Route.None, PageCounterRequests.route(""))
     }
@@ -419,5 +420,20 @@ class PageCounterRequestsTest {
         assertNull(PageCounterRequests.parseCounts("""{"counts":[1],"chars":[1]}""", expected = 2))
         assertNull(PageCounterRequests.parseCounts("""{"counts":[-1],"chars":[1]}""", expected = 1))
         assertNull(PageCounterRequests.parseCounts("""{"chars":[1]}""", expected = 1))
+    }
+    // ---- remote resources (issue #736) ----
+    // The counter lays out every chapter when a book opens; letting it fetch a
+    // remote image or font would contact that host for chapters the reader has
+    // not opened. Anything not served by the book or the app is blocked.
+
+    @Test
+    fun `a remote https or http resource is blocked`() {
+        assertEquals(Route.Blocked, PageCounterRequests.route("https://images.example.com/cover.jpg"))
+        assertEquals(Route.Blocked, PageCounterRequests.route("http://fonts.example.com/f.woff2"))
+    }
+
+    @Test
+    fun `other schemes are still left to the WebView`() {
+        assertEquals(Route.None, PageCounterRequests.route("about:blank"))
     }
 }
