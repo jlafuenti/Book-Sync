@@ -60,6 +60,16 @@ export async function testAbsConnection(url, token = '') {
     return jsonOrThrow(resp, `HTTP ${resp.status}`);
 }
 
+// An empty key tests the one already in use: the saved key, else the server's environment (issue #739).
+export async function testGoogleBooksKey(key = '') {
+    const resp = await fetchWithAuth(`${API_BASE}/settings/test-google-books`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key }),
+    });
+    return jsonOrThrow(resp, `HTTP ${resp.status}`);
+}
+
 export async function testHardcoverConnection(token = '') {
     const resp = await fetchWithAuth(`${API_BASE}/settings/test-hardcover`, {
         method: 'POST',

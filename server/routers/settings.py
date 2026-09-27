@@ -9,6 +9,8 @@ from database import get_db
 from routers.auth import get_current_user, get_admin_user
 from models.user import User
 from services import credentials as credential_store
+from services import google_books
+from config import settings as app_config
 from services import offhours
 from services import registration
 from services import update_check
@@ -44,6 +46,14 @@ class TestAbsRequest(BaseModel):
 
 class TestHardcoverRequest(BaseModel):
     token: str = ""
+
+
+class TestGoogleBooksRequest(BaseModel):
+    key: str = ""
+
+
+class KeyTestResult(BaseModel):
+    success: bool
 
 
 class TestRemoteRequest(BaseModel):
@@ -98,6 +108,9 @@ DEFAULT_SETTINGS = {
     "abs_api_token": "",
     "abs_audiobooks_prefix": "",
     "hardcover_api_token": "",
+    # Google Books API key (issue #739): stored in the credential store, never
+    # a settings row; see services/google_books.py.
+    "google_books_api_key": "",
     # Backups (issue #60) — owned by services/backup_service.py. Defaults must
     # match backup_service._DEFAULTS.
     "backup_enabled": True,
@@ -158,7 +171,7 @@ PLAIN_USER_SETTING_KEYS = (
 # Computed on every read from the credential store; never a `system_settings`
 # row. PUT drops them so a client that echoes the GET payload back cannot
 # create a stale duplicate of the derived truth.
-DERIVED_SETTING_KEYS = frozenset({"hardcover_configured"})
+DERIVED_SETTING_KEYS = frozenset({"hardcover_configured", "google_books_key_from_env"})
 
 
 @router.get("/", response_model=Dict[str, Any])
@@ -217,6 +230,13 @@ async def _all_settings(db: AsyncSession) -> Dict[str, Any]:
     hardcover_token = await credential_store.get_credential(db, "hardcover")
     settings_dict["hardcover_api_token"] = _SECRET_PLACEHOLDER if hardcover_token else ""
     settings_dict["hardcover_configured"] = bool(hardcover_token)
+
+    # The Google Books key (issue #739), masked like the others. When none is
+    # saved but the environment provides one, say so, so the System page can
+    # explain that lookups already have a key.
+    google_key = await google_books.saved_key(db)
+    settings_dict["google_books_api_key"] = _SECRET_PLACEHOLDER if google_key else ""
+    settings_dict["google_books_key_from_env"] = not google_key and bool(app_config.google_books_api_key)
 
     return settings_dict
 
@@ -343,6 +363,15 @@ async def update_settings(
                 await credential_store.set_credential(db, "hardcover", str(value))
             continue
 
+        if key == "google_books_api_key":
+            if value is None or value == _SECRET_PLACEHOLDER:
+                continue
+            if str(value).strip() == "":
+                await credential_store.delete_credential(db, google_books.CREDENTIAL)
+            else:
+                await credential_store.set_credential(db, google_books.CREDENTIAL, str(value).strip())
+            continue
+
         # Serialize before saving
         if key in ["ebook_filename_patterns", "audiobook_filename_patterns"] and isinstance(value, list):
             value = "\n".join(value)
@@ -467,6 +496,46 @@ async def test_hardcover_connection(
         raise HTTPException(status_code=400, detail="Authentication failed — check your API token")
 
     return {"success": True, "username": me[0].get("username")}
+
+
+@router.post("/test-google-books", response_model=KeyTestResult)
+async def test_google_books_key(
+    body: TestGoogleBooksRequest,
+    db: AsyncSession = Depends(get_db, scope="function"),
+    _: User = Depends(get_admin_user),
+):
+    """Check a Google Books API key with one small search (issue #739). The
+    placeholder or an empty field tests the key already in use - the saved one,
+    else the environment's."""
+    import httpx
+
+    key = body.key.strip() if body.key and body.key != _SECRET_PLACEHOLDER else await google_books.api_key(db)
+    if not key:
+        raise HTTPException(status_code=400, detail="Enter an API key to test")
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            r = await client.get(
+                "https://www.googleapis.com/books/v1/volumes",
+                params={"q": "isbn:9780141439518", "maxResults": 1, "key": key},
+            )
+    except httpx.RequestError as e:
+        raise HTTPException(status_code=400, detail=f"Could not reach Google Books: {e.__class__.__name__}")
+
+    if r.status_code == 200:
+        return {"success": True}
+    try:
+        reasons = {err.get("reason") for err in r.json()["error"]["errors"]}
+    except Exception:
+        reasons = set()
+    if r.status_code == 429 or reasons & {"dailyLimitExceeded", "rateLimitExceeded", "quotaExceeded",
+                                          "userRateLimitExceeded"}:
+        raise HTTPException(status_code=400, detail="Google accepted the key, but its daily limit is used up. "
+                                                    "Try again tomorrow.")
+    if r.status_code in (400, 401, 403):
+        raise HTTPException(status_code=400, detail="Google rejected the key. Check it, and that the Books API "
+                                                    "is enabled for its project.")
+    raise HTTPException(status_code=400, detail=f"Google Books answered HTTP {r.status_code}")
 
 
 @router.post("/transcription-remote-key/generate")

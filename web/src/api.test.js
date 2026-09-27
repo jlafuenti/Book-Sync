@@ -2093,3 +2093,23 @@ describe('print page count fill (issue #739)', () => {
         await expect(startPrintPageFill()).rejects.toThrow('already being looked up')
     })
 })
+
+describe('testGoogleBooksKey() (issue #739)', () => {
+    it('POSTs the key and returns the result', async () => {
+        const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => ({ success: true }) })
+        vi.stubGlobal('fetch', fetchMock)
+        const { testGoogleBooksKey } = await import('./api')
+        expect(await testGoogleBooksKey('k')).toEqual({ success: true })
+        expect(fetchMock).toHaveBeenCalledWith('/api/settings/test-google-books', expect.objectContaining({
+            method: 'POST', body: JSON.stringify({ key: 'k' }),
+        }))
+    })
+
+    it("passes on the server's reason when Google refuses the key", async () => {
+        vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+            ok: false, status: 400, json: async () => ({ detail: 'Google rejected the key.' }),
+        }))
+        const { testGoogleBooksKey } = await import('./api')
+        await expect(testGoogleBooksKey()).rejects.toThrow('Google rejected the key.')
+    })
+})
