@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { cancelPrintPageFill, getPrintPageFillStatus, startPrintPageFill } from '../api'
+import '../pages/SystemPage.css'
 
 /**
  * Fill ebooks' print page counts from Google Books (issue #739).
@@ -67,7 +68,7 @@ export default function PrintPageFill({ canEdit, pollMs = 2000 }) {
             {status && !status.api_key_configured && (
                 <p className="system-form-hint error">
                     No Google Books API key is set. Google refuses almost every lookup without one: add
-                    one under Google Books on this page first.
+                    one under System → Google Books first.
                 </p>
             )}
             {status && (

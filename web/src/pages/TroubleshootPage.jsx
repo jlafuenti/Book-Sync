@@ -12,6 +12,7 @@ import {
 } from '../api'
 import { useAuth } from '../contexts/AuthContext'
 import EnhancedMetadataModal from '../components/EnhancedMetadataModal'
+import PrintPageFill from '../components/PrintPageFill'
 import Modal from '../components/Modal'
 import './TroubleshootPage.css'
 
@@ -523,6 +524,29 @@ function SyncMapAuditSection({ canEdit }) {
     )
 }
 
+/**
+ * Print page counts from Google Books (issue #739): fills the ebooks' Print
+ * pages field the reader uses. It lives here, beside the other library-wide
+ * passes, rather than among the System page's settings; its API key stays in
+ * System → Google Books. Collapsed until opened, like the audit above.
+ */
+function PrintPageCountsSection({ canEdit }) {
+    const [open, setOpen] = useState(false)
+    return (
+        <div className="system-card ts-section">
+            <div className="system-card-header system-card-header-clickable" onClick={() => setOpen(o => !o)}>
+                <h3>Print Page Counts</h3>
+                <Chevron open={open} />
+            </div>
+            {open && (
+                <div className="system-card-body">
+                    <PrintPageFill canEdit={canEdit} />
+                </div>
+            )}
+        </div>
+    )
+}
+
 /* ── Page ──────────────────────────────────────────────────────────── */
 function TroubleshootPage() {
     const { hasMinRole } = useAuth()
@@ -669,6 +693,8 @@ function TroubleshootPage() {
             ))}
 
             <SyncMapAuditSection canEdit={canEdit} />
+
+            <PrintPageCountsSection canEdit={canEdit} />
 
             {editBook && (
                 <EnhancedMetadataModal
