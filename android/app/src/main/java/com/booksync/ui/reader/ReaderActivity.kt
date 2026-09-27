@@ -439,9 +439,14 @@ class ReaderActivity : AppCompatActivity() {
         progressSlider = findViewById(R.id.progress_slider)
 
         // Tap to cycle percent / pages / chapter / time (issue #730); the mode persists.
+        // Reported to the tour (issue #743, TourEvent.ReaderProgressModeChanged) on every
+        // tap regardless of what's currently showing — the "…" pending state and the
+        // fallback notice are just this same text at different moments, and a mode change
+        // during either must still advance the reader_progress step.
         progressText.setOnClickListener {
             progressState.cycle()
             renderProgress()
+            tourController.onEvent(TourEvent.ReaderProgressModeChanged)
         }
 
         // Back button
@@ -866,8 +871,12 @@ class ReaderActivity : AppCompatActivity() {
         if (visible) {
             tourController.onEvent(TourEvent.ReaderBarsShown)
             registerSwitchToAudioAnchor()
+            registerReaderProgressAnchor()
         } else {
             tourRegistry.clear(TourAnchor.ReaderSwitchToAudio)
+            // progress_text lives in bottom_bar (issue #743): hidden, it has no bounds
+            // worth spotlighting, same reasoning as ReaderSwitchToAudio above.
+            tourRegistry.clear(TourAnchor.ReaderProgress)
         }
     }
 
@@ -891,16 +900,36 @@ class ReaderActivity : AppCompatActivity() {
     }
 
     /**
+     * Re-publishes [TourAnchor.ReaderProgress] once `bottom_bar` (its parent) has actually
+     * become visible (issue #743) — same reasoning as [registerSwitchToAudioAnchor]: the
+     * view exists throughout, but its bounds are only real once a layout pass has run with
+     * the bar shown. [registerReaderPageAnchor]'s own publish, made while the bar was still
+     * `GONE`, is a no-op that this corrects the moment the user taps the page.
+     */
+    private fun registerReaderProgressAnchor() {
+        progressText.post {
+            tourRegistry.set(TourAnchor.ReaderProgress, progressText.windowRect())
+        }
+    }
+
+    /**
      * Publishes the navigator container's window bounds as [TourAnchor.ReaderPage]
      * (issue #597 §2) once it has been laid out, so the walkthrough's first
      * reader step ("tap the middle of the page") and the selection step (which
      * reuses this anchor — see `READER_SELECTION_STEP_ID` in `TourScript.kt`)
-     * have a hole to spotlight.
+     * have a hole to spotlight. The progress text's bounds go out as
+     * [TourAnchor.ReaderProgress] in the same post (issue #743) — that anchor
+     * is the whole view, not whatever it happens to say, so the `reader_progress`
+     * step spotlights the same hole whether the text reads a mode, "…" while
+     * pages are still counting, or the print-page fallback notice. `bottom_bar`
+     * (and this view with it) starts `GONE`, so this first publish is a no-op
+     * until the bars actually show — [setBarsVisible] republishes it then.
      */
     private fun registerReaderPageAnchor() {
         val container = findViewById<View>(R.id.navigator_container)
         container.post {
             tourRegistry.set(TourAnchor.ReaderPage, container.windowRect())
+            tourRegistry.set(TourAnchor.ReaderProgress, progressText.windowRect())
             tourRegistry.setSettled(TourScreen.Reader, true)
         }
     }
@@ -2278,13 +2307,15 @@ class ReaderActivity : AppCompatActivity() {
                 counter.destroy()
             }
         }
-        // Both reader view anchors are this Activity's alone to publish
+        // Every reader View anchor (ReaderPage, ReaderSwitchToAudio, and
+        // ReaderProgress since issue #743) is this Activity's alone to publish
         // (issue #597 §2) — clear them so a stale rect from a finished reader
         // never survives into the next screen the tour spotlights. Same
         // reasoning for settled (issue #642): a finished reader must not go
         // on telling the tour the Reader screen is ready.
         tourRegistry.clear(TourAnchor.ReaderPage)
         tourRegistry.clear(TourAnchor.ReaderSwitchToAudio)
+        tourRegistry.clear(TourAnchor.ReaderProgress)
         tourRegistry.clearScreen(TourScreen.Reader)
         publication?.close()
         super.onDestroy()

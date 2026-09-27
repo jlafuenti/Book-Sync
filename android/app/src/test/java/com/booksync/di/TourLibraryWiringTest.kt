@@ -2,6 +2,7 @@ package com.booksync.di
 
 import com.booksync.data.repository.BookSyncRepository
 import com.booksync.data.repository.LibraryLoader
+import com.booksync.ui.tour.ReaderProgressModeStore
 import com.booksync.ui.tour.TourAnchorRegistry
 import com.booksync.ui.tour.TourPairPicker
 import com.booksync.ui.tour.TourPrefs
@@ -46,6 +47,7 @@ class TourLibraryWiringTest {
             registry = TourAnchorRegistry(),
             prefs = mockk<TourPrefs>(relaxed = true),
             picker = picker,
+            progressModeStore = mockk<ReaderProgressModeStore>(relaxed = true),
             scope = scope,
             loader = loader,
         )

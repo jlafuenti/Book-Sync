@@ -13,7 +13,7 @@ enum class TourAnchor {
     CardOverflow,
     SheetRead, SheetListen, SheetDownloadPair, SheetViewDetails,
     DetailsChips, DetailsSyncMapChip, DetailsPrimaryAction, DetailsRefreshSync, DetailsUnlink,
-    ReaderPage, ReaderSwitchToAudio,
+    ReaderPage, ReaderProgress, ReaderSwitchToAudio,
     PlayerTransport, PlayerSwitchToReader,
     DownloadedPills, AccountStorage, AccountServer, AccountReplayTour,
     TabLibrary, TabDownloaded, TabAccount,
@@ -51,6 +51,8 @@ sealed class TourEvent {
     data class ReaderOpened(val pairId: Int) : TourEvent()
     data object ReaderBarsShown : TourEvent()
     data object ReaderSyncedSelection : TourEvent()
+    /** The user tapped the progress text and it cycled to a new mode (issue #743). */
+    data object ReaderProgressModeChanged : TourEvent()
     data class PlayerOpened(val pairId: Int) : TourEvent()
     /** The card sheet went away (dismissed or its screen left) while a Sheet step was current. */
     data object SheetClosed : TourEvent()
@@ -70,6 +72,7 @@ sealed class TourEvent {
         is ReaderOpened -> actual is ReaderOpened
         ReaderBarsShown -> actual is ReaderBarsShown
         ReaderSyncedSelection -> actual is ReaderSyncedSelection
+        ReaderProgressModeChanged -> actual is ReaderProgressModeChanged
         SheetClosed -> actual is SheetClosed
         is PlayerOpened -> actual is PlayerOpened
         is RouteShown -> actual is RouteShown && actual.route == route
@@ -262,6 +265,19 @@ val TOUR: List<TourStep> = listOf(
         emptyBody = "The reader's toolbar isn't available to spotlight yet on this build — " +
             "tap the middle of the page to bring it up.",
         advance = Advance.WaitFor(TourEvent.ReaderBarsShown, skippable = false),
+        needsPair = true,
+    ),
+    TourStep(
+        id = "reader_progress",
+        screen = TourScreen.Reader,
+        anchor = TourAnchor.ReaderProgress,
+        title = "Your place in the book",
+        body = "Tap the progress text to switch what it shows: percent, page in the book, " +
+            "page in the chapter, or time left in the chapter. Whether pages count the ebook " +
+            "or the print edition is set in Display settings.",
+        emptyBody = "The progress text isn't available to spotlight on this build — it sits " +
+            "at the bottom of the page and cycles when tapped.",
+        advance = Advance.TapAnchor(TourEvent.ReaderProgressModeChanged),
         needsPair = true,
     ),
     TourStep(

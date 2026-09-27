@@ -436,6 +436,7 @@ object AppModule {
         registry: com.booksync.ui.tour.TourAnchorRegistry,
         prefs: com.booksync.ui.tour.TourPrefs,
         picker: com.booksync.ui.tour.TourPairPicker,
+        progressModeStore: com.booksync.ui.tour.ReaderProgressModeStore,
         @ApplicationScope scope: kotlinx.coroutines.CoroutineScope,
         loader: com.booksync.data.repository.LibraryLoader,
     ): com.booksync.ui.tour.TourController =
@@ -443,7 +444,30 @@ object AppModule {
             registry = registry,
             prefs = prefs,
             picker = picker,
+            progressModeStore = progressModeStore,
             scope = scope,
             awaitLibrary = { timeoutMs -> loader.awaitPairs(timeoutMs) },
+        )
+
+    /**
+     * The seam [com.booksync.ui.tour.TourController] uses to record and restore the reader's
+     * progress mode around a walkthrough run (issue #743) — see
+     * [com.booksync.ui.tour.ReaderProgressModeStore]. Backed by the same `reader_display`
+     * `SharedPreferences` file [com.booksync.ui.reader.ReaderProgressPrefs],
+     * [com.booksync.ui.reader.ReaderDisplaySettings] and
+     * [com.booksync.ui.reader.ReaderEdgeTapSettings] already share, built from the
+     * application `Context` here rather than injected directly since nothing before this
+     * needed a raw `SharedPreferences` binding.
+     */
+    @Provides
+    @Singleton
+    fun provideReaderProgressModeStore(
+        @ApplicationContext context: Context,
+    ): com.booksync.ui.tour.ReaderProgressModeStore =
+        com.booksync.ui.tour.ReaderProgressModeStore(
+            context.getSharedPreferences(
+                com.booksync.ui.reader.ReaderDisplaySettings.PREFS_NAME,
+                Context.MODE_PRIVATE,
+            ),
         )
 }

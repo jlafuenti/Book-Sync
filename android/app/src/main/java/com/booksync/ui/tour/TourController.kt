@@ -92,8 +92,16 @@ sealed class TourNav {
      * and local progress, drop its cached files and sync map, and stop the player if it
      * still holds this pair's media. Emitted by [TourController.finish] only when the pair
      * was untouched before the tour opened it.
+     *
+     * [progressModeRestored] is the outcome of the same "leave no trace" rule applied to the
+     * reader's tap-to-cycle progress mode (issue #743, `reader_progress` in `TourScript.kt`):
+     * true when [TourController] found the mode had changed since [start] recorded it and
+     * wrote the recorded value back; false when there was nothing to put back. Computed by
+     * [TourController] itself (it already holds the recorded value and the
+     * [ReaderProgressModeStore] seam) — this event only carries the result so the handler that
+     * logs pair cleanup can log this alongside it.
      */
-    data class CleanUp(val pairId: Int) : TourNav()
+    data class CleanUp(val pairId: Int, val progressModeRestored: Boolean) : TourNav()
 }
 
 /**
@@ -111,6 +119,8 @@ class TourController(
     private val registry: TourAnchorRegistry,
     private val prefs: TourPrefs,
     private val picker: TourPairPicker,
+    /** See [TourNav.CleanUp.progressModeRestored] — recorded in [start], restored in [finish]. */
+    private val progressModeStore: ReaderProgressModeStore,
     private val scope: CoroutineScope,
     /** Used only to log how long each anchor resolution took; the resolution logic itself
      *  is driven by coroutine `delay`s under [scope], which is what tests control via
@@ -157,6 +167,10 @@ class TourController(
     /** See [TourState.Running.willCleanUp]; carried here so [enter] can stamp every step's
      *  state with it without recomputing it on every `next()`/`back()`. */
     private var willCleanUp: Boolean = false
+    /** The reader's progress mode as [start] found it (issue #743) — what [finish] puts back
+     *  when [willCleanUp] applies. Recorded unconditionally at every [start], since which pair
+     *  the tour opened has no bearing on this device-wide reader setting. */
+    private var savedProgressMode: String = ""
     private var anchorWatchJob: Job? = null
     private var barsGraceJob: Job? = null
     private var startJob: Job? = null
@@ -180,6 +194,7 @@ class TourController(
         steps = TOUR
         pairId = null
         willCleanUp = false
+        savedProgressMode = progressModeStore.get()
         // "Replay the walkthrough" (issue #597 follow-up) launches from wherever the
         // Account tab happens to be, and PR #614 stopped the tour switching tabs on its
         // own for every other step — without this, step 0's Home anchors would render
@@ -521,7 +536,10 @@ class TourController(
             emitPopToMain()
         }
         if (running?.willCleanUp == true && running.pairId != null) {
-            _nav.tryEmit(TourNav.CleanUp(running.pairId))
+            val currentProgressMode = progressModeStore.get()
+            val progressModeRestored = currentProgressMode != savedProgressMode
+            if (progressModeRestored) progressModeStore.set(savedProgressMode)
+            _nav.tryEmit(TourNav.CleanUp(running.pairId, progressModeRestored))
         }
         anchorWatchJob?.cancel()
         barsGraceJob?.cancel()
