@@ -43,10 +43,11 @@ class PageCountCache(
     /**
      * The layout key. The reader's `<html style>` (every ReadiumCSS setting,
      * including the viewport width) is long, so it is hashed; the viewport
-     * size and the spine signature are kept readable for debugging.
+     * size and the spine signature are kept readable for debugging. The
+     * [COUNTER_VERSION] prefix retires every count made by older counter logic.
      */
     fun key(ebookId: Int, spineSignature: String, style: String, widthPx: Int, heightPx: Int): String =
-        "$ebookId:${sha1(spineSignature).take(12)}:${widthPx}x$heightPx:${sha1(style).take(16)}"
+        "v$COUNTER_VERSION:$ebookId:${sha1(spineSignature).take(12)}:${widthPx}x$heightPx:${sha1(style).take(16)}"
 
     /** Blocking. The cached counts for [key], or `null`. */
     fun read(ebookId: Int, key: String): Counts? {
@@ -57,20 +58,25 @@ class PageCountCache(
 
     /**
      * Blocking. Stores [counts] under [key] as the newest entry, dropping the
-     * oldest beyond [MAX_KEYS]. Written to a temp file and renamed over the old
-     * one, so a crash mid-write leaves the previous file intact.
+     * oldest beyond [MAX_KEYS]. Written to a temp file of its own (a unique
+     * name, so two writers never share one) and renamed over the old file, so a
+     * crash mid-write leaves the previous file intact.
      */
     fun write(ebookId: Int, key: String, counts: Counts) {
         val kept = readBook(ebookId)?.entries.orEmpty().filter { it.key != key }
         val entries = (kept + Entry(key, counts.counts, counts.chars)).takeLast(MAX_KEYS)
         dir.mkdirs()
         val target = fileFor(ebookId)
-        val tmp = File(dir, "${target.name}.tmp")
-        tmp.writeText(json.encodeToString(Book.serializer(), Book(entries)))
-        if (!tmp.renameTo(target)) {
-            // Windows (tests) will not rename over an existing file; Android will.
-            target.delete()
-            tmp.renameTo(target)
+        val tmp = File.createTempFile("book-$ebookId-", ".tmp", dir)
+        try {
+            tmp.writeText(json.encodeToString(Book.serializer(), Book(entries)))
+            if (!tmp.renameTo(target)) {
+                // Windows (tests) will not rename over an existing file; Android will.
+                target.delete()
+                tmp.renameTo(target)
+            }
+        } finally {
+            if (tmp.exists()) tmp.delete()
         }
     }
 
@@ -91,6 +97,14 @@ class PageCountCache(
 
     companion object {
         const val MAX_KEYS = 5
+
+        /**
+         * The page-counting algorithm's version, part of every [key]. Bump it
+         * whenever `assets/tandem/page-counter.js`, [PageCounterRequests] or
+         * [LiveHeadCapture] change how pages are laid out or counted, so counts
+         * cached by the old logic are not reused.
+         */
+        const val COUNTER_VERSION = 1
 
         private val json = Json { ignoreUnknownKeys = true }
 

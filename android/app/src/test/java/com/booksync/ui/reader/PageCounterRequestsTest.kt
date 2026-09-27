@@ -3,6 +3,7 @@ package com.booksync.ui.reader
 import com.booksync.ui.reader.PageCounterRequests.Route
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -165,6 +166,222 @@ class PageCounterRequestsTest {
         assertTrue(js.contains("""["a.xhtml","b\"c\\d.html"]"""))
         assertTrue(js.contains("tandemCountPages"))
         assertTrue(js.contains("TandemPageCounter.onError"))
+    }
+
+    @Test
+    fun `countScript passes the options as a JSON object`() {
+        val js = PageCounterRequests.countScript(
+            listOf("a.xhtml"),
+            PageCounterRequests.CounterOptions(pubLang = "e\"n", dir = "rtl"),
+        )
+        assertTrue(js.contains(""""pubLang":"e\"n""""))
+        assertTrue(js.contains(""""dir":"rtl""""))
+    }
+
+    // ---- shellUrl ----
+
+    @Test
+    fun `each load gets its own shell URL, and every one routes to Shell`() {
+        val a = PageCounterRequests.shellUrl(1)
+        val b = PageCounterRequests.shellUrl(2)
+        assertNotEquals(a, b)
+        assertEquals(Route.Shell, PageCounterRequests.route(a))
+        assertEquals(Route.Shell, PageCounterRequests.route(b))
+        assertTrue(a.startsWith(PageCounterRequests.SHELL_URL + "?"))
+    }
+
+    // ---- sanitizeHead ----
+
+    @Test
+    fun `sanitizeHead keeps link, style and meta, and drops everything else`() {
+        val out = PageCounterRequests.sanitizeHead(
+            listOf(
+                """<link rel="stylesheet" href="https://readium_assets/readium/readium-css/ReadiumCSS-before.css">""",
+                "<style>a{color:red}</style>",
+                """<meta name="viewport" content="width=device-width">""",
+                "<script>alert(1)</script>",
+                "<title>T</title>",
+                """<base href="https://example.com/">""",
+                "<div>x</div>",
+                """<noscript><style>b{}</style></noscript>""",
+            ),
+        )
+        assertEquals(
+            listOf(
+                """<link rel="stylesheet" href="https://readium_assets/readium/readium-css/ReadiumCSS-before.css">""",
+                "<style>a{color:red}</style>",
+                """<meta name="viewport" content="width=device-width">""",
+            ),
+            out,
+        )
+    }
+
+    @Test
+    fun `sanitizeHead strips event handler attributes`() {
+        val out = PageCounterRequests.sanitizeHead(
+            listOf("""<link rel="stylesheet" href="a.css" onload="x()" OnError="y()">""", """<style onload="z()">p{}</style>"""),
+        )
+        assertEquals(listOf("""<link rel="stylesheet" href="a.css">""", "<style>p{}</style>"), out)
+    }
+
+    @Test
+    fun `sanitizeHead drops http-equiv metas, which can navigate`() {
+        assertEquals(
+            emptyList<String>(),
+            PageCounterRequests.sanitizeHead(listOf("""<meta http-equiv="refresh" content="0;url=https://example.com/">""")),
+        )
+    }
+
+    @Test
+    fun `sanitizeHead cannot be broken out of by a node that closes the head`() {
+        val out = PageCounterRequests.sanitizeHead(listOf("""</head><body><img src=x onerror="alert(1)"><style>q{}</style>"""))
+        assertTrue(out.none { it.contains("onerror") || it.contains("<img") })
+    }
+
+    @Test
+    fun `sanitizeHead leaves style text alone`() {
+        val css = """@font-face { font-family: "A&B"; src: url("https://readium_assets/f.woff2"); } p > a {}"""
+        assertEquals(listOf("<style>$css</style>"), PageCounterRequests.sanitizeHead(listOf("<style>$css</style>")))
+    }
+
+    // ---- prepareHead ----
+
+    private val before = """<link rel="stylesheet" type="text/css" href="https://readium_assets/readium/readium-css/ReadiumCSS-before.css">"""
+    private val audio = "<style>audio[controls] { width: revert; height: revert; }</style>"
+    private val overflow = "<style>:root { overflow: visible !important; }</style>"
+    private val default = """<link rel="stylesheet" type="text/css" href="https://readium_assets/readium/readium-css/ReadiumCSS-default.css">"""
+    private val after = """<link rel="stylesheet" type="text/css" href="https://readium_assets/readium/readium-css/ReadiumCSS-after.css">"""
+    private val viewport = """<meta name="viewport" content="width=device-width">"""
+    private val defaultCssHref = "https://readium_assets/readium/readium-css/ReadiumCSS-default.css"
+
+    @Test
+    fun `prepareHead excludes a captured default css, which Readium adds per resource`() {
+        val prepared = PageCounterRequests.prepareHead(listOf(before, audio, overflow, default, after, viewport), liveDir = "ltr")
+        assertTrue(prepared.nodes.none { it.contains("ReadiumCSS-default.css") && !it.contains(PageCounterRequests.DEFAULT_CSS_MARKER) })
+        assertEquals(1, prepared.nodes.count { it.contains("ReadiumCSS-default.css") })
+    }
+
+    @Test
+    fun `prepareHead derives default css from before css and places it right after before and its styles`() {
+        val prepared = PageCounterRequests.prepareHead(listOf(before, audio, overflow, after, viewport), liveDir = "ltr")
+        assertEquals(defaultCssHref, prepared.defaultCssHref)
+        val nodes = prepared.nodes
+        assertEquals(6, nodes.size)
+        assertEquals(listOf(before, audio, overflow), nodes.subList(0, 3))
+        assertTrue(nodes[3].contains(defaultCssHref))
+        assertTrue(nodes[3].contains(PageCounterRequests.DEFAULT_CSS_MARKER))
+        assertEquals(listOf(after, viewport), nodes.subList(4, 6))
+    }
+
+    @Test
+    fun `prepareHead follows the stylesheet folder, as for RTL`() {
+        val rtlBefore = before.replace("readium-css/", "readium-css/rtl/")
+        val prepared = PageCounterRequests.prepareHead(listOf(rtlBefore, after), liveDir = "rtl")
+        assertEquals("https://readium_assets/readium/readium-css/rtl/ReadiumCSS-default.css", prepared.defaultCssHref)
+    }
+
+    @Test
+    fun `prepareHead without a before css adds no default css`() {
+        val prepared = PageCounterRequests.prepareHead(listOf(audio, viewport), liveDir = null)
+        assertNull(prepared.defaultCssHref)
+        assertEquals(listOf(audio, viewport), prepared.nodes)
+    }
+
+    @Test
+    fun `prepareHead sanitizes the captured nodes`() {
+        val prepared = PageCounterRequests.prepareHead(listOf(before, "<script>x()</script>"), liveDir = "ltr")
+        assertTrue(prepared.nodes.none { it.contains("<script") })
+    }
+
+    // ---- forced dir ----
+
+    @Test
+    fun `dir is forced to the live value for the default, RTL and CJK horizontal stylesheets`() {
+        assertEquals("ltr", PageCounterRequests.prepareHead(listOf(before), liveDir = "ltr").forcedDir)
+        val rtl = before.replace("readium-css/", "readium-css/rtl/")
+        assertEquals("rtl", PageCounterRequests.prepareHead(listOf(rtl), liveDir = "rtl").forcedDir)
+        val cjkH = before.replace("readium-css/", "readium-css/cjk-horizontal/")
+        assertEquals("ltr", PageCounterRequests.prepareHead(listOf(cjkH), liveDir = "ltr").forcedDir)
+    }
+
+    @Test
+    fun `dir falls back to the stylesheet folder when the live value is missing or odd`() {
+        assertEquals("ltr", PageCounterRequests.prepareHead(listOf(before), liveDir = null).forcedDir)
+        val rtl = before.replace("readium-css/", "readium-css/rtl/")
+        assertEquals("rtl", PageCounterRequests.prepareHead(listOf(rtl), liveDir = "auto").forcedDir)
+    }
+
+    @Test
+    fun `dir is not forced for CJK vertical, or when there is no before css`() {
+        val cjkV = before.replace("readium-css/", "readium-css/cjk-vertical/")
+        assertNull(PageCounterRequests.prepareHead(listOf(cjkV), liveDir = "rtl").forcedDir)
+        assertNull(PageCounterRequests.prepareHead(listOf(audio), liveDir = "ltr").forcedDir)
+    }
+
+    // ---- resolveLang (mirrored by page-counter.js) ----
+
+    private fun lang(lang: String? = null, xmlLang: String? = null) = PageCounterRequests.LangAttrs(lang, xmlLang)
+
+    @Test
+    fun `resolveLang keeps the book's own html language`() {
+        assertEquals(
+            PageCounterRequests.ResolvedLang("fr", null),
+            PageCounterRequests.resolveLang(false, lang(lang = "fr"), lang(), pubLang = "en"),
+        )
+        assertEquals(
+            PageCounterRequests.ResolvedLang("de", null),
+            PageCounterRequests.resolveLang(true, lang(lang = "fr", xmlLang = "de"), lang(), pubLang = "en"),
+        )
+    }
+
+    @Test
+    fun `resolveLang in XHTML lifts the body language to html`() {
+        assertEquals(
+            PageCounterRequests.ResolvedLang("fr", "fr"),
+            PageCounterRequests.resolveLang(true, lang(), lang(xmlLang = "fr"), pubLang = "en"),
+        )
+        assertEquals(
+            PageCounterRequests.ResolvedLang("es", "es"),
+            PageCounterRequests.resolveLang(true, lang(), lang(lang = "es"), pubLang = "en"),
+        )
+    }
+
+    @Test
+    fun `resolveLang in XHTML falls back to the publication language on html and body`() {
+        assertEquals(
+            PageCounterRequests.ResolvedLang("en", "en"),
+            PageCounterRequests.resolveLang(true, lang(), lang(), pubLang = "en"),
+        )
+    }
+
+    @Test
+    fun `resolveLang uses the publication language when the body language is empty`() {
+        assertEquals(
+            PageCounterRequests.ResolvedLang("en", ""),
+            PageCounterRequests.resolveLang(true, lang(), lang(lang = ""), pubLang = "en"),
+        )
+    }
+
+    @Test
+    fun `resolveLang without a publication language changes nothing`() {
+        assertEquals(
+            PageCounterRequests.ResolvedLang(null, null),
+            PageCounterRequests.resolveLang(true, lang(), lang(), pubLang = null),
+        )
+    }
+
+    @Test
+    fun `resolveLang in HTML ignores xml lang, the book's and Readium's alike`() {
+        // HTML documents give a no-namespace xml:lang no effect, so Readium's
+        // injected xml:lang does not change the language of an .html resource.
+        assertEquals(
+            PageCounterRequests.ResolvedLang(null, null),
+            PageCounterRequests.resolveLang(false, lang(), lang(), pubLang = "en"),
+        )
+        assertEquals(
+            PageCounterRequests.ResolvedLang(null, "es"),
+            PageCounterRequests.resolveLang(false, lang(xmlLang = "fr"), lang(lang = "es"), pubLang = "en"),
+        )
     }
 
     // ---- parseCounts ----

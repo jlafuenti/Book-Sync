@@ -116,6 +116,21 @@ class PageCountCacheTest {
     }
 
     @Test
+    fun `key carries the counter algorithm version, so a logic change invalidates old counts`() {
+        val key = cache().key(1, "sig", "style", 100, 200)
+        assertTrue(key.startsWith("v${PageCountCache.COUNTER_VERSION}:"))
+    }
+
+    @Test
+    fun `writes leave no temp files behind`() {
+        val dir = tmp.root.resolve("page_counts")
+        val c = cache(dir)
+        repeat(3) { c.write(1, "k$it", counts) }
+        c.write(2, "k", counts)
+        assertEquals(setOf("1.json", "2.json"), dir.list()!!.toSet())
+    }
+
+    @Test
     fun `key stays short however long the style is`() {
         val key = cache().key(1, "sig", "x".repeat(10_000), 100, 200)
         assertTrue(key.length < 100)

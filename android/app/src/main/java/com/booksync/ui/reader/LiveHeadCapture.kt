@@ -24,8 +24,13 @@ object LiveHeadCapture {
 
     private val json = Json { ignoreUnknownKeys = true }
 
-    /** What [script] yields: the live `<html style>` and the injected head nodes' HTML. */
-    data class Captured(val style: String, val head: List<String>)
+    /**
+     * What [script] yields: the live `<html style>`, the injected head nodes'
+     * HTML, and the live `<html dir>` - which Readium forces publication-wide
+     * for every stylesheet set except CJK vertical (see
+     * [PageCounterRequests.prepareHead]).
+     */
+    data class Captured(val style: String, val head: List<String>, val dir: String? = null)
 
     /**
      * The live head nodes Readium injected, in live order. Each raw node
@@ -50,7 +55,7 @@ object LiveHeadCapture {
      * JS for `EpubNavigatorFragment.evaluateJavascript` on the LIVE reader,
      * showing the resource whose raw markup is [rawHeadHtml] (the whole
      * resource, or just its head - either parses). Returns
-     * `JSON.stringify({style, head})`; decode it with [parse].
+     * `JSON.stringify({style, dir, head})`; decode it with [parse].
      *
      * Nodes are compared by a normalized key (tag, sorted attributes minus
      * `xmlns`, trimmed text) rather than raw outerHTML: an XHTML resource is
@@ -91,7 +96,8 @@ object LiveHeadCapture {
                 if (left > 0) { pool.set(k, left - 1); continue; }
                 head.push(htmlDoc.importNode(n, true).outerHTML);
               }
-              return JSON.stringify({ style: document.documentElement.getAttribute('style') || '', head });
+              const root = document.documentElement;
+              return JSON.stringify({ style: root.getAttribute('style') || '', dir: root.getAttribute('dir'), head });
             })()
         """.trimIndent()
     }
@@ -101,7 +107,7 @@ object LiveHeadCapture {
      * JSON string literal wrapping the object (the script returns a string,
      * which the bridge JSON-encodes again), or the plain object. `null`, empty,
      * malformed input or a missing `head` array return `null`; a missing style
-     * reads as empty.
+     * reads as empty, a missing dir as `null`.
      */
     fun parse(result: String?): Captured? {
         val trimmed = result?.trim().orEmpty()
@@ -115,7 +121,8 @@ object LiveHeadCapture {
             }
             val head = obj["head"] as? JsonArray ?: return null
             val style = (obj["style"] as? JsonPrimitive)?.takeIf { it !is JsonNull }?.content.orEmpty()
-            Captured(style, head.map { (it as JsonPrimitive).content })
+            val dir = (obj["dir"] as? JsonPrimitive)?.takeIf { it !is JsonNull }?.content
+            Captured(style, head.map { (it as JsonPrimitive).content }, dir)
         } catch (e: Exception) {
             null
         }

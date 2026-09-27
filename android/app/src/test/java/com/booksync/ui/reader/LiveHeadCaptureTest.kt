@@ -63,6 +63,11 @@ class LiveHeadCaptureTest {
     }
 
     @Test
+    fun `script reports the live html dir`() {
+        assertTrue(LiveHeadCapture.script("").contains("getAttribute('dir')"))
+    }
+
+    @Test
     fun `script survives a closing script tag in the raw head`() {
         val js = LiveHeadCapture.script("<script>x()</script>")
         // A literal "</script>" inside the evaluated source is harmless for
@@ -86,10 +91,22 @@ class LiveHeadCaptureTest {
     }
 
     @Test
-    fun `parse accepts a plain object and a missing style`() {
+    fun `parse accepts a plain object and a missing style and dir`() {
         assertEquals(
-            LiveHeadCapture.Captured(style = "", head = emptyList()),
+            LiveHeadCapture.Captured(style = "", head = emptyList(), dir = null),
             LiveHeadCapture.parse("""{"head":[]}"""),
+        )
+    }
+
+    @Test
+    fun `parse reads the dir`() {
+        assertEquals(
+            LiveHeadCapture.Captured(style = "s", head = emptyList(), dir = "rtl"),
+            LiveHeadCapture.parse("""{"style":"s","dir":"rtl","head":[]}"""),
+        )
+        assertEquals(
+            LiveHeadCapture.Captured(style = "s", head = emptyList(), dir = null),
+            LiveHeadCapture.parse("""{"style":"s","dir":null,"head":[]}"""),
         )
     }
 
