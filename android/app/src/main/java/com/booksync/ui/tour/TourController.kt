@@ -96,7 +96,8 @@ sealed class TourNav {
      * [progressModeRestored] is the outcome of the same "leave no trace" rule applied to the
      * reader's tap-to-cycle progress mode (issue #743, `reader_progress` in `TourScript.kt`):
      * true when [TourController] found the mode had changed since [start] recorded it and
-     * wrote the recorded value back; false when there was nothing to put back. Computed by
+     * wrote the recorded value back; false when there was nothing to put back. The restore
+     * itself happens on every finish or quit, whether or not the pair cleanup applies. Computed by
      * [TourController] itself (it already holds the recorded value and the
      * [ReaderProgressModeStore] seam) — this event only carries the result so the handler that
      * logs pair cleanup can log this alongside it.
@@ -535,10 +536,18 @@ class TourController(
         if (running != null && isReaderOrPlayer(running.step.screen)) {
             emitPopToMain()
         }
+        // The reader's progress mode goes back whenever the tour ran, touched pair or
+        // not (issue #743): it is a device-wide setting the reader_progress step invited
+        // the user to change, with no link to the pair the cleanup rule below is about.
+        var progressModeRestored = false
+        if (running != null) {
+            progressModeRestored = progressModeStore.get() != savedProgressMode
+            if (progressModeRestored) {
+                progressModeStore.set(savedProgressMode)
+                android.util.Log.d("Tour", "progress mode restored to $savedProgressMode")
+            }
+        }
         if (running?.willCleanUp == true && running.pairId != null) {
-            val currentProgressMode = progressModeStore.get()
-            val progressModeRestored = currentProgressMode != savedProgressMode
-            if (progressModeRestored) progressModeStore.set(savedProgressMode)
             _nav.tryEmit(TourNav.CleanUp(running.pairId, progressModeRestored))
         }
         anchorWatchJob?.cancel()

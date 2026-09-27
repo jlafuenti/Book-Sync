@@ -971,16 +971,35 @@ class TourControllerTest {
     }
 
     @Test
-    fun `a touched pair never restores the progress mode`() = runTest {
-        // willCleanUp is false, so nothing about this pair -- including the
-        // progress mode -- is put back; the reader keeps whatever the user set.
+    fun `a touched pair still restores the progress mode`() = runTest {
+        // willCleanUp is false, so the pair itself is left alone -- but the progress
+        // mode is a device-wide reader setting the tour invited the user to change,
+        // not part of the pair, so it goes back regardless (issue #743).
         val scope = unconfinedScope()
         val controller = newController(pairId = 42, scope = scope)
         coEvery { picker.isUntouched(42) } returns false
         every { progressModeStore.get() } returnsMany listOf("chapter", "time")
+        val navLog = mutableListOf<TourNav>()
+        scope.launch { controller.nav.collect { navLog.add(it) } }
         controller.start()
         advanceUntilIdle()
         assertFalse(running(controller).willCleanUp)
+
+        controller.quit()
+        advanceUntilIdle()
+
+        verify { progressModeStore.set("chapter") }
+        assertTrue(navLog.none { it is TourNav.CleanUp })
+    }
+
+    @Test
+    fun `an unchanged progress mode is not rewritten`() = runTest {
+        val scope = unconfinedScope()
+        val controller = newController(pairId = 42, scope = scope)
+        coEvery { picker.isUntouched(42) } returns false
+        every { progressModeStore.get() } returns "pages"
+        controller.start()
+        advanceUntilIdle()
 
         controller.quit()
         advanceUntilIdle()
