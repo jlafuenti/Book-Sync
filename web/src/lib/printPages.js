@@ -12,7 +12,8 @@
  * Pure except `fragmentBeforeOrAt`, which reads the rendered DOM the same way
  * `EbookReader`'s `relocated` handler already does for spine matching.
  */
-import EpubCFI from 'epubjs/src/epubcfi'
+// The package's public CFI class, not a path inside it (issue #736).
+import ePub from 'epubjs'
 
 /**
  * Resolve `book.pageList.pageList` into `{ sectionIndex, fragment, label }`,
@@ -20,14 +21,31 @@ import EpubCFI from 'epubjs/src/epubcfi'
  * doesn't map to any spine item.
  *
  * `href` may carry a `#fragment`; the part before it is matched against
- * `spineHrefs` with the same suffix rule `EbookReader`'s `relocated` handler
- * uses for `location.start.href` (exact match, or either side ending in
- * `/` + the other) — full paths and relative-hrefs both resolve.
+ * `spineHrefs` by `spineIndexForPath`: an exact path, else a suffix match
+ * (either side ending in `/` + the other) when only one spine item fits.
  *
  * @param {{ pageList?: { pageList?: Array<{ href?: string, page?: number }> } }} book
  * @param {string[]} spineHrefs
  * @returns {Array<{ sectionIndex: number, fragment: string, label: string }>}
  */
+// An exact spine path wins; otherwise the suffix rule, but only when exactly
+// one spine item fits - `ch1.xhtml` against `a/ch1.xhtml` and `b/ch1.xhtml` is
+// ambiguous and resolves to none rather than to whichever came first (#736).
+export function spineIndexForPath(path, spineHrefs) {
+    if (!path) return -1
+    const exact = spineHrefs.indexOf(path)
+    if (exact !== -1) return exact
+    let found = -1
+    for (let i = 0; i < spineHrefs.length; i++) {
+        const sh = spineHrefs[i]
+        if (sh && (path.endsWith('/' + sh) || sh.endsWith('/' + path))) {
+            if (found !== -1) return -1
+            found = i
+        }
+    }
+    return found
+}
+
 export function pageListEntries(book, spineHrefs) {
     const raw = book?.pageList?.pageList
     if (!Array.isArray(raw) || !Array.isArray(spineHrefs)) return []
@@ -42,9 +60,7 @@ export function pageListEntries(book, spineHrefs) {
         const path = hashIndex === -1 ? href : href.slice(0, hashIndex)
         const fragment = hashIndex === -1 ? '' : href.slice(hashIndex + 1)
 
-        const sectionIndex = spineHrefs.findIndex(sh =>
-            sh && (path === sh || path.endsWith('/' + sh) || sh.endsWith('/' + path))
-        )
+        const sectionIndex = spineIndexForPath(path, spineHrefs)
         if (sectionIndex === -1) continue
 
         entries.push({ sectionIndex, fragment, label: String(page) })
@@ -108,5 +124,5 @@ export function fragmentBeforeOrAt(contents, fragment, startCfi, section) {
     if (!el) return false
 
     const elCfi = section.cfiFromElement(el)
-    return new EpubCFI().compare(elCfi, startCfi) <= 0
+    return new ePub.CFI().compare(elCfi, startCfi) <= 0
 }

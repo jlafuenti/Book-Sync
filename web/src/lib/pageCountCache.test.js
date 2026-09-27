@@ -74,3 +74,49 @@ describe('pageCountCache (issue #730)', () => {
         }
     })
 })
+
+// Issue #736: two tabs counting at once could each read the store, add their
+// own entry and write, the second dropping the first's. Where the browser has
+// Web Locks the read-modify-write runs under a cross-tab lock.
+import { vi, afterEach } from 'vitest'
+
+describe('pageCountCache — cross-tab writes (issue #736)', () => {
+    afterEach(() => { vi.unstubAllGlobals(); localStorage.clear() })
+
+    it('writes under a Web Lock when the browser has them', async () => {
+        const held = []
+        const request = vi.fn((name, cb) => { held.push(name); return Promise.resolve(cb()) })
+        vi.stubGlobal('navigator', { ...navigator, locks: { request } })
+
+        await writeCounts('k1', { counts: [1], chars: [2] })
+
+        expect(request).toHaveBeenCalledWith('tandem_page_counts_v1', expect.any(Function))
+        expect(readCounts('k1')).toEqual({ counts: [1], chars: [2] })
+    })
+
+    it('reads the store inside the lock, so a write made meanwhile is kept', async () => {
+        let release
+        const gate = new Promise(r => { release = r })
+        const request = vi.fn(async (name, cb) => { await gate; return cb() })
+        vi.stubGlobal('navigator', { ...navigator, locks: { request } })
+
+        const pending = writeCounts('mine', { counts: [1], chars: [1] })
+        // Another tab writes while this one waits for the lock.
+        localStorage.setItem('tandem_page_counts_v1', JSON.stringify({ theirs: { v: { counts: [9], chars: [9] }, t: 1 } }))
+        release()
+        await pending
+
+        expect(readCounts('theirs')).toEqual({ counts: [9], chars: [9] })
+        expect(readCounts('mine')).toEqual({ counts: [1], chars: [1] })
+    })
+
+    it('still writes when Web Locks are missing or refuse', async () => {
+        vi.stubGlobal('navigator', { ...navigator, locks: undefined })
+        await writeCounts('a', { counts: [1], chars: [1] })
+        expect(readCounts('a')).toEqual({ counts: [1], chars: [1] })
+
+        vi.stubGlobal('navigator', { ...navigator, locks: { request: () => Promise.reject(new Error('no')) } })
+        await writeCounts('b', { counts: [2], chars: [2] })
+        expect(readCounts('b')).toEqual({ counts: [2], chars: [2] })
+    })
+})

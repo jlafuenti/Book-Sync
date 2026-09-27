@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import EpubCFI from 'epubjs/src/epubcfi'
+import ePub from 'epubjs'
 import { pageListEntries, printListAt, fragmentBeforeOrAt } from './printPages'
 
 describe('printPages (issue #730, print-page-list mode)', () => {
@@ -112,7 +112,7 @@ describe('printPages (issue #730, print-page-list mode)', () => {
             const section = makeSection(earlierCfi)
 
             expect(fragmentBeforeOrAt(contents, 'mark', startCfi, section)).toBe(true)
-            expect(new EpubCFI().compare(earlierCfi, startCfi)).toBeLessThanOrEqual(0)
+            expect(new ePub.CFI().compare(earlierCfi, startCfi)).toBeLessThanOrEqual(0)
         })
 
         it('is false when the marker element resolves after the start CFI', () => {
@@ -141,5 +141,52 @@ describe('printPages (issue #730, print-page-list mode)', () => {
             const section = makeSection('epubcfi(/6/4[chap01ref]!/4/2/1:0)')
             expect(fragmentBeforeOrAt({}, 'mark', 'epubcfi(/6/4[chap01ref]!/4/10/2/1:5)', section)).toBe(false)
         })
+    })
+})
+
+// Issue #736: printPages.js used to deep-import `epubjs/src/epubcfi`, a path
+// inside the package that an upgrade can move. It now uses the public
+// `ePub.CFI`; keep app code off epub.js internals.
+import { readdirSync, readFileSync, statSync } from 'node:fs'
+import { join } from 'node:path'
+
+describe('no deep imports of epub.js internals (issue #736)', () => {
+    it('app code imports only the epubjs package entry', () => {
+        const root = join(__dirname, '..')
+        const offenders = []
+        const walk = dir => {
+            for (const name of readdirSync(dir)) {
+                const p = join(dir, name)
+                if (statSync(p).isDirectory()) walk(p)
+                else if (/\.(jsx?)$/.test(name) && !/\.test\./.test(name) && /from ['"]epubjs\//.test(readFileSync(p, 'utf8'))) offenders.push(p)
+            }
+        }
+        walk(root)
+        expect(offenders).toEqual([])
+    })
+})
+
+// Issue #736: page-list hrefs were matched to the spine by suffix alone, so
+// `ch1.xhtml` could land on whichever of `a/ch1.xhtml` and `b/ch1.xhtml` came
+// first. An exact path wins; a suffix match counts only when it is the only one.
+describe('pageListEntries — href collisions (issue #736)', () => {
+    const book = (...hrefs) => ({ pageList: { pageList: hrefs.map((href, i) => ({ href, page: i + 1 })) } })
+
+    it('prefers the exact path over an earlier suffix match', () => {
+        const spine = ['a/ch1.xhtml', 'b/ch1.xhtml']
+        expect(pageListEntries(book('b/ch1.xhtml#p1'), spine)).toEqual([{ sectionIndex: 1, fragment: 'p1', label: '1' }])
+    })
+
+    it('still resolves a unique suffix match either way round', () => {
+        const spine = ['OEBPS/a/ch1.xhtml', 'OEBPS/b/ch2.xhtml']
+        expect(pageListEntries(book('b/ch2.xhtml#x', 'root/OEBPS/a/ch1.xhtml'), spine)).toEqual([
+            { sectionIndex: 1, fragment: 'x', label: '1' },
+            { sectionIndex: 0, fragment: '', label: '2' },
+        ])
+    })
+
+    it('drops an entry whose suffix fits more than one spine item', () => {
+        const spine = ['a/ch1.xhtml', 'b/ch1.xhtml']
+        expect(pageListEntries(book('ch1.xhtml#p1'), spine)).toEqual([])
     })
 })
