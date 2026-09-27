@@ -144,3 +144,23 @@ describe('AccountPage — community link (issue #714)', () => {
         expect(link.getAttribute('rel')).toContain('noreferrer')
     })
 })
+
+// Issue #598: the guided walkthrough is offered once (TourProvider) but must
+// stay reachable afterward — this is that way back in.
+describe('AccountPage — Help card / replay the walkthrough (issue #598)', () => {
+    it('shows a "Replay the walkthrough" row, tagged as the AccountReplayTour anchor', () => {
+        renderPage()
+        expect(screen.getByText('Help')).toBeInTheDocument()
+        expect(screen.getByText('Replay the walkthrough')).toBeInTheDocument()
+        expect(screen.getByText('About five minutes, on your own library.')).toBeInTheDocument()
+        const anchorNode = screen.getByText('Replay the walkthrough').closest('[data-tour]')
+        expect(anchorNode).toHaveAttribute('data-tour', 'AccountReplayTour')
+    })
+
+    it('calls useTour().replay() when clicked, and does not crash outside a TourProvider', () => {
+        renderPage()
+        // Rendered without a <TourProvider> (like every other page test in this
+        // file); useTour() falls back to a no-op, so the click must not throw.
+        expect(() => fireEvent.click(screen.getByRole('button', { name: 'Replay' }))).not.toThrow()
+    })
+})

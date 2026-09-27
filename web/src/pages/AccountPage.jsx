@@ -2,6 +2,8 @@ import React, { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { deleteAccount } from '../api'
 import { COMMUNITY_DISCORD_URL } from '../lib/community'
+import { useTourAnchor, TourAnchors } from '../tour/anchors'
+import { useTour } from '../tour/TourContext'
 
 const CONFIRM_WORD = 'DELETE'
 
@@ -24,6 +26,8 @@ export default function AccountPage({ user, onAccountDeleted }) {
     const [confirm, setConfirm] = useState('')
     const [error, setError] = useState('')
     const [busy, setBusy] = useState(false)
+    const { replay } = useTour()
+    const replayAnchorRef = useTourAnchor(TourAnchors.AccountReplayTour)
 
     const ready = password.length > 0 && confirm === CONFIRM_WORD && !busy
 
@@ -75,6 +79,26 @@ export default function AccountPage({ user, onAccountDeleted }) {
                 >
                     Join the community on Discord
                 </a>
+            </div>
+
+            {/* Issue #598: the walkthrough is offered once (TourProvider), but a
+                new admin, or anyone who dismissed it, needs a way back in. */}
+            <h2 style={{ fontSize: '1rem' }}>Help</h2>
+            <div className="card" style={{ padding: 16, marginBottom: 24 }}>
+                <div
+                    ref={replayAnchorRef}
+                    style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}
+                >
+                    <div>
+                        <div style={{ fontWeight: 600 }}>Replay the walkthrough</div>
+                        <div style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>
+                            About five minutes, on your own library.
+                        </div>
+                    </div>
+                    <button className="btn btn-secondary" onClick={replay}>
+                        Replay
+                    </button>
+                </div>
             </div>
 
             <h2 style={{ fontSize: '1rem', color: 'var(--error)' }}>

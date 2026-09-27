@@ -1,0 +1,122 @@
+/*
+ * The guided walkthrough overlay (issue #598, Track A).
+ *
+ * z-index 1100: one layer above .modal-overlay (1000, index.css) and the
+ * reader/player, which is deliberate — the tour spotlights controls that
+ * live inside those surfaces (ReaderToolbar, PlayerTransport), so it has to
+ * sit on top of them, not behind.
+ */
+
+.tour-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 1100;
+    pointer-events: none;
+}
+
+/* One of the four blockers framing a spotlighted control, or (with no hole)
+   a single full-viewport blocker. Each one both blocks clicks outside the
+   hole and paints the dimmed scrim, via the box-shadow on .tour-hole below —
+   these blockers themselves are transparent. */
+.tour-blocker {
+    position: fixed;
+    background: transparent;
+    pointer-events: auto;
+}
+
+.tour-blocker--full {
+    inset: 0;
+    background: rgba(0, 0, 0, 0.6);
+}
+
+/* Sits exactly over the spotlighted control. Its box-shadow paints the dimmed
+   scrim everywhere else in one paint, and pointer-events:none means clicks
+   land on the real control beneath it, not on this layer. */
+.tour-hole {
+    position: fixed;
+    box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.6);
+    pointer-events: none;
+    border-radius: var(--radius, 6px);
+}
+
+.tour-card {
+    position: fixed;
+    pointer-events: auto;
+    background: var(--bg-card);
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius-lg, 12px);
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+    padding: 20px;
+    width: 320px;
+    max-width: calc(100vw - 32px);
+    color: var(--text-primary);
+}
+
+.tour-card--pending {
+    width: auto;
+}
+
+.tour-card-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 8px;
+    margin-bottom: 8px;
+}
+
+.tour-card-title {
+    font-size: 1rem;
+    font-weight: 600;
+    margin: 0;
+}
+
+.tour-card-quit {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    font-size: 1.1rem;
+    line-height: 1;
+    cursor: pointer;
+    padding: 2px 6px;
+}
+
+.tour-card-body {
+    font-size: 0.9rem;
+    color: var(--text-muted);
+    margin: 0 0 12px 0;
+}
+
+.tour-card-hint {
+    font-size: 0.8rem;
+    color: var(--accent-ink, var(--accent));
+    margin: 0 0 12px 0;
+}
+
+.tour-card-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.tour-card-progress {
+    font-size: 0.8rem;
+    color: var(--text-muted);
+}
+
+.tour-card-actions {
+    display: flex;
+    gap: 8px;
+}
+
+@media (max-width: 768px) {
+    .tour-card--mobile {
+        position: fixed;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        width: 100%;
+        max-width: 100%;
+        border-radius: var(--radius-lg, 12px) var(--radius-lg, 12px) 0 0;
+    }
+}
