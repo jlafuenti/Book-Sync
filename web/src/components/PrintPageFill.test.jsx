@@ -81,6 +81,20 @@ describe('print page count fill', () => {
         await waitFor(() => expect(cancelMock).toHaveBeenCalled())
     })
 
+    it('shows why the status could not be read', async () => {
+        statusMock.mockRejectedValue(new Error('Failed to load print page status'))
+        render(<PrintPageFill canEdit />)
+        expect(await screen.findByText(/failed to load print page status/i)).toBeInTheDocument()
+    })
+
+    it('shows why a cancel failed', async () => {
+        statusMock.mockResolvedValue({ ...IDLE, running: true, current: 5, total: 312 })
+        cancelMock.mockRejectedValue(new Error('Failed to cancel the lookup'))
+        render(<PrintPageFill canEdit pollMs={1000} />)
+        fireEvent.click(await screen.findByRole('button', { name: /cancel/i }))
+        expect(await screen.findByText(/failed to cancel the lookup/i)).toBeInTheDocument()
+    })
+
     it('shows why the job could not start', async () => {
         startMock.mockRejectedValue(new Error('Print page counts are already being looked up.'))
         render(<PrintPageFill canEdit />)
