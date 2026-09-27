@@ -34,7 +34,7 @@ object ReaderProgress {
     data class PageLabel(val current: String?, val total: String?, val kind: String)
     fun resolvePageLabel(pageMode: String, fraction: Double?, ebook: EbookPosition?, printList: PrintList?, printPageCount: Int?): PageLabel {
         if (pageMode == "print") {
-            if (printList?.lastLabel != null) return PageLabel(printList.currentLabel ?: printList.firstLabel, printList.lastLabel, "print")
+            if (!printList?.lastLabel.isNullOrEmpty()) return PageLabel(printList.currentLabel ?: printList.firstLabel, printList.lastLabel, "print")
             if (printPageCount != null && printPageCount >= 1) {
                 val f = (fraction ?: 0.0).coerceIn(0.0, 1.0)
                 val current = ceil(f * printPageCount).toInt().coerceIn(1, printPageCount)

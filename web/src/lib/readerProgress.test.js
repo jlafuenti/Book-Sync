@@ -7,6 +7,7 @@ const cases = JSON.parse(readFileSync(resolve(__dirname, '../../../server/tests/
 
 describe('reader progress rules (issue #730, shared with Android)', () => {
     it('cycles modes', () => { for (const [from, to] of cases.next_mode) expect(P.nextProgressMode(from)).toBe(to) })
+    it('parses progress mode', () => { for (const [v, want] of cases.parse_progress_mode) expect(P.parseProgressMode(v)).toBe(want) })
     it('parses page mode', () => { for (const [v, want] of cases.parse_page_mode) expect(P.parsePageMode(v)).toBe(want) })
     it('page in section', () => { for (const c of cases.page_in_section) expect(P.pageInSection(c.progression, c.total)).toBe(c.expect) })
     it('ebook position', () => { for (const c of cases.ebook_position) expect(P.ebookPosition(c.counts, c.section, c.page)).toEqual(c.expect) })

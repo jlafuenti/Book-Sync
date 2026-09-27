@@ -1,6 +1,7 @@
 {
   "_doc": "Issue #730. Reader progress indicator rules, shared by web/src/lib/readerProgress.js and android ReaderProgress.kt.",
   "next_mode": [["percent", "pages"], ["pages", "chapter"], ["chapter", "time"], ["time", "percent"], ["bogus", "percent"], [null, "percent"]],
+  "parse_progress_mode": [["percent","percent"],["pages","pages"],["chapter","chapter"],["time","time"],["bogus","percent"],[null,"percent"],["PAGES","percent"]],
   "parse_page_mode": [["print", "print"], ["ebook", "ebook"], [null, "ebook"], ["PRINT", "ebook"]],
   "page_in_section": [
     {"progression": 0, "total": 10, "expect": 1},
@@ -40,7 +41,10 @@
     {"name": "no print data falls back to ebook pages", "in": {"pageMode": "print", "fraction": 0.4, "ebook": {"page": 343, "total": 1002}, "printList": null, "printPageCount": null},
      "expect": {"current": "343", "total": "1002", "kind": "ebook-fallback"}, "text": "343 of 1002"},
     {"name": "no print data and still counting", "in": {"pageMode": "print", "fraction": 0.4, "ebook": null, "printList": null, "printPageCount": null},
-     "expect": {"current": null, "total": null, "kind": "pending"}, "text": "…"}
+     "expect": {"current": null, "total": null, "kind": "pending"}, "text": "…"},
+    {"name": "an empty page-list label counts as no page list", "in": {"pageMode": "print", "fraction": 0.4, "ebook": {"page": 343, "total": 1002},
+      "printList": {"currentLabel": "", "firstLabel": "", "lastLabel": ""}, "printPageCount": 300},
+     "expect": {"current": "120", "total": "300", "kind": "print"}, "text": "120 of 300"}
   ],
   "chapter_text": [[5, 23, "5 of 23 in chapter"], [null, 23, "…"], [5, null, "…"]],
   "speed": [

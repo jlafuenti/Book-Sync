@@ -39,6 +39,15 @@ class ReaderProgressParityTest {
     }
 
     @Test
+    fun `parses progress mode`() {
+        cases()["parse_progress_mode"]!!.jsonArray.forEach { pair ->
+            val (v, want) = pair.jsonArray
+            val vStr = v.takeIf { it != JsonNull }?.jsonPrimitive?.contentOrNull
+            assertEquals(want.jsonPrimitive.content, ReaderProgress.parseProgressMode(vStr))
+        }
+    }
+
+    @Test
     fun `parses page mode`() {
         cases()["parse_page_mode"]!!.jsonArray.forEach { pair ->
             val (v, want) = pair.jsonArray
