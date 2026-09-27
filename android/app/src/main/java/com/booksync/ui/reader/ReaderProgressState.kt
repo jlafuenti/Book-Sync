@@ -36,7 +36,9 @@ class ReaderProgressState(private val prefs: ReaderProgressPrefs) {
     /** `"ebook"` or `"print"`; setting it normalizes and persists. */
     var pageMode: String = prefs.pageMode
         set(value) {
-            field = ReaderProgress.parsePageMode(value)
+            val next = ReaderProgress.parsePageMode(value)
+            if (next == "print" && field != "print" && mode == "pages") armNotice(true)
+            field = next
             prefs.pageMode = field
         }
 
@@ -92,7 +94,23 @@ class ReaderProgressState(private val prefs: ReaderProgressPrefs) {
     fun cycle(): String {
         mode = ReaderProgress.nextProgressMode(mode)
         prefs.progressMode = mode
+        armNotice(mode == "pages")
         return mode
+    }
+
+    /**
+     * The fallback notice: armed by a tap into pages mode (or choosing print
+     * pages while there), it shows [ReaderProgress.FALLBACK_NOTICE] once the
+     * page label resolves to the ebook-page fallback, for
+     * [ReaderProgress.FALLBACK_NOTICE_MS]. A label that resolves to anything
+     * else disarms it. Reopening in pages mode never arms it.
+     */
+    private var noticeArmed = false
+    private var noticeStartedAtMs: Long? = null
+
+    private fun armNotice(armed: Boolean) {
+        noticeArmed = armed
+        noticeStartedAtMs = null
     }
 
     /**
@@ -201,10 +219,37 @@ class ReaderProgressState(private val prefs: ReaderProgressPrefs) {
     val isEbookFallback: Boolean
         get() = mode == "pages" && pageLabel().kind == "ebook-fallback"
 
-    /** The indicator's text; the ebook-page fallback carries a superscript `ᵉ`. */
-    fun text(): String = if (isEbookFallback) "${label()}ᵉ" else label()
+    /**
+     * The indicator's text at [nowMs]: the fallback notice while it runs,
+     * otherwise the mode's value. Reading it is what starts an armed notice,
+     * so the notice's clock begins when the reader first shows it.
+     */
+    fun text(nowMs: Long = System.currentTimeMillis()): String =
+        if (noticeShowing(nowMs)) ReaderProgress.FALLBACK_NOTICE else label()
 
-    /** The accessible name: the full value, and what the fallback marker means. */
+    /** How long the notice has left to show at [nowMs], or null when none is showing. */
+    fun noticeRemainingMs(nowMs: Long): Long? {
+        val started = noticeStartedAtMs ?: return null
+        return (started + ReaderProgress.FALLBACK_NOTICE_MS - nowMs).takeIf { it > 0 && noticeArmed }
+    }
+
+    private fun noticeShowing(nowMs: Long): Boolean {
+        if (!noticeArmed || mode != "pages") return false
+        when (pageLabel().kind) {
+            "pending" -> return false
+            "ebook-fallback" -> Unit
+            else -> {
+                armNotice(false)
+                return false
+            }
+        }
+        val started = noticeStartedAtMs ?: nowMs.also { noticeStartedAtMs = it }
+        if (nowMs - started < ReaderProgress.FALLBACK_NOTICE_MS) return true
+        armNotice(false)
+        return false
+    }
+
+    /** The accessible name: the value (never the notice), and whether the pages are ebook pages standing in for print. */
     fun contentDescription(): String =
         "Reading progress: ${label()}${if (isEbookFallback) " (ebook pages)" else ""}, tap to change"
 

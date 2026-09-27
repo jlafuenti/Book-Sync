@@ -10,6 +10,7 @@ import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.long
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
@@ -175,6 +176,13 @@ class ReaderProgressParityTest {
     }
 
     @Test
+    fun `fallback notice`() {
+        val notice = cases()["fallback_notice"]!!.jsonObject
+        assertEquals(notice["text"]!!.jsonPrimitive.content, ReaderProgress.FALLBACK_NOTICE)
+        assertEquals(notice["ms"]!!.jsonPrimitive.long, ReaderProgress.FALLBACK_NOTICE_MS)
+    }
+
+    @Test
     fun `keeps at most 50 samples`() {
         var s = emptyList<Double>()
         repeat(60) { s = ReaderProgress.addSpeedSample(s, 1500.0, 60.0) }
@@ -204,6 +212,7 @@ class ReaderProgressParityTest {
         val covered = setOf(
             "next_mode", "parse_progress_mode", "parse_page_mode", "page_in_section", "ebook_position",
             "resolve_page_label", "chapter_text", "speed", "add_sample", "seconds_left", "time_text",
+            "fallback_notice",
         )
         val keys = cases().keys.filter { it != "_doc" }.toSet()
         assertEquals(covered, keys)

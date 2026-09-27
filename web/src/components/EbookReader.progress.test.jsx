@@ -245,7 +245,7 @@ describe('EbookReader — print pages (issue #730)', () => {
         await waitFor(() => expect(indicator()).toHaveTextContent('120 of 300'))
     })
 
-    it('falls back to ebook pages, marked, when there is no count and no page list', async () => {
+    it('falls back to ebook pages, unmarked, when there is no count and no page list', async () => {
         countSectionPagesMock.mockResolvedValue(COUNTED)
         localStorage.setItem('tandem_reader_progress_mode', 'pages')
         localStorage.setItem('tandem_reader_page_mode', 'print')
@@ -253,11 +253,24 @@ describe('EbookReader — print pages (issue #730)', () => {
         relocate(handlers, { section: 1, page: 2, percentage: 0.4 })
 
         await waitFor(() => expect(indicator()).toHaveTextContent('5 of 8'))
+        expect(indicator().textContent).toBe('5 of 8')
+        expect(indicator().querySelector('sup')).toBeNull()
         expect(indicator()).toHaveAccessibleName('Reading progress: 5 of 8 (ebook pages), tap to change')
-        const marker = indicator().querySelector('sup')
-        expect(marker).toHaveTextContent('e')
-        expect(marker).toHaveAttribute('aria-hidden', 'true')
-        expect(marker).not.toHaveAttribute('aria-label')
+    })
+
+    it('says there is no print page count on a tap into pages mode, keeping the count in the name', async () => {
+        countSectionPagesMock.mockResolvedValue(COUNTED)
+        localStorage.setItem('tandem_reader_progress_mode', 'percent')
+        localStorage.setItem('tandem_reader_page_mode', 'print')
+        const { handlers } = await openReader()
+        relocate(handlers, { section: 1, page: 2, percentage: 0.4 })
+        await waitFor(() => expect(countSectionPagesMock).toHaveBeenCalled())
+
+        fireEvent.click(indicator())
+
+        await waitFor(() => expect(indicator()).toHaveTextContent('No print page count, showing ebook pages'))
+        expect(indicator()).toHaveAccessibleName('Reading progress: 5 of 8 (ebook pages), tap to change')
+        expect(indicator()).toHaveAttribute('title', 'No print page count, showing ebook pages')
     })
 
     it('treats a failed ebook fetch as no print page count', async () => {

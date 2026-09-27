@@ -5,6 +5,9 @@
  */
 export const PROGRESS_MODES = ['percent', 'pages', 'chapter', 'time']
 export const DEFAULT_CHARS_PER_SECOND = 25 // about 250 words a minute at 6 characters a word
+// Shown for FALLBACK_NOTICE_MS when a tap into pages mode finds no print pages.
+export const FALLBACK_NOTICE = 'No print page count, showing ebook pages'
+export const FALLBACK_NOTICE_MS = 3000
 const MIN_DWELL_S = 2
 const MAX_DWELL_S = 300
 const MIN_SAMPLES = 5

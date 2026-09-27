@@ -24,7 +24,8 @@ operator must do by hand rather than read about afterwards.
   book ("5 of 8"), the page in the chapter, and the time left in the chapter. A new **Ebook pages /
   Print pages** setting beside the font buttons picks which page numbers to show. Print pages come
   from the book's own page list when it has one, otherwise from the ebook's Print pages field; with
-  neither, the reader shows ebook pages marked with a small "e". Ebook pages are counted in the
+  neither, the reader shows ebook pages, saying so briefly ("No print page count, showing ebook
+  pages") when you tap into the page view. Ebook pages are counted in the
   background once the book opens, at the current window and font size, and kept on the device so
   the next open is instant. The time left uses your reading speed on this device, learned from
   ordinary page turns. The chosen view and setting are kept per device.

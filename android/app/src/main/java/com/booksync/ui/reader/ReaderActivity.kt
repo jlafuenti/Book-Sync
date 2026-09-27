@@ -1108,9 +1108,15 @@ class ReaderActivity : AppCompatActivity() {
     /** Shows [progressState] in the indicator; the slider owns the text while it is dragged. */
     private fun renderProgress() {
         if (isSeeking) return
-        progressText.text = progressState.text()
+        val now = System.currentTimeMillis()
+        progressText.text = progressState.text(now)
         progressText.contentDescription = progressState.contentDescription()
+        // The "no print page count" notice gives way to the ebook count by itself.
+        progressText.removeCallbacks(renderProgressRunnable)
+        progressState.noticeRemainingMs(now)?.let { progressText.postDelayed(renderProgressRunnable, it) }
     }
+
+    private val renderProgressRunnable = Runnable { renderProgress() }
 
     private fun goToProgress(progress: Double) {
         val pub = publication ?: return

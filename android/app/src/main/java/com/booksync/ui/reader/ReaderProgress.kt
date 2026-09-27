@@ -7,6 +7,9 @@ import kotlin.math.roundToInt
 object ReaderProgress {
     val PROGRESS_MODES = listOf("percent", "pages", "chapter", "time")
     const val DEFAULT_CHARS_PER_SECOND = 25.0
+    /** Shown for [FALLBACK_NOTICE_MS] when a tap into pages mode finds no print pages. */
+    const val FALLBACK_NOTICE = "No print page count, showing ebook pages"
+    const val FALLBACK_NOTICE_MS = 3000L
     private const val MIN_DWELL_S = 2.0
     private const val MAX_DWELL_S = 300.0
     private const val MIN_SAMPLES = 5
