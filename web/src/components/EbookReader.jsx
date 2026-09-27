@@ -837,6 +837,9 @@ function EbookReader({ ebookId, pairId, initialChapter, initialTextPreview, onCl
         setShowThemeMenu(false)
     }, [])
 
+    // What the progress indicator shows; its accessible name carries the same.
+    const progressText = progress.mode === 'percent' ? `${progressPercent.toFixed(1)}%` : progress.text
+
     const handleTocClick = (href) => {
         noteUserNavigation()
         renditionRef.current?.display(href)
@@ -923,10 +926,10 @@ function EbookReader({ ebookId, pairId, initialChapter, initialTextPreview, onCl
                         type="button"
                         className="ebook-progress-text"
                         onClick={progress.cycle}
-                        aria-label="Reading progress, tap to change"
+                        aria-label={`Reading progress: ${progressText}${progress.fallback ? ' (ebook pages)' : ''}, tap to change`}
                     >
-                        {progress.mode === 'percent' ? `${progressPercent.toFixed(1)}%` : progress.text}
-                        {progress.fallback && <sup aria-label="ebook pages">e</sup>}
+                        {progressText}
+                        {progress.fallback && <sup aria-hidden="true">e</sup>}
                     </button>
                     {saveState === 'error' && (
                         <span className="ebook-progress-text" style={{ color: 'var(--error)' }}>

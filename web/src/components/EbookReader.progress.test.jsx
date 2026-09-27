@@ -124,7 +124,10 @@ async function openReader(props = {}) {
     return { ...fake, ...utils }
 }
 
-function relocate(handlers, { section, page, total = 5, percentage = 0.415 }) {
+// `percentage` is left off the location when passed as undefined, as epub.js
+// does before `book.locations` has been generated.
+function relocate(handlers, { section, page, total = 5, ...rest }) {
+    const percentage = 'percentage' in rest ? rest.percentage : 0.415
     act(() => {
         handlers.relocated({
             start: {
@@ -135,7 +138,7 @@ function relocate(handlers, { section, page, total = 5, percentage = 0.415 }) {
     })
 }
 
-const indicator = () => screen.getByRole('button', { name: 'Reading progress, tap to change' })
+const indicator = () => screen.getByRole('button', { name: /^Reading progress/ })
 
 describe('EbookReader — the progress indicator cycles its modes (issue #730)', () => {
     it('shows the percent, then pages: pending while counting, then the book-wide page', async () => {
@@ -178,6 +181,21 @@ describe('EbookReader — the progress indicator cycles its modes (issue #730)',
         expect(indicator()).toHaveTextContent('…')
     })
 
+    it('its accessible name carries the value shown, in every mode', async () => {
+        countSectionPagesMock.mockResolvedValue(COUNTED)
+        const { handlers } = await openReader()
+        relocate(handlers, { section: 1, page: 2 })
+        await waitFor(() => expect(countSectionPagesMock).toHaveBeenCalled())
+
+        expect(indicator()).toHaveAccessibleName('Reading progress: 41.5%, tap to change')
+        fireEvent.click(indicator())
+        await waitFor(() => expect(indicator()).toHaveAccessibleName('Reading progress: 5 of 8, tap to change'))
+        fireEvent.click(indicator())
+        expect(indicator()).toHaveAccessibleName('Reading progress: 2 of 5 in chapter, tap to change')
+        fireEvent.click(indicator())
+        expect(indicator()).toHaveAccessibleName('Reading progress: 3 min left in chapter, tap to change')
+    })
+
     it('keeps the chosen mode across a remount', async () => {
         countSectionPagesMock.mockResolvedValue(COUNTED)
         const first = await openReader()
@@ -205,6 +223,25 @@ describe('EbookReader — print pages (issue #730)', () => {
         expect(getEbookMock).toHaveBeenCalledWith(7)
     })
 
+    it('print pages scaled from the count wait for the book-wide position', async () => {
+        getEbookMock.mockResolvedValue({ print_page_count: 300 })
+        countSectionPagesMock.mockResolvedValue(COUNTED)
+        localStorage.setItem('tandem_reader_progress_mode', 'pages')
+        localStorage.setItem('tandem_reader_page_mode', 'print')
+        const { handlers } = await openReader()
+        await waitFor(() => expect(getEbookMock).toHaveBeenCalled())
+        await waitFor(() => expect(countSectionPagesMock).toHaveBeenCalled())
+        // Before epub.js has generated its locations: no percentage yet.
+        relocate(handlers, { section: 1, page: 2, percentage: undefined })
+        await act(async () => { await new Promise(r => setTimeout(r, 20)) })
+        expect(indicator()).toHaveTextContent('…')
+        expect(indicator()).not.toHaveTextContent('1 of 300')
+
+        // locations.generate → reportLocation re-reports with a percentage.
+        relocate(handlers, { section: 1, page: 2, percentage: 0.4 })
+        await waitFor(() => expect(indicator()).toHaveTextContent('120 of 300'))
+    })
+
     it('falls back to ebook pages, marked, when there is no count and no page list', async () => {
         countSectionPagesMock.mockResolvedValue(COUNTED)
         localStorage.setItem('tandem_reader_progress_mode', 'pages')
@@ -213,7 +250,11 @@ describe('EbookReader — print pages (issue #730)', () => {
         relocate(handlers, { section: 1, page: 2, percentage: 0.4 })
 
         await waitFor(() => expect(indicator()).toHaveTextContent('5 of 8'))
-        expect(screen.getByLabelText('ebook pages')).toHaveTextContent('e')
+        expect(indicator()).toHaveAccessibleName('Reading progress: 5 of 8 (ebook pages), tap to change')
+        const marker = indicator().querySelector('sup')
+        expect(marker).toHaveTextContent('e')
+        expect(marker).toHaveAttribute('aria-hidden', 'true')
+        expect(marker).not.toHaveAttribute('aria-label')
     })
 
     it('treats a failed ebook fetch as no print page count', async () => {
@@ -225,7 +266,7 @@ describe('EbookReader — print pages (issue #730)', () => {
         relocate(handlers, { section: 1, page: 2, percentage: 0.4 })
 
         await waitFor(() => expect(indicator()).toHaveTextContent('5 of 8'))
-        expect(screen.getByLabelText('ebook pages')).toBeInTheDocument()
+        expect(indicator()).toHaveAccessibleName(/\(ebook pages\)/)
     })
 
     it('uses the embedded page list when the book has one', async () => {
@@ -248,7 +289,8 @@ describe('EbookReader — print pages (issue #730)', () => {
         // Neither marker in section 1 is rendered in the fake document, so the
         // last one at or before the position is page 1, in section 0.
         await waitFor(() => expect(indicator()).toHaveTextContent('1 of 3'))
-        expect(screen.queryByLabelText('ebook pages')).not.toBeInTheDocument()
+        expect(indicator().querySelector('sup')).toBeNull()
+        expect(indicator()).toHaveAccessibleName('Reading progress: 1 of 3, tap to change')
     })
 
     it('the page-number setting switches between ebook and print pages and is saved', async () => {

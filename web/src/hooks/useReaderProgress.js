@@ -15,6 +15,10 @@ export const PROGRESS_MODE_KEY = 'tandem_reader_progress_mode'
 export const PAGE_MODE_KEY = 'tandem_reader_page_mode'
 export const SPEED_SAMPLES_KEY = 'tandem_reader_speed_samples'
 const RESIZE_DEBOUNCE_MS = 500
+// `locationsReady`: epub.js sets `location.start.percentage` only once
+// `book.locations` has been generated (rendition.located), so until then the
+// book-wide fraction is not known.
+const NO_POSITION = { sectionIndex: -1, page: 0, total: 0, fraction: 0, locationsReady: false }
 
 function readStored(key) {
     try { return localStorage.getItem(key) } catch { return null }
@@ -58,7 +62,7 @@ export default function useReaderProgress({ ebookId, fontSize, ready, viewerRef,
     const countsRef = useRef(null)
     const [samples, setSamples] = useState(loadSamples)
     const samplesRef = useRef(samples)
-    const [position, setPosition] = useState({ sectionIndex: -1, page: 0, total: 0, fraction: 0 })
+    const [position, setPosition] = useState(NO_POSITION)
     const [printList, setPrintList] = useState(null)
     const [printPageCount, setPrintPageCount] = useState(null)
     const [viewerSize, setViewerSize] = useState(null)
@@ -75,18 +79,30 @@ export default function useReaderProgress({ ebookId, fontSize, ready, viewerRef,
     }, [])
 
     const cycle = useCallback(() => {
-        setMode(m => {
-            const next = nextProgressMode(m)
-            writeStored(PROGRESS_MODE_KEY, next)
-            return next
-        })
-    }, [])
+        const next = nextProgressMode(mode)
+        writeStored(PROGRESS_MODE_KEY, next)
+        setMode(next)
+    }, [mode])
 
     const setPageMode = useCallback((value) => {
         const next = parsePageMode(value)
         writeStored(PAGE_MODE_KEY, next)
         setPageModeState(next)
     }, [])
+
+    // A different ebook under a mounted reader: drop the previous book's
+    // numbers at once, so pages and time read "…" rather than stale values
+    // until the new book opens and is counted.
+    const shownEbookRef = useRef(ebookId)
+    useEffect(() => {
+        if (shownEbookRef.current === ebookId) return
+        shownEbookRef.current = ebookId
+        applyCounts(null)
+        setPosition(NO_POSITION)
+        setPrintList(null)
+        printEntriesRef.current = []
+        lastPageRef.current = null
+    }, [ebookId, applyCounts])
 
     // The ebook's print page count, once per ebook. Not every page that opens
     // the reader holds the ebook record, so the reader fetches it itself.
@@ -165,7 +181,8 @@ export default function useReaderProgress({ ebookId, fontSize, ready, viewerRef,
     const onRelocated = useCallback(({ location, spineIndex, fraction, book, rendition }) => {
         const page = location.start.displayed?.page || 0
         const total = location.start.displayed?.total || 0
-        setPosition({ sectionIndex: spineIndex, page, total, fraction })
+        const locationsReady = Number.isFinite(location.start.percentage)
+        setPosition({ sectionIndex: spineIndex, page, total, fraction, locationsReady })
 
         const entries = printEntriesRef.current
         if (entries.length && spineIndex >= 0) {
@@ -204,10 +221,16 @@ export default function useReaderProgress({ ebookId, fontSize, ready, viewerRef,
     // The indicator's text in the page-based modes; percent is the reader's own.
     let text = null
     let fallback = false
-    const { sectionIndex, page, total, fraction } = position
+    const { sectionIndex, page, total, fraction, locationsReady } = position
     if (mode === 'pages') {
         const ebook = counts ? ebookPosition(counts.counts, sectionIndex, page) : null
-        const label = resolvePageLabel({ pageMode, fraction, ebook, printList, printPageCount })
+        // Print pages scaled from the print page count need the book-wide
+        // fraction; before epub.js has its locations that is 0, which would
+        // read "1 of N". The embedded page list does not depend on it.
+        const scalesFromCount = pageMode === 'print' && !printList?.lastLabel && printPageCount >= 1
+        const label = scalesFromCount && !locationsReady
+            ? { current: null, total: null, kind: 'pending' }
+            : resolvePageLabel({ pageMode, fraction, ebook, printList, printPageCount })
         text = formatPageLabel(label)
         fallback = label.kind === 'ebook-fallback'
     } else if (mode === 'chapter') {

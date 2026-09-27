@@ -171,6 +171,22 @@ describe('useReaderProgress — the page count', () => {
         await waitFor(() => expect(countSectionPagesMock).toHaveBeenCalledTimes(2))
     })
 
+    it("drops the previous book's numbers as soon as the ebook changes", async () => {
+        countSectionPagesMock.mockResolvedValue(COUNTED)
+        localStorage.setItem(PROGRESS_MODE_KEY, 'pages')
+        const { result, rerender, props } = setup()
+        await waitFor(() => expect(countSectionPagesMock).toHaveBeenCalled())
+        act(() => result.current.onRelocated({ location: location(2), spineIndex: 1, fraction: 0.4 }))
+        await waitFor(() => expect(result.current.text).toBe('5 of 8'))
+
+        rerender({ ...props, ebookId: 8 })
+        expect(result.current.text).toBe('…')
+        act(() => result.current.cycle())   // chapter
+        expect(result.current.text).toBe('…')
+        act(() => result.current.cycle())   // time
+        expect(result.current.text).toBe('…')
+    })
+
     it('warns and stays pending when the count fails; an abort is silent', async () => {
         const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
         localStorage.setItem(PROGRESS_MODE_KEY, 'pages')
