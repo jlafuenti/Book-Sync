@@ -685,9 +685,15 @@ def test_0024_backfills_a_null_captured_at_from_updated_at():
     command.upgrade(cfg, "0023_audio_fingerprint")
 
     with Session(engine) as session:
-        user = User(username="reader", email="reader@example.com", hashed_password="x")
-        session.add(user)
-        session.flush()
+        # Core insert naming only the columns that exist at this revision: a
+        # `User(...)` ORM insert names every mapped column, including ones a
+        # later revision adds (e.g. `web_tour_offered_at`, issue #598).
+        user_id = session.execute(
+            insert(User.__table__)
+            .values(username="reader", email="reader@example.com", hashed_password="x",
+                    is_admin=False, is_active=True, created_at=datetime(2026, 1, 1))
+            .returning(User.__table__.c.id)
+        ).scalar_one()
         pair_ids = []
         for n in range(2):
             # Core insert, naming only the columns this test needs: the DB is
@@ -710,9 +716,9 @@ def test_0024_backfills_a_null_captured_at_from_updated_at():
             session.flush()
             captured = None if n == 0 else stamped
             session.add_all([
-                Bookmark(user_id=user.id, book_pair_id=pair.id, source=BookmarkSource.EBOOK,
+                Bookmark(user_id=user_id, book_pair_id=pair.id, source=BookmarkSource.EBOOK,
                          updated_at=old, captured_at=captured),
-                UserProgress(user_id=user.id, media_type=ProgressType.EBOOK,
+                UserProgress(user_id=user_id, media_type=ProgressType.EBOOK,
                              ebook_id=eb_id, book_pair_id=pair.id,
                              updated_at=old, captured_at=captured),
             ])
@@ -754,9 +760,15 @@ def test_0026_moves_an_orphaned_position_onto_its_pair():
     command.upgrade(cfg, "0025_book_pairs_one_to_one")
 
     with Session(engine) as session:
-        user = User(username="reader", email="reader@example.com", hashed_password="x")
-        session.add(user)
-        session.flush()
+        # Core insert naming only the columns that exist at this revision: a
+        # `User(...)` ORM insert names every mapped column, including ones a
+        # later revision adds (e.g. `web_tour_offered_at`, issue #598).
+        user_id = session.execute(
+            insert(User.__table__)
+            .values(username="reader", email="reader@example.com", hashed_password="x",
+                    is_admin=False, is_active=True, created_at=datetime(2026, 1, 1))
+            .returning(User.__table__.c.id)
+        ).scalar_one()
         # Core insert, naming only the columns this test needs: the DB is
         # still at 0025 here, and an `EBook(...)`/`AudioBook(...)` ORM insert
         # names every mapped column, including ones a later revision adds
@@ -780,12 +792,12 @@ def test_0026_moves_an_orphaned_position_onto_its_pair():
         pair = BookPair(ebook_id=eb_id, audiobook_id=ab_id, status=PairStatus.SYNCED)
         session.add(pair)
         session.flush()
-        orphan = Bookmark(user_id=user.id, audiobook_id=ab_id,
+        orphan = Bookmark(user_id=user_id, audiobook_id=ab_id,
                           source=BookmarkSource.AUDIOBOOK, audio_position_ms=600_000,
                           updated_at=when, captured_at=when)
-        foreign = Bookmark(user_id=user.id, ebook_id=eb_id, audiobook_id=old_ab_id,
+        foreign = Bookmark(user_id=user_id, ebook_id=eb_id, audiobook_id=old_ab_id,
                            source=BookmarkSource.EBOOK, updated_at=when, captured_at=when)
-        progress = UserProgress(user_id=user.id, media_type=ProgressType.AUDIOBOOK,
+        progress = UserProgress(user_id=user_id, media_type=ProgressType.AUDIOBOOK,
                                 audiobook_id=ab_id, audio_position_ms=600_000,
                                 updated_at=when, captured_at=when)
         session.add_all([orphan, foreign, progress])
@@ -835,10 +847,15 @@ def test_0027_moves_a_false_capture_date_back():
     command.upgrade(cfg, "0026_fold_orphan_positions")
 
     with Session(engine) as session:
-        user = User(username="reader", email="reader@example.com", hashed_password="x",
-                    created_at=signed_up)
-        session.add(user)
-        session.flush()
+        # Core insert naming only the columns that exist at this revision: a
+        # `User(...)` ORM insert names every mapped column, including ones a
+        # later revision adds (e.g. `web_tour_offered_at`, issue #598).
+        user_id = session.execute(
+            insert(User.__table__)
+            .values(username="reader", email="reader@example.com", hashed_password="x",
+                    is_admin=False, is_active=True, created_at=signed_up)
+            .returning(User.__table__.c.id)
+        ).scalar_one()
         ids = []
         for n, device in enumerate((None, "phone")):
             # Core insert, naming only the columns this test needs: the DB is
@@ -859,10 +876,10 @@ def test_0027_moves_a_false_capture_date_back():
             pair = BookPair(ebook_id=eb_id, audiobook_id=ab_id, status=PairStatus.SYNCED)
             session.add(pair)
             session.flush()
-            bookmark = Bookmark(user_id=user.id, book_pair_id=pair.id,
+            bookmark = Bookmark(user_id=user_id, book_pair_id=pair.id,
                                 source=BookmarkSource.EBOOK, device_id=device,
                                 updated_at=stamp, captured_at=stamp)
-            progress = UserProgress(user_id=user.id, media_type=ProgressType.EBOOK,
+            progress = UserProgress(user_id=user_id, media_type=ProgressType.EBOOK,
                                     ebook_id=eb_id, book_pair_id=pair.id, device_id=device,
                                     updated_at=stamp, captured_at=stamp)
             session.add_all([bookmark, progress])

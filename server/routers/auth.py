@@ -900,6 +900,14 @@ async def update_me(
         if body.theme not in VALID_THEMES:
             raise HTTPException(status_code=400, detail="Invalid theme")
         current_user.theme = body.theme
+    if body.web_tour_offered is not None:
+        if not body.web_tour_offered:
+            # There is no un-offering: the stamp only ever gets set once.
+            raise HTTPException(
+                status_code=400, detail="web_tour_offered cannot be unset"
+            )
+        if current_user.web_tour_offered_at is None:
+            current_user.web_tour_offered_at = utcnow()
     await db.flush()
     await db.refresh(current_user)
     return current_user

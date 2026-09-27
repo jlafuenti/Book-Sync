@@ -990,6 +990,49 @@ async def test_must_reset_user_cannot_edit_their_profile(client, make_user, auth
     assert r.json()["detail"] == "password_reset_required"
 
 
+async def test_new_user_has_no_web_tour_stamp(client, make_user, auth_header):
+    """issue #598: GET /me reports web_tour_offered_at as null until the web
+    app records that it offered the guided walkthrough."""
+    user = await make_user(username="tourer")
+
+    r = await client.get("/api/auth/me", headers=auth_header(user))
+
+    assert r.status_code == 200
+    assert r.json()["web_tour_offered_at"] is None
+
+
+async def test_web_tour_offered_stamps_once(client, make_user, auth_header):
+    """PUT /me with web_tour_offered=true records the stamp, and GET /me
+    shows it. A second PUT keeps the first stamp rather than overwriting it
+    (issue #598) — there is no un-offering, so the timestamp should mean
+    "when this was first shown", not "most recently shown"."""
+    user = await make_user(username="tourer2")
+    header = auth_header(user)
+
+    r = await client.put("/api/auth/me", json={"web_tour_offered": True}, headers=header)
+    assert r.status_code == 200
+    first_stamp = r.json()["web_tour_offered_at"]
+    assert first_stamp is not None
+
+    me = await client.get("/api/auth/me", headers=header)
+    assert me.json()["web_tour_offered_at"] == first_stamp
+
+    r2 = await client.put("/api/auth/me", json={"web_tour_offered": True}, headers=header)
+    assert r2.status_code == 200
+    assert r2.json()["web_tour_offered_at"] == first_stamp
+
+
+async def test_web_tour_offered_false_is_rejected(client, make_user, auth_header):
+    """There is no un-offering: web_tour_offered=false is a 400, not a way to
+    clear the stamp (issue #598)."""
+    user = await make_user(username="tourer3")
+
+    r = await client.put("/api/auth/me", json={"web_tour_offered": False},
+                         headers=auth_header(user))
+
+    assert r.status_code == 400
+
+
 async def test_role_gated_route_also_refuses_must_reset_user(
     make_client, make_user, auth_header,
 ):

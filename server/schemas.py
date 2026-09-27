@@ -155,6 +155,7 @@ class UserResponse(BaseModel):
     theme: str = "blueprint"
     must_reset_password: bool = False
     created_at: datetime
+    web_tour_offered_at: Optional[datetime] = None
 
     class Config:
         from_attributes = True
@@ -162,6 +163,10 @@ class UserResponse(BaseModel):
 
 class UserUpdateRequest(BaseModel):
     theme: Optional[str] = None
+    # issue #598: True records the one-time "guided walkthrough was offered"
+    # stamp. There is no un-offering, so False is rejected rather than
+    # silently ignored — see routers.auth.update_me.
+    web_tour_offered: Optional[bool] = None
 
 
 class TokenResponse(BaseModel):

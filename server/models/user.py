@@ -3,6 +3,7 @@ User model for multi-user authentication with role-based access control.
 """
 
 from datetime import datetime
+from typing import Optional
 from sqlalchemy import String, DateTime, Boolean, Integer
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -39,6 +40,13 @@ class User(Base):
     token_version: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=utcnow, nullable=False
+    )
+    # issue #598: the web app offers its guided walkthrough once per user; this
+    # stamp records that the offer was shown, whatever the answer. Nullable —
+    # NULL means never offered. Set once by PUT /api/auth/me and left alone
+    # after that, since there is no un-offering.
+    web_tour_offered_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime, nullable=True
     )
 
     # Relationships

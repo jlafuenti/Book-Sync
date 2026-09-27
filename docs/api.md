@@ -67,7 +67,9 @@ Authorization: Bearer <access_token>
 - `POST /api/auth/invites`, `GET /api/auth/invites`, `DELETE /api/auth/invites/{id}` — **admin.**
   Create returns the code once; the list never carries one (only a SHA-256 is stored). Invites are
   single-use and expire after `invite_expiry_days`.
-- `GET /api/auth/me`, `PUT /api/auth/me` — the current user's profile.
+- `GET /api/auth/me`, `PUT /api/auth/me` — the current user's profile. `PUT` also accepts
+  `web_tour_offered: true` to record that the web walkthrough was offered, exposed as
+  `web_tour_offered_at` on `GET` (issue #598).
 - `POST /api/auth/change-password`.
 
 ### Sessions and sign-out (issue #250)

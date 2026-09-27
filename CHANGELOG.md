@@ -37,6 +37,8 @@ operator must do by hand rather than read about afterwards.
 - **System → Google Books** holds the Google Books API key (#739), stored encrypted like the
   Hardcover token, with a Test Key button and a note on which Google API the key needs. The Match
   search and Print Page Counts both use it; a key saved there wins over `GOOGLE_BOOKS_API_KEY`.
+- The profile carries a `web_tour_offered_at` stamp, set once through `PUT /api/auth/me`, so the
+  web app offers its guided walkthrough once per user rather than once per browser (#598).
 
 ### Fixed
 
