@@ -1,0 +1,69 @@
+{
+  "_doc": "Issue #730. Reader progress indicator rules, shared by web/src/lib/readerProgress.js and android ReaderProgress.kt.",
+  "next_mode": [["percent", "pages"], ["pages", "chapter"], ["chapter", "time"], ["time", "percent"], ["bogus", "percent"], [null, "percent"]],
+  "parse_progress_mode": [["percent","percent"],["pages","pages"],["chapter","chapter"],["time","time"],["bogus","percent"],[null,"percent"],["PAGES","percent"]],
+  "parse_page_mode": [["print", "print"], ["ebook", "ebook"], [null, "ebook"], ["PRINT", "ebook"]],
+  "page_in_section": [
+    {"progression": 0, "total": 10, "expect": 1},
+    {"progression": 0.3, "total": 10, "expect": 4},
+    {"progression": 0.30000000000000004, "total": 10, "expect": 4},
+    {"progression": 0.29999999999999993, "total": 10, "expect": 4},
+    {"progression": 0.9, "total": 10, "expect": 10},
+    {"progression": 1.0, "total": 10, "expect": 10},
+    {"progression": 0.5, "total": 1, "expect": 1},
+    {"progression": 0.5, "total": 0, "expect": null}
+  ],
+  "ebook_position": [
+    {"counts": [1, 4, 7], "section": 0, "page": 1, "expect": {"page": 1, "total": 12}},
+    {"counts": [1, 4, 7], "section": 2, "page": 3, "expect": {"page": 8, "total": 12}},
+    {"counts": [1, 4, 7], "section": 1, "page": 9, "expect": {"page": 5, "total": 12}},
+    {"counts": [1, 0, 7], "section": 2, "page": 1, "expect": {"page": 2, "total": 8}},
+    {"counts": [], "section": 0, "page": 1, "expect": null},
+    {"counts": [1, 4], "section": 5, "page": 1, "expect": null}
+  ],
+  "resolve_page_label": [
+    {"name": "ebook pages", "in": {"pageMode": "ebook", "fraction": 0.4, "ebook": {"page": 343, "total": 1002}, "printList": null, "printPageCount": 300},
+     "expect": {"current": "343", "total": "1002", "kind": "ebook"}, "text": "343 of 1002"},
+    {"name": "ebook pages still counting", "in": {"pageMode": "ebook", "fraction": 0.4, "ebook": null, "printList": null, "printPageCount": null},
+     "expect": {"current": null, "total": null, "kind": "pending"}, "text": "…"},
+    {"name": "embedded page list wins", "in": {"pageMode": "print", "fraction": 0.4, "ebook": {"page": 343, "total": 1002},
+      "printList": {"currentLabel": "117", "firstLabel": "1", "lastLabel": "305"}, "printPageCount": 300},
+     "expect": {"current": "117", "total": "305", "kind": "print"}, "text": "117 of 305"},
+    {"name": "before the first page marker shows the first label", "in": {"pageMode": "print", "fraction": 0.001, "ebook": null,
+      "printList": {"currentLabel": null, "firstLabel": "1", "lastLabel": "305"}, "printPageCount": null},
+     "expect": {"current": "1", "total": "305", "kind": "print"}, "text": "1 of 305"},
+    {"name": "scaled from the print count", "in": {"pageMode": "print", "fraction": 0.4, "ebook": null, "printList": null, "printPageCount": 300},
+     "expect": {"current": "120", "total": "300", "kind": "print"}, "text": "120 of 300"},
+    {"name": "scaled at the very start", "in": {"pageMode": "print", "fraction": 0, "ebook": null, "printList": null, "printPageCount": 300},
+     "expect": {"current": "1", "total": "300", "kind": "print"}, "text": "1 of 300"},
+    {"name": "scaled at the end", "in": {"pageMode": "print", "fraction": 1, "ebook": null, "printList": null, "printPageCount": 300},
+     "expect": {"current": "300", "total": "300", "kind": "print"}, "text": "300 of 300"},
+    {"name": "no print data falls back to ebook pages", "in": {"pageMode": "print", "fraction": 0.4, "ebook": {"page": 343, "total": 1002}, "printList": null, "printPageCount": null},
+     "expect": {"current": "343", "total": "1002", "kind": "ebook-fallback"}, "text": "343 of 1002"},
+    {"name": "no print data and still counting", "in": {"pageMode": "print", "fraction": 0.4, "ebook": null, "printList": null, "printPageCount": null},
+     "expect": {"current": null, "total": null, "kind": "pending"}, "text": "…"},
+    {"name": "an empty page-list label counts as no page list", "in": {"pageMode": "print", "fraction": 0.4, "ebook": {"page": 343, "total": 1002},
+      "printList": {"currentLabel": "", "firstLabel": "", "lastLabel": ""}, "printPageCount": 300},
+     "expect": {"current": "120", "total": "300", "kind": "print"}, "text": "120 of 300"}
+  ],
+  "chapter_text": [[5, 23, "5 of 23 in chapter"], [null, 23, "…"], [5, null, "…"], [0, 23, "…"], [-1, 23, "…"]],
+  "speed": [
+    {"name": "too few samples uses the default", "samples": [30, 30, 30, 30], "expect": 25},
+    {"name": "odd count median", "samples": [10, 50, 20, 40, 30], "expect": 30},
+    {"name": "even count median", "samples": [10, 20, 30, 40, 50, 60], "expect": 35}
+  ],
+  "add_sample": [
+    {"samples": [], "chars": 1500, "dwell": 60, "expect": [25]},
+    {"samples": [], "chars": 1500, "dwell": 1.5, "expect": []},
+    {"samples": [], "chars": 1500, "dwell": 301, "expect": []},
+    {"samples": [], "chars": 0, "dwell": 60, "expect": []}
+  ],
+  "seconds_left": [
+    {"chars": 12000, "page": 1, "pages": 10, "cps": 25, "expect": 480},
+    {"chars": 12000, "page": 6, "pages": 10, "cps": 25, "expect": 240},
+    {"chars": 12000, "page": 10, "pages": 10, "cps": 25, "expect": 48},
+    {"chars": 12000, "page": 3, "pages": 0, "cps": 25, "expect": null}
+  ],
+  "time_text": [[null, "…"], [30, "<1 min left in chapter"], [60, "1 min left in chapter"], [61, "2 min left in chapter"],
+                [3540, "59 min left in chapter"], [3541, "1 h 0 min left in chapter"], [3900, "1 h 5 min left in chapter"]]
+}
