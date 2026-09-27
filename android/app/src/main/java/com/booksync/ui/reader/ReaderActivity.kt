@@ -55,6 +55,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
@@ -135,6 +136,8 @@ class ReaderActivity : AppCompatActivity() {
         private const val PAGE_COUNT_DEBOUNCE_MS = 750L
         // How long to wait for the hidden counter to take a new size.
         private const val PAGE_COUNTER_LAYOUT_TIMEOUT_MS = 1000L
+        // How many times a failed page count is retried for the same layout.
+        private const val PAGE_COUNT_MAX_RETRIES = 2
     }
 
     @Inject lateinit var repository: BookSyncRepository
@@ -354,6 +357,9 @@ class ReaderActivity : AppCompatActivity() {
      */
     private var pageLayoutCaptured = false
 
+    /** Failed counts per layout key, so a failing layout is retried at most [PAGE_COUNT_MAX_RETRIES] times. */
+    private val pageCountFailures = mutableMapOf<String, Int>()
+
     /** The ebook this reader shows, standalone or paired: the page count and print data are per ebook. */
     private val progressEbookId: Int get() = if (isStandalone) ebookId else pair?.ebookId ?: 0
 
@@ -473,6 +479,8 @@ class ReaderActivity : AppCompatActivity() {
                 if (fromUser) {
                     val pct = (progress / 10.0).toInt()
                     progressText.text = "$pct%"
+                    // The indicator's accessible name follows the drag (issue #730).
+                    progressText.contentDescription = "Reading progress: $pct%"
                 }
             }
         })
@@ -1209,11 +1217,15 @@ class ReaderActivity : AppCompatActivity() {
                 Log.w(TAG, "Live page probe failed", e)
                 null
             }
-            result?.let { progressState.onProbe(section, it) }?.let { logPageCountDrift(it) }
-            // Without a probe answer the page is the locator's estimate.
-            progressState.onPageShown(
-                section, progressState.pageInChapter, progressState.pagesInChapter, shownAtMs, userTurn,
-            )
+            // Readium's evaluateJavascript is not cancellable (it ends in a
+            // plain suspendCoroutine), so a probe a newer locator cancelled
+            // still gets here; stop it now. onProbed also drops an answer for
+            // a section the reader has left. Without an answer, the page
+            // recorded is the locator's estimate.
+            ensureActive()
+            val probed = progressState.onProbed(section, result, shownAtMs, userTurn)
+            if (!probed.accepted) return@launch
+            probed.drift?.let { logPageCountDrift(it) }
             renderProgress()
         }
     }
@@ -1239,12 +1251,19 @@ class ReaderActivity : AppCompatActivity() {
             }
     }
 
-    /** Debounced: a burst of triggers makes one capture. */
-    private fun requestPageCount() {
+    /**
+     * Debounced: a burst of triggers makes one capture. A capture that could
+     * not run yet (no laid-out WebView, the page turned mid-capture, the live
+     * page not answering) is tried once more, so the first locator's capture is
+     * not lost when no further locator follows; after that, each locator
+     * retries it until one gets through.
+     */
+    private fun requestPageCount(retryIfAbsorbed: Boolean = true) {
         pageCountTriggerJob?.cancel()
         pageCountTriggerJob = lifecycleScope.launch {
             delay(PAGE_COUNT_DEBOUNCE_MS)
             capturePageLayoutAndCount()
+            if (!pageLayoutCaptured && retryIfAbsorbed) requestPageCount(retryIfAbsorbed = false)
         }
     }
 
@@ -1274,11 +1293,9 @@ class ReaderActivity : AppCompatActivity() {
             Log.w(TAG, "Live head capture failed", e)
             null
         } ?: return
-        // The head diff is only right against the resource it was read from.
-        if (nav.currentLocator.value.href.toString() != href) {
-            requestPageCount()
-            return
-        }
+        // The head diff is only right against the resource it was read from;
+        // requestPageCount tries again.
+        if (nav.currentLocator.value.href.toString() != href) return
 
         val hrefs = pub.readingOrder.map { it.url().toString() }
         val key = pageCountCache.key(
@@ -1323,6 +1340,11 @@ class ReaderActivity : AppCompatActivity() {
                 throw e
             } catch (e: Exception) {
                 Log.w(TAG, "Page count failed", e)
+                // Let the next locator capture and count again, a bounded
+                // number of times per layout.
+                val failures = (pageCountFailures[key] ?: 0) + 1
+                pageCountFailures[key] = failures
+                if (failures <= PAGE_COUNT_MAX_RETRIES) pageLayoutCaptured = false
             } finally {
                 if (countingKey == key) countingKey = null
             }

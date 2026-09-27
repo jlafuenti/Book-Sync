@@ -230,6 +230,52 @@ class ReaderProgressStateTest {
     }
 
     @Test
+    fun `a late probe for a section the reader has left records no page and no sample`() {
+        val s = state()
+        s.counts = Counts(counts = listOf(3, 5, 4), chars = listOf(3000, 5000, 4000))
+        s.onLocator(sectionIndex = 1, progression = 0.2, fraction = 0.4)
+        assertTrue(s.onProbed(1, LivePageProbe.Result(2, 5, emptySet()), shownAtMs = 0, userTurn = true).accepted)
+
+        // The reader turns into section 2; section 1's probe for a later page answers late.
+        s.onLocator(sectionIndex = 2, progression = 0.0, fraction = 0.5)
+        val stale = s.onProbed(1, LivePageProbe.Result(3, 5, emptySet()), shownAtMs = 60_000, userTurn = true)
+
+        assertFalse(stale.accepted)
+        assertNull(stale.drift)
+        assertEquals(1, s.pageInChapter)
+        assertEquals(4, s.pagesInChapter)
+        assertTrue(s.samples.isEmpty())
+
+        // The next real turn still measures from section 1 page 2 (shown at 0), not from the stale answer.
+        s.onProbed(2, LivePageProbe.Result(1, 4, emptySet()), shownAtMs = 120_000, userTurn = true)
+        assertEquals(listOf(1000.0 / 120), s.samples)
+    }
+
+    @Test
+    fun `an accepted probe without an answer records the locator's page`() {
+        val s = state()
+        s.counts = twoSections
+        s.onLocator(sectionIndex = 1, progression = 0.2, fraction = 0.4)
+        assertTrue(s.onProbed(1, null, shownAtMs = 0, userTurn = true).accepted)
+        s.onLocator(sectionIndex = 1, progression = 0.4, fraction = 0.5)
+        s.onProbed(1, null, shownAtMs = 60_000, userTurn = true)
+
+        assertEquals(listOf(1000.0 / 60), s.samples)
+    }
+
+    @Test
+    fun `an accepted probe passes on the drift`() {
+        val s = state()
+        s.counts = twoSections
+        s.onLocator(sectionIndex = 1, progression = 0.2, fraction = 0.4)
+
+        val probed = s.onProbed(1, LivePageProbe.Result(2, 6, emptySet()), shownAtMs = 0, userTurn = true)
+
+        assertTrue(probed.accepted)
+        assertEquals(ReaderProgressState.Drift(1, counted = 5, probed = 6), probed.drift)
+    }
+
+    @Test
     fun `a probe that agrees with the count reports no drift`() {
         val s = state()
         s.counts = twoSections

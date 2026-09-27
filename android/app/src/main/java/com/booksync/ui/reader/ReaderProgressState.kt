@@ -19,6 +19,12 @@ class ReaderProgressState(private val prefs: ReaderProgressPrefs) {
     /** A section whose live page count differs from the counted one. */
     data class Drift(val sectionIndex: Int, val counted: Int, val probed: Int)
 
+    /**
+     * What [onProbed] did with a probe's answer: [accepted] is false when the
+     * reader had already left the probed section, and then nothing was recorded.
+     */
+    data class Probed(val accepted: Boolean, val drift: Drift? = null)
+
     private data class Shown(val sectionIndex: Int, val page: Int, val pages: Int, val atMs: Long)
 
     /** One of [ReaderProgress.PROGRESS_MODES]; changed only by [cycle], which persists it. */
@@ -108,12 +114,37 @@ class ReaderProgressState(private val prefs: ReaderProgressPrefs) {
     }
 
     /**
+     * One locator's probe, answered: applies [probe] (null when the probe gave
+     * no answer, leaving the locator's estimate from [onLocator]) and records
+     * the page as shown at [shownAtMs] via [onPageShown].
+     *
+     * Readium's `evaluateJavascript` cannot be cancelled, so a probe a newer
+     * locator has overtaken still answers. When [sectionIndex] is no longer
+     * the current section the answer is dropped whole - no page, no clock, no
+     * sample - since recording it would pair the old section with the new
+     * section's page numbers.
+     */
+    fun onProbed(sectionIndex: Int, probe: LivePageProbe.Result?, shownAtMs: Long, userTurn: Boolean): Probed {
+        if (sectionIndex != this.sectionIndex || sectionIndex < 0) return Probed(accepted = false)
+        val drift = probe?.let { onProbe(sectionIndex, it) }
+        onPageShown(sectionIndex, pageInChapter, pagesInChapter, shownAtMs, userTurn)
+        return Probed(accepted = true, drift = drift)
+    }
+
+    /**
      * A page the reader showed at [nowMs]. On a forward, adjacent turn (the
      * next page of the same section, or the first page of the next one) the
      * time spent on the previous page becomes a reading-speed sample - the
      * web's rule. [userTurn] false (a programmatic move: a restore, a slider
      * jump, a re-layout) restarts the clock without sampling. A re-report of
      * the same page keeps the clock running.
+     *
+     * The characters on the previous page are that section's counted
+     * characters divided by [pages] as the reader showed it - the live probe's
+     * total, the exact page count - falling back to the counted pages only
+     * when that is unknown. The web divides by its counted total; Android
+     * deliberately prefers the live one, as the probe wins over the count for
+     * the chapter state (issue #730, ruling 4).
      */
     fun onPageShown(sectionIndex: Int, page: Int, pages: Int, nowMs: Long, userTurn: Boolean = true) {
         if (sectionIndex < 0 || page < 1) return
