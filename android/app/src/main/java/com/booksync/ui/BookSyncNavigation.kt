@@ -372,7 +372,12 @@ fun BookSyncNavigation() {
                 is TourNav.OpenReader -> navController.navigate(Routes.reader(navEvent.pairId))
                 TourNav.PopToMain -> navController.popBackStack(Routes.MAIN, inclusive = false)
                 TourNav.ShowReaderBars, TourNav.SkipToToolbarSync -> Unit // the reader Activity's
-                is TourNav.CleanUp -> cleanUpTourPair(context, tourRepository, navEvent.pairId)
+                is TourNav.CleanUp -> cleanUpTourPair(
+                    context,
+                    tourRepository,
+                    navEvent.pairId,
+                    navEvent.progressModeRestored,
+                )
             }
         }
     }
@@ -904,11 +909,21 @@ private fun MainScaffold(
  * `DELETE /api/pairs/{id}`, unpairing (and removing) the whole thing, not just this device's
  * copy of it.
  *
+ * [progressModeRestored] (issue #743) is [com.booksync.ui.tour.TourController]'s own outcome
+ * for the same rule applied to the reader's tap-to-cycle progress mode — that mode is a
+ * device-wide setting, not part of this pair, so [com.booksync.ui.tour.TourController] records
+ * and restores it itself and this function only logs the result alongside the pair cleanup.
+ *
  * The player is stopped last, after progress, files and the sync map are already cleared —
  * so if it is later reopened for this pair on a fresh pick, there's nothing stale left for it
  * to find.
  */
-private suspend fun cleanUpTourPair(context: Context, repository: BookSyncRepository, pairId: Int) {
+private suspend fun cleanUpTourPair(
+    context: Context,
+    repository: BookSyncRepository,
+    pairId: Int,
+    progressModeRestored: Boolean,
+) {
     val progressCleared = repository.resetPairProgress(pairId)
     val pair = repository.getPairById(pairId)
     val ebookRemoved = pair?.ebookDownloaded == true
@@ -922,7 +937,8 @@ private suspend fun cleanUpTourPair(context: Context, repository: BookSyncReposi
     Log.d(
         "Tour",
         "cleanup pair=$pairId progressCleared=$progressCleared ebookRemoved=$ebookRemoved " +
-            "audiobookRemoved=$audiobookRemoved syncMapCleared=$syncMapCleared stoppedPlayer=$stoppedPlayer",
+            "audiobookRemoved=$audiobookRemoved syncMapCleared=$syncMapCleared stoppedPlayer=$stoppedPlayer " +
+            "progressModeRestored=$progressModeRestored",
     )
 }
 

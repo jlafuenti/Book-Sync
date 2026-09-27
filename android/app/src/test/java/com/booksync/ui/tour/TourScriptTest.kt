@@ -41,8 +41,27 @@ class TourScriptTest {
     }
 
     @Test
-    fun `total step count is at most 27`() {
-        assertTrue(TOUR.size <= 27)
+    fun `total step count is at most 28`() {
+        assertTrue(TOUR.size <= 28)
+    }
+
+    @Test
+    fun `reader_progress sits between reader_tap_page and reader_switch_to_audio`() {
+        // Issue #743: the tour spotlights the tap-to-cycle progress indicator
+        // right after the reader's toolbar comes up and before the "Switch to
+        // Audio" step.
+        val ids = TOUR.map { it.id }
+        val progressIdx = ids.indexOf("reader_progress")
+        assertTrue("reader_progress is missing", progressIdx >= 0)
+        assertEquals(ids.indexOf("reader_tap_page") + 1, progressIdx)
+        assertEquals(progressIdx + 1, ids.indexOf("reader_switch_to_audio"))
+
+        val step = TOUR[progressIdx]
+        assertEquals(TourScreen.Reader, step.screen)
+        assertEquals(TourAnchor.ReaderProgress, step.anchor)
+        assertEquals(Advance.TapAnchor(TourEvent.ReaderProgressModeChanged), step.advance)
+        assertTrue(step.needsPair)
+        assertNotNull(step.emptyBody)
     }
 
     @Test
@@ -94,6 +113,13 @@ class TourScriptTest {
         // The closing card has nothing left to spotlight or wait for.
         assertEquals(null, last.anchor)
         assertEquals(Advance.Next, last.advance)
+    }
+
+    @Test
+    fun `ReaderProgressModeChanged matches only its own kind`() {
+        assertTrue(TourEvent.ReaderProgressModeChanged.matchesKind(TourEvent.ReaderProgressModeChanged))
+        assertFalse(TourEvent.ReaderProgressModeChanged.matchesKind(TourEvent.ReaderBarsShown))
+        assertFalse(TourEvent.ReaderBarsShown.matchesKind(TourEvent.ReaderProgressModeChanged))
     }
 
     @Test

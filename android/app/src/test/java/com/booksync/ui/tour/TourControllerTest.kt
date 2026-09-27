@@ -3,7 +3,9 @@ package com.booksync.ui.tour
 import androidx.compose.ui.geometry.Rect
 import io.mockk.coEvery
 import io.mockk.coVerify
+import io.mockk.every
 import io.mockk.mockk
+import io.mockk.verify
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -37,6 +39,16 @@ class TourControllerTest {
     private lateinit var registry: TourAnchorRegistry
 
     /**
+     * The seam behind "leave no trace" for the reader's progress mode (issue #743):
+     * [TourController.start] records whatever this reads, and [TourController]
+     * restores it when cleanup applies. Defaults to "percent" so tests that don't
+     * care about it don't have to stub it; tests that do override [get] per case.
+     */
+    private val progressModeStore = mockk<ReaderProgressModeStore>(relaxed = true) {
+        every { get() } returns "percent"
+    }
+
+    /**
      * Unconfined, but sharing the [TestScope]'s scheduler: launched bodies run
      * eagerly (so `state.value` is current the moment a call returns) while
      * `delay()`-based waits still obey `advanceTimeBy` / `advanceUntilIdle`
@@ -64,6 +76,7 @@ class TourControllerTest {
             registry = registry,
             prefs = prefs,
             picker = picker,
+            progressModeStore = progressModeStore,
             scope = scope,
             awaitLibrary = awaitLibrary,
         )
@@ -79,6 +92,7 @@ class TourControllerTest {
         is TourEvent.ReaderOpened -> TourEvent.ReaderOpened(42)
         TourEvent.ReaderBarsShown -> TourEvent.ReaderBarsShown
         TourEvent.ReaderSyncedSelection -> TourEvent.ReaderSyncedSelection
+        TourEvent.ReaderProgressModeChanged -> TourEvent.ReaderProgressModeChanged
         TourEvent.SheetClosed -> TourEvent.SheetClosed
         is TourEvent.PlayerOpened -> TourEvent.PlayerOpened(42)
         is TourEvent.RouteShown -> expected
@@ -207,6 +221,23 @@ class TourControllerTest {
         assertEquals("reader_tap_page", running(controller).step.id)
 
         controller.onEvent(TourEvent.ReaderBarsShown)
+        assertEquals("reader_progress", running(controller).step.id)
+    }
+
+    @Test
+    fun `reader_progress advances only on ReaderProgressModeChanged`() = runTest {
+        val controller = newController()
+        controller.start()
+        advanceUntilIdle()
+        controller.advanceUntil("reader_progress")
+        val indexBefore = running(controller).index
+
+        controller.onEvent(TourEvent.ReaderBarsShown) // wrong event for this step
+        assertEquals(indexBefore, running(controller).index)
+        assertEquals("reader_progress", running(controller).step.id)
+
+        controller.onEvent(TourEvent.ReaderProgressModeChanged)
+        assertEquals(indexBefore + 1, running(controller).index)
         assertEquals("reader_switch_to_audio", running(controller).step.id)
     }
 
@@ -843,7 +874,9 @@ class TourControllerTest {
         controller.quit()
         advanceUntilIdle()
 
-        assertTrue(navLog.contains(TourNav.CleanUp(42)))
+        // The stubbed store never reports a change (see [progressModeStore]), so
+        // nothing needed restoring.
+        assertTrue(navLog.contains(TourNav.CleanUp(42, progressModeRestored = false)))
     }
 
     @Test
@@ -861,7 +894,7 @@ class TourControllerTest {
         advanceUntilIdle()
 
         assertEquals(TourState.Finished, controller.state.value)
-        assertTrue(navLog.contains(TourNav.CleanUp(42)))
+        assertTrue(navLog.contains(TourNav.CleanUp(42, progressModeRestored = false)))
     }
 
     @Test
@@ -894,6 +927,84 @@ class TourControllerTest {
         advanceUntilIdle()
 
         assertTrue(navLog.none { it is TourNav.CleanUp })
+    }
+
+    // ---- leave no trace: the reader's progress mode (issue #743) ----
+
+    @Test
+    fun `an untouched pair restores the progress mode changed mid-tour when quit`() = runTest {
+        val scope = unconfinedScope()
+        val controller = newController(pairId = 42, scope = scope)
+        coEvery { picker.isUntouched(42) } returns true
+        // "chapter" when start() records it; by the time cleanup runs the user has
+        // tapped the progress text and it has moved on to "time".
+        every { progressModeStore.get() } returnsMany listOf("chapter", "time")
+        val navLog = mutableListOf<TourNav>()
+        scope.launch { controller.nav.collect { navLog.add(it) } }
+        controller.start()
+        advanceUntilIdle()
+
+        controller.quit()
+        advanceUntilIdle()
+
+        verify { progressModeStore.set("chapter") }
+        assertTrue(navLog.contains(TourNav.CleanUp(42, progressModeRestored = true)))
+    }
+
+    @Test
+    fun `an untouched pair restores the progress mode changed mid-tour when the final step finishes`() = runTest {
+        val scope = unconfinedScope()
+        val controller = newController(pairId = 42, scope = scope)
+        coEvery { picker.isUntouched(42) } returns true
+        every { progressModeStore.get() } returnsMany listOf("chapter", "time")
+        val navLog = mutableListOf<TourNav>()
+        scope.launch { controller.nav.collect { navLog.add(it) } }
+        controller.start()
+        advanceUntilIdle()
+        controller.advanceUntil("done")
+
+        controller.next()
+        advanceUntilIdle()
+
+        verify { progressModeStore.set("chapter") }
+        assertTrue(navLog.contains(TourNav.CleanUp(42, progressModeRestored = true)))
+    }
+
+    @Test
+    fun `a touched pair still restores the progress mode`() = runTest {
+        // willCleanUp is false, so the pair itself is left alone -- but the progress
+        // mode is a device-wide reader setting the tour invited the user to change,
+        // not part of the pair, so it goes back regardless (issue #743).
+        val scope = unconfinedScope()
+        val controller = newController(pairId = 42, scope = scope)
+        coEvery { picker.isUntouched(42) } returns false
+        every { progressModeStore.get() } returnsMany listOf("chapter", "time")
+        val navLog = mutableListOf<TourNav>()
+        scope.launch { controller.nav.collect { navLog.add(it) } }
+        controller.start()
+        advanceUntilIdle()
+        assertFalse(running(controller).willCleanUp)
+
+        controller.quit()
+        advanceUntilIdle()
+
+        verify { progressModeStore.set("chapter") }
+        assertTrue(navLog.none { it is TourNav.CleanUp })
+    }
+
+    @Test
+    fun `an unchanged progress mode is not rewritten`() = runTest {
+        val scope = unconfinedScope()
+        val controller = newController(pairId = 42, scope = scope)
+        coEvery { picker.isUntouched(42) } returns false
+        every { progressModeStore.get() } returns "pages"
+        controller.start()
+        advanceUntilIdle()
+
+        controller.quit()
+        advanceUntilIdle()
+
+        verify(exactly = 0) { progressModeStore.set(any()) }
     }
 
     @Test
