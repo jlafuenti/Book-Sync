@@ -103,10 +103,15 @@ object LivePageProbe {
      * indexes; `labels` is the parallel list of raw labels.
      *
      * Only entries whose label parses as a finite integer count (epub.js uses
-     * `parseInt`, matched here with `toIntOrNull`); the kept label is that
-     * integer's decimal string, so a leading-zero or `+`-prefixed label is
-     * normalized the same way epub.js's `parseInt` + `String(page)` round trip
-     * normalizes it on the web.
+     * `parseInt(text)` on the raw label text — see `pagelist.js`'s `page` and
+     * `firstPage`/`lastPage`); matched here with `parseLeadingInt`, which
+     * mirrors `parseInt`'s behavior of skipping leading whitespace and stopping
+     * at the first non-digit character (so `" 12\n"` and `"12a"` both parse as
+     * `12`, same as on the web) rather than requiring the whole string to be a
+     * clean integer. The kept label is that integer's decimal string, so a
+     * leading-zero, `+`-prefixed, whitespace-padded, or trailing-garbage label
+     * is normalized the same way epub.js's `parseInt` + `String(page)` round
+     * trip normalizes it on the web.
      *
      * `currentLabel` is the label of the last kept entry that is in an earlier
      * section (`readingOrderIndex < sectionIndex`), or in this section
@@ -122,7 +127,7 @@ object LivePageProbe {
         before: Set<String>,
     ): ReaderProgress.PrintList? {
         val kept = pageList.zip(labels).mapNotNull { (entry, label) ->
-            val n = label.toIntOrNull() ?: return@mapNotNull null
+            val n = parseLeadingInt(label) ?: return@mapNotNull null
             Triple(entry.first, entry.second, n.toString())
         }
         if (kept.isEmpty()) return null
@@ -142,4 +147,15 @@ object LivePageProbe {
             lastLabel = kept.last().third,
         )
     }
+
+    /**
+     * Mirrors JS `parseInt(text)`: skips leading whitespace, accepts an
+     * optional sign, then takes the longest run of digits from there,
+     * ignoring anything after — `" 12\n"` and `"12a"` both give `12`. Returns
+     * `null` when there is no leading integer at all (`""`, `"-"`, `"xii"`).
+     * Kotlin's `\s` and JS's `\s` differ slightly on exotic Unicode
+     * whitespace; that gap is accepted.
+     */
+    private fun parseLeadingInt(label: String): Int? =
+        Regex("""^\s*([+-]?\d+)""").find(label)?.groupValues?.get(1)?.toIntOrNull()
 }

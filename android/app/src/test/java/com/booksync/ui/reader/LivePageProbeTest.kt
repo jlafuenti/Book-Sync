@@ -138,4 +138,33 @@ class LivePageProbeTest {
         val result = LivePageProbe.printListAt(mixedPageList, mixedLabels, sectionIndex = 5, before = emptySet())
         assertEquals(ReaderProgress.PrintList("4", "4", "4"), result)
     }
+
+    // Label parsing mirrors JS `parseInt(text)` (epub.js `pagelist.js`): leading
+    // whitespace is skipped and parsing stops at the first non-digit, rather than
+    // requiring the whole label to be a clean integer.
+
+    @Test
+    fun `printListAt parses a label with leading whitespace like parseInt`() {
+        val result = LivePageProbe.printListAt(listOf(1 to "a"), listOf(" 12\n"), sectionIndex = 5, before = emptySet())
+        assertEquals(ReaderProgress.PrintList("12", "12", "12"), result)
+    }
+
+    @Test
+    fun `printListAt parses a label with trailing garbage like parseInt`() {
+        val result = LivePageProbe.printListAt(listOf(1 to "a"), listOf("12a"), sectionIndex = 5, before = emptySet())
+        assertEquals(ReaderProgress.PrintList("12", "12", "12"), result)
+    }
+
+    @Test
+    fun `printListAt parses a label with leading spaces like parseInt`() {
+        val result = LivePageProbe.printListAt(listOf(1 to "a"), listOf("  7"), sectionIndex = 5, before = emptySet())
+        assertEquals(ReaderProgress.PrintList("7", "7", "7"), result)
+    }
+
+    @Test
+    fun `printListAt drops a label with no leading integer`() {
+        assertNull(LivePageProbe.printListAt(listOf(1 to "a"), listOf("xii"), sectionIndex = 5, before = emptySet()))
+        assertNull(LivePageProbe.printListAt(listOf(1 to "a"), listOf(""), sectionIndex = 5, before = emptySet()))
+        assertNull(LivePageProbe.printListAt(listOf(1 to "a"), listOf("-"), sectionIndex = 5, before = emptySet()))
+    }
 }
