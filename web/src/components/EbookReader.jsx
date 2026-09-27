@@ -16,6 +16,7 @@ import {
 } from '../lib/textSearch'
 import { getReaderPalette, READER_MODES, DEFAULT_THEME } from '../themes'
 import useEpubRendition, { paletteCss } from '../hooks/useEpubRendition'
+import useReaderProgress from '../hooks/useReaderProgress'
 import { fontSizeCss } from '../lib/readerRendition'
 import { useTheme } from '../ThemeContext'
 import './EbookReader.css'
@@ -73,10 +74,15 @@ function EbookReader({ ebookId, pairId, initialChapter, initialTextPreview, onCl
     // restore ladder and attaches the `relocated` handler in the same async
     // continuation, between the TOC load and the spinner clearing;
     // `handleTeardown` flushes the pending save before the book is destroyed.
-    const { bookRef, renditionRef, toc, loading, error } = useEpubRendition(
+    const { bookRef, renditionRef, bufferRef, toc, loading, error } = useEpubRendition(
         viewerRef, ebookId,
         { fontSizeRef, paletteRef, onOpened: handleOpened, onTeardown: handleTeardown },
     )
+    // The tap-to-cycle progress indicator (issue #730): mode, page setting,
+    // page count, print page count and reading speed.
+    const progress = useReaderProgress({
+        ebookId, fontSize, ready: !loading && !error, viewerRef, bufferRef,
+    })
     // Save-button feedback: 'saved' shows the ✓, 'error' shows "Not saved".
     // The ✓ only ever means a write actually landed (issue #159) — it used to
     // flash success even while the gate silently swallowed every save.
@@ -505,7 +511,10 @@ function EbookReader({ ebookId, pairId, initialChapter, initialTextPreview, onCl
         // landing stays provisional until the text-nav pass below confirms
         // it (see `classifyLanding`).
         gate.applyLanding(restored.outcome)
-        if (!isDestroyed()) setUnresolvedPosition(restored.outcome.unresolved)
+        if (!isDestroyed()) {
+            setUnresolvedPosition(restored.outcome.unresolved)
+            progress.onOpened(book)
+        }
 
         // Track position changes
         rendition.on('relocated', (location) => {
@@ -529,6 +538,8 @@ function EbookReader({ ebookId, pairId, initialChapter, initialTextPreview, onCl
                 item.href.endsWith('/' + location.start.href))
             )
             if (spineIndex >= 0) currentSpineIndexRef.current = spineIndex
+
+            progress.onRelocated({ location, spineIndex, fraction: percent / 100, book, rendition })
 
             // Keep the latest position readable from the unmount
             // flush and the lifecycle keepalive, which cannot rely on
@@ -897,8 +908,26 @@ function EbookReader({ ebookId, pairId, initialChapter, initialTextPreview, onCl
                     <div className="font-size-controls">
                         <button onClick={() => setFontSize(s => Math.max(MIN_FONT, s - 10))} title="Decrease font">A-</button>
                         <button onClick={() => setFontSize(s => Math.min(MAX_FONT, s + 10))} title="Increase font">A+</button>
+                        <select
+                            className="reader-page-mode"
+                            aria-label="Page numbers"
+                            title="Page numbers"
+                            value={progress.pageMode}
+                            onChange={e => progress.setPageMode(e.target.value)}
+                        >
+                            <option value="ebook">Ebook pages</option>
+                            <option value="print">Print pages</option>
+                        </select>
                     </div>
-                    <span className="ebook-progress-text">{progressPercent.toFixed(1)}%</span>
+                    <button
+                        type="button"
+                        className="ebook-progress-text"
+                        onClick={progress.cycle}
+                        aria-label="Reading progress, tap to change"
+                    >
+                        {progress.mode === 'percent' ? `${progressPercent.toFixed(1)}%` : progress.text}
+                        {progress.fallback && <sup aria-label="ebook pages">e</sup>}
+                    </button>
                     {saveState === 'error' && (
                         <span className="ebook-progress-text" style={{ color: 'var(--error)' }}>
                             Not saved

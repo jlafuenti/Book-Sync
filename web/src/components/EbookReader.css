@@ -100,6 +100,39 @@
     white-space: nowrap;
 }
 
+/* The progress indicator is a button (issue #730): tap to change what it
+   shows. Reset the button chrome, keep the text look above. */
+button.ebook-progress-text {
+    background: none;
+    border: none;
+    padding: 0;
+    margin: 0;
+    font-family: inherit;
+    line-height: inherit;
+    cursor: pointer;
+}
+
+button.ebook-progress-text:hover {
+    color: var(--text-primary);
+}
+
+button.ebook-progress-text sup {
+    font-size: 0.7em;
+    margin-left: 1px;
+}
+
+/* Ebook pages / Print pages (issue #730), beside the font buttons. */
+.reader-page-mode {
+    background: none;
+    border: 1px solid var(--border);
+    color: var(--text-secondary);
+    padding: 3px 4px;
+    border-radius: var(--radius-sm);
+    font-size: 12px;
+    font-family: inherit;
+    cursor: pointer;
+}
+
 /* Reader theme picker (issue #57) */
 .reader-theme-picker {
     position: relative;
@@ -352,6 +385,16 @@
     }
 
     .ebook-progress-text {
+        font-size: 0.72rem;
+    }
+
+    /* A touch target for the tap-to-change indicator (issue #730). */
+    button.ebook-progress-text {
+        min-height: 36px;
+    }
+
+    .reader-page-mode {
+        min-height: 36px;
         font-size: 0.72rem;
     }
 
