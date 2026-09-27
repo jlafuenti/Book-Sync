@@ -426,13 +426,15 @@ class SyncMapSummaryResponse(BaseModel):
         from_attributes = True
 
 
-class SyncPointTextUpdate(BaseModel):
-    id: int
-    audio_text: str
+class RealignResponse(BaseModel):
+    """`POST /api/transcription/{pair_id}/realign`: the rebuilt map's point
+    count, and how many were matched against the transcript rather than
+    interpolated between matches. The web's transcript view calls it (#713)."""
 
-
-class SyncMapTextUpdate(BaseModel):
-    points: List[SyncPointTextUpdate]
+    status: str
+    points: int
+    matched: int
+    interpolated: int
 
 
 # ============================================================

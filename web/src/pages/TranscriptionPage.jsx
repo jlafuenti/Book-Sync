@@ -718,7 +718,7 @@ function TranscriptionPage({ tab }) {
                         style={{ textDecoration: 'none', whiteSpace: 'nowrap' }}
                         onClick={e => e.stopPropagation()}
                     >
-                        Edit Transcription
+                        View Alignment
                     </Link>
                 </div>
             </div>
@@ -757,7 +757,7 @@ function TranscriptionPage({ tab }) {
                 className="btn btn-secondary btn-sm"
                 style={{ textDecoration: 'none', flexShrink: 0 }}
             >
-                Edit Transcription
+                View Alignment
             </Link>
         </div>
     )

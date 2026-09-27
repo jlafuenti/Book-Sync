@@ -28,12 +28,11 @@ export async function cancelTranscription(pairId) {
     return jsonOrThrow(resp, 'Failed to cancel transcription');
 }
 
-export async function updateTranscriptionText(pairId, points) {
-    const resp = await fetchWithAuth(`${API_BASE}/transcription/${pairId}/text`, {
-        method: 'PUT',
-        body: JSON.stringify({ points }),
-    });
-    return jsonOrThrow(resp, 'Failed to update transcription text');
+// Rebuild a pair's sync map from its saved transcript, without re-transcribing
+// (issue #713). Returns { status, points, matched, interpolated }.
+export async function realignPair(pairId) {
+    const resp = await fetchWithAuth(`${API_BASE}/transcription/${pairId}/realign`, { method: 'POST' });
+    return jsonOrThrow(resp, 'Re-align failed');
 }
 
 // ============ Transcription Queue ============

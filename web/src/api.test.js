@@ -2113,3 +2113,23 @@ describe('testGoogleBooksKey() (issue #739)', () => {
         await expect(testGoogleBooksKey()).rejects.toThrow('Google rejected the key.')
     })
 })
+
+describe('realignPair() (issue #713)', () => {
+    it('POSTs to the realign endpoint and returns the counts', async () => {
+        const fetchMock = vi.fn().mockResolvedValue({
+            ok: true, status: 200, json: async () => ({ status: 'ok', points: 10, matched: 9, interpolated: 1 }),
+        })
+        vi.stubGlobal('fetch', fetchMock)
+        const { realignPair } = await import('./api')
+        expect(await realignPair(42)).toEqual({ status: 'ok', points: 10, matched: 9, interpolated: 1 })
+        expect(fetchMock).toHaveBeenCalledWith('/api/transcription/42/realign', expect.objectContaining({ method: 'POST' }))
+    })
+
+    it("passes on the server's reason when it cannot re-align", async () => {
+        vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+            ok: false, status: 400, json: async () => ({ detail: 'No cached transcript for this pair — run full transcription instead.' }),
+        }))
+        const { realignPair } = await import('./api')
+        await expect(realignPair(42)).rejects.toThrow('No cached transcript')
+    })
+})

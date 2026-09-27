@@ -13,7 +13,8 @@ lookups you switch on yourself.
 - **Sentence-level ebook ⇄ audiobook handoff** — switching format lands on the sentence you were
   on, not the chapter you were in, on every device.
 - **Transcription queue** — Whisper on the server, or handed to a GPU worker on another host, with
-  retries, an off-hours window and a transcript editor for fixing what it got wrong.
+  retries, an off-hours window, and a view of how each sentence lines up with the audio, with a
+  one-click re-align.
 - **Library scanning and pairing** — recursive scan of your ebook/audiobook folders, metadata and
   cover extraction, series grouping, and automatic pairing of an ebook with its audiobook.
 - **Web app** — EPUB reader and audio player in one React app, installable as a PWA with
