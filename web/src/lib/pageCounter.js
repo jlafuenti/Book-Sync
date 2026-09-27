@@ -12,17 +12,26 @@ const RENDERED_TIMEOUT_MS = 3000
 // calling display() (rather than after) means a 'rendered' that fires very
 // quickly is never missed. Bounded at 3000 ms in case a section never emits
 // it — the count is read anyway rather than hanging the whole scan.
+//
+// Returns `{ promise, cancel }` rather than just a promise: if `display()`
+// itself rejects (a bad section, a network error fetching it), nothing will
+// ever emit 'rendered' for it, so the caller must be able to tear the
+// listener and the pending timer down on that path too, rather than leaving
+// them to leak for up to 3 s. `cancel()` is a no-op once the wait has
+// already settled by either of its own routes.
 function waitForRendered(rendition, href) {
-    return new Promise(resolve => {
-        let settled = false
-        const onRendered = section => {
-            if (settled || (section && section.href !== href)) return
+    let onRendered
+    let timer
+    let settled = false
+    const promise = new Promise(resolve => {
+        onRendered = section => {
+            if (settled || !section || section.href !== href) return
             settled = true
             clearTimeout(timer)
             rendition.off('rendered', onRendered)
             resolve()
         }
-        const timer = setTimeout(() => {
+        timer = setTimeout(() => {
             if (settled) return
             settled = true
             rendition.off('rendered', onRendered)
@@ -30,6 +39,13 @@ function waitForRendered(rendition, href) {
         }, RENDERED_TIMEOUT_MS)
         rendition.on('rendered', onRendered)
     })
+    const cancel = () => {
+        if (settled) return
+        settled = true
+        clearTimeout(timer)
+        rendition.off('rendered', onRendered)
+    }
+    return { promise, cancel }
 }
 
 /**
@@ -62,9 +78,14 @@ export async function countSectionPages(openBook, { width, height, fontSize, sig
             if (items[i].linear === 'no' || items[i].linear === false) {
                 counts.push(0); chars.push(0)
             } else {
-                const rendered = waitForRendered(rendition, items[i].href)
-                await rendition.display(items[i].href)
-                await rendered
+                const renderedWait = waitForRendered(rendition, items[i].href)
+                try {
+                    await rendition.display(items[i].href)
+                } catch (err) {
+                    renderedWait.cancel()
+                    throw err
+                }
+                await renderedWait.promise
                 counts.push(Math.max(1, rendition.currentLocation()?.start?.displayed?.total || 1))
                 const doc = rendition.getContents()[0]?.document
                 chars.push((doc?.body?.textContent || '').replace(/\s+/g, ' ').trim().length)

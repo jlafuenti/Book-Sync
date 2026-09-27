@@ -31,6 +31,7 @@ function createFakeRendition({ totalsByHref, textByHref, throwOnHref, renderedDe
         on(event, fn) { (listeners[event] ||= []).push(fn) },
         off(event, fn) { listeners[event] = (listeners[event] || []).filter(f => f !== fn) },
         emit(event, ...args) { [...(listeners[event] || [])].forEach(fn => fn(...args)) },
+        listenerCount(event) { return (listeners[event] || []).length },
         async display(href) {
             if (throwOnHref && href === throwOnHref) throw new Error('display failed')
             this._currentHref = href
@@ -194,6 +195,23 @@ describe('countSectionPages (issue #730)', () => {
         expect(rendition.destroyed).toBe(true)
         expect(book.destroyed).toBe(true)
         expect(document.body.contains(book.renderedHost)).toBe(false)
+    })
+
+    it('does not leak a "rendered" listener or a pending timer when display() throws', async () => {
+        vi.useFakeTimers()
+        try {
+            const rendition = createFakeRendition({
+                totalsByHref: {},
+                textByHref: {},
+                throwOnHref: 'ch1.xhtml',
+            })
+            const book = createFakeBook({ items: [{ href: 'ch1.xhtml', linear: true }], rendition })
+            await expect(countSectionPages(() => book, { width: 800, height: 600, fontSize: 100 })).rejects.toThrow('display failed')
+            expect(rendition.listenerCount('rendered')).toBe(0)
+            expect(vi.getTimerCount()).toBe(0)
+        } finally {
+            vi.useRealTimers()
+        }
     })
 
     it('rejects with an AbortError once the signal is aborted, before displaying the next section', async () => {
