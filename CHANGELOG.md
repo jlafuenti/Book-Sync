@@ -19,7 +19,7 @@ operator must do by hand rather than read about afterwards.
 ### Added
 
 - Ebooks have a **Print pages** field (#730), set on the edit form or taken from a Google Books
-  match, for the reader's upcoming print-page numbers.
+  match, for the reader's print-page numbers.
 - The web reader's progress indicator changes when you tap it (#730): percent, then the page in the
   book ("5 of 8"), the page in the chapter, and the time left in the chapter. A new **Ebook pages /
   Print pages** setting beside the font buttons picks which page numbers to show. Print pages come

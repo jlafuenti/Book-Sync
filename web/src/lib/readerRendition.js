@@ -2,6 +2,9 @@
 // off-screen page counter (Task 6) must lay out identically, so both read
 // these constants rather than each keeping their own copy.
 
+// Changing RENDITION_OPTIONS or READER_THEME_RULES changes page counts:
+// bump the `tandem_page_counts_v1` key in pageCountCache.js when you do.
+
 // Passed to `book.renderTo(...)`.
 export const RENDITION_OPTIONS = {
     width: '100%',

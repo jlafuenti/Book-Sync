@@ -181,6 +181,7 @@ describe('countSectionPages (issue #730)', () => {
         expect(book.renderedHost.style.width).toBe('480px')
         expect(book.renderedHost.style.height).toBe('640px')
         expect(book.renderedHost.getAttribute('aria-hidden')).toBe('true')
+        expect(book.renderedHost.inert).toBe(true)
         expect(document.body.contains(book.renderedHost)).toBe(false)
     })
 

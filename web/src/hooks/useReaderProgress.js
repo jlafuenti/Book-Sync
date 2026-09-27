@@ -15,9 +15,11 @@ export const PROGRESS_MODE_KEY = 'tandem_reader_progress_mode'
 export const PAGE_MODE_KEY = 'tandem_reader_page_mode'
 export const SPEED_SAMPLES_KEY = 'tandem_reader_speed_samples'
 const RESIZE_DEBOUNCE_MS = 500
-// `locationsReady`: epub.js sets `location.start.percentage` only once
-// `book.locations` has been generated (rendition.located), so until then the
-// book-wide fraction is not known.
+// `locationsReady`: before `book.locations` has been generated, epub.js
+// (0.3.93, rendition.located) reports `start.location` as -1 and
+// `start.percentage` as 0 (locationFromCfi returns -1 on an empty list and
+// percentageFromLocation(-1) returns 0), so the book-wide fraction is not
+// known until `start.location` is a real index (>= 0).
 const NO_POSITION = { sectionIndex: -1, page: 0, total: 0, fraction: 0, locationsReady: false }
 
 function readStored(key) {
@@ -149,7 +151,10 @@ export default function useReaderProgress({ ebookId, fontSize, ready, viewerRef,
         if (!buffer) return undefined
         if (!Array.isArray(book.spine?.spineItems) || !book.spine.spineItems.length) return undefined
         const { width, height } = viewerSize
-        const key = cacheKey({ ebookId, signature: spineSignature(book), width, height, fontSize })
+        // The byte length joins the spine signature, so a replaced file with
+        // the same spine is counted afresh.
+        const signature = `${spineSignature(book)}:${buffer.byteLength}`
+        const key = cacheKey({ ebookId, signature, width, height, fontSize })
         const cached = readCounts(key)
         if (cached && Array.isArray(cached.counts) && Array.isArray(cached.chars)) {
             applyCounts(cached)
@@ -181,11 +186,14 @@ export default function useReaderProgress({ ebookId, fontSize, ready, viewerRef,
     const onRelocated = useCallback(({ location, spineIndex, fraction, book, rendition }) => {
         const page = location.start.displayed?.page || 0
         const total = location.start.displayed?.total || 0
-        const locationsReady = Number.isFinite(location.start.percentage)
+        const locationsReady = location.start.location >= 0
         setPosition({ sectionIndex: spineIndex, page, total, fraction, locationsReady })
 
         const entries = printEntriesRef.current
-        if (entries.length && spineIndex >= 0) {
+        if (spineIndex < 0) {
+            // Outside the spine: the previous section's print page no longer applies.
+            setPrintList(null)
+        } else if (entries.length) {
             const contents = rendition?.getContents?.()?.[0]
             const section = book?.spine?.get?.(spineIndex)
             setPrintList(printListAt(entries, spineIndex, frag => {

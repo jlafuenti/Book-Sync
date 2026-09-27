@@ -3,6 +3,7 @@ import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
 import EbookReader from './EbookReader'
 import { cacheKey, writeCounts } from '../lib/pageCountCache'
 import { spineSignature } from '../lib/pageCounter'
+import { setViewport } from '../test/setup'
 
 // The reader progress indicator (issue #730): tap to cycle percent → pages →
 // chapter → time, with the page counter and print-page count mocked.
@@ -124,18 +125,20 @@ async function openReader(props = {}) {
     return { ...fake, ...utils }
 }
 
-// `percentage` is left off the location when passed as undefined, as epub.js
-// does before `book.locations` has been generated.
-function relocate(handlers, { section, page, total = 5, ...rest }) {
-    const percentage = 'percentage' in rest ? rest.percentage : 0.415
-    act(() => {
-        handlers.relocated({
-            start: {
-                cfi: `cfi-${section}-${page}`, percentage,
-                displayed: { page, total }, href: HREFS[section],
-            },
-        })
-    })
+// A located epub.js location. `location` is the locations index: epub.js
+// 0.3.93 reports -1 (and a percentage of 0) until `book.locations` has been
+// generated, then a real index.
+function locatedAt({ section, page, total = 5, percentage = 0.415, location = 10 }) {
+    return {
+        start: {
+            cfi: `cfi-${section}-${page}`, percentage, location,
+            displayed: { page, total }, href: HREFS[section],
+        },
+    }
+}
+
+function relocate(handlers, at) {
+    act(() => { handlers.relocated(locatedAt(at)) })
 }
 
 const indicator = () => screen.getByRole('button', { name: /^Reading progress/ })
@@ -231,14 +234,14 @@ describe('EbookReader — print pages (issue #730)', () => {
         const { handlers } = await openReader()
         await waitFor(() => expect(getEbookMock).toHaveBeenCalled())
         await waitFor(() => expect(countSectionPagesMock).toHaveBeenCalled())
-        // Before epub.js has generated its locations: no percentage yet.
-        relocate(handlers, { section: 1, page: 2, percentage: undefined })
+        // Before epub.js has generated its locations: location -1, percentage 0.
+        relocate(handlers, { section: 1, page: 2, percentage: 0, location: -1 })
         await act(async () => { await new Promise(r => setTimeout(r, 20)) })
         expect(indicator()).toHaveTextContent('…')
         expect(indicator()).not.toHaveTextContent('1 of 300')
 
-        // locations.generate → reportLocation re-reports with a percentage.
-        relocate(handlers, { section: 1, page: 2, percentage: 0.4 })
+        // locations.generate → reportLocation re-reports with a real location.
+        relocate(handlers, { section: 1, page: 2, percentage: 0.4, location: 120 })
         await waitFor(() => expect(indicator()).toHaveTextContent('120 of 300'))
     })
 
@@ -327,7 +330,7 @@ describe('EbookReader — the page count (issue #730)', () => {
 
     it('uses a cached count without counting again', async () => {
         const fake = makeFakeBook()
-        const key = cacheKey({ ebookId: 7, signature: spineSignature(fake.book), width: 800, height: 600, fontSize: 100 })
+        const key = cacheKey({ ebookId: 7, signature: `${spineSignature(fake.book)}:0`, width: 800, height: 600, fontSize: 100 })
         writeCounts(key, COUNTED)
         localStorage.setItem('tandem_reader_progress_mode', 'pages')
         const { handlers } = await openReader()
@@ -339,7 +342,7 @@ describe('EbookReader — the page count (issue #730)', () => {
 
     it('caches a finished count under the viewer size and font size', async () => {
         const fake = makeFakeBook()
-        const key = cacheKey({ ebookId: 7, signature: spineSignature(fake.book), width: 800, height: 600, fontSize: 100 })
+        const key = cacheKey({ ebookId: 7, signature: `${spineSignature(fake.book)}:0`, width: 800, height: 600, fontSize: 100 })
         countSectionPagesMock.mockResolvedValue(COUNTED)
         await openReader()
         await waitFor(() => expect(JSON.parse(localStorage.getItem('tandem_page_counts_v1'))[key].v).toEqual(COUNTED))
@@ -409,5 +412,96 @@ describe('EbookReader — reading speed samples (issue #730)', () => {
         now += 60_000
         relocate(handlers, { section: 1, page: 3 })
         expect(samples()).toEqual([])
+    })
+})
+
+describe('EbookReader — the indicator on open, the keyboard, and phones (issue #730)', () => {
+    afterEach(() => setViewport(1200))
+
+    it('shows where the restore landed before any page turn', async () => {
+        countSectionPagesMock.mockReturnValue(new Promise(() => {}))
+        localStorage.setItem('tandem_reader_progress_mode', 'chapter')
+        const fake = makeFakeBook()
+        fake.rendition.currentLocation = vi.fn(() => locatedAt({ section: 1, page: 2 }))
+        ePubMock.mockReturnValue(fake.book)
+        render(
+            <EbookReader ebookId={7} pairId={42} initialChapter={null}
+                initialTextPreview={null} bookTitle="Axis Test" onClose={vi.fn()} />
+        )
+        await waitFor(() => expect(fake.handlers.relocated).toBeDefined())
+        expect(indicator()).toHaveTextContent('2 of 5 in chapter')
+    })
+
+    it('a landing with no href still seeds the page in the chapter', async () => {
+        countSectionPagesMock.mockReturnValue(new Promise(() => {}))
+        localStorage.setItem('tandem_reader_progress_mode', 'chapter')
+        const fake = makeFakeBook()
+        fake.rendition.currentLocation = vi.fn(() => ({ start: { cfi: 'cfi-x', displayed: { page: 3, total: 4 } } }))
+        ePubMock.mockReturnValue(fake.book)
+        render(
+            <EbookReader ebookId={7} pairId={42} initialChapter={null}
+                initialTextPreview={null} bookTitle="Axis Test" onClose={vi.fn()} />
+        )
+        await waitFor(() => expect(fake.handlers.relocated).toBeDefined())
+        expect(indicator()).toHaveTextContent('3 of 4 in chapter')
+    })
+
+    it('a rendition whose currentLocation throws or has nothing leaves the indicator pending', async () => {
+        countSectionPagesMock.mockReturnValue(new Promise(() => {}))
+        localStorage.setItem('tandem_reader_progress_mode', 'chapter')
+        for (const currentLocation of [() => { throw new Error('no manager') }, () => undefined]) {
+            const fake = makeFakeBook()
+            fake.rendition.currentLocation = vi.fn(currentLocation)
+            ePubMock.mockReturnValue(fake.book)
+            const { unmount } = render(
+                <EbookReader ebookId={7} pairId={42} initialChapter={null}
+                    initialTextPreview={null} bookTitle="Axis Test" onClose={vi.fn()} />
+            )
+            await waitFor(() => expect(fake.handlers.relocated).toBeDefined())
+            expect(indicator()).toHaveTextContent('…')
+            unmount()
+        }
+    })
+
+    it('keys pressed in the page-number select or on the indicator do not turn pages', async () => {
+        countSectionPagesMock.mockReturnValue(new Promise(() => {}))
+        const { rendition } = await openReader()
+        fireEvent.keyDown(screen.getByLabelText('Page numbers'), { key: 'ArrowRight' })
+        fireEvent.keyDown(screen.getByLabelText('Page numbers'), { key: 'ArrowLeft' })
+        fireEvent.keyDown(indicator(), { key: ' ' })
+        expect(rendition.next).not.toHaveBeenCalled()
+        expect(rendition.prev).not.toHaveBeenCalled()
+
+        fireEvent.keyDown(document.body, { key: 'ArrowRight' })
+        expect(rendition.next).toHaveBeenCalledTimes(1)
+    })
+
+    it('Escape in the select still closes the reader', async () => {
+        countSectionPagesMock.mockReturnValue(new Promise(() => {}))
+        const onClose = vi.fn()
+        await openReader({ onClose })
+        fireEvent.keyDown(screen.getByLabelText('Page numbers'), { key: 'Escape' })
+        expect(onClose).toHaveBeenCalled()
+    })
+
+    it('on a phone the page-number select lives in the reader-theme menu', async () => {
+        setViewport(375)
+        countSectionPagesMock.mockReturnValue(new Promise(() => {}))
+        const { container } = await openReader()
+        expect(screen.queryByLabelText('Page numbers')).not.toBeInTheDocument()
+
+        fireEvent.click(screen.getByTitle('Reader theme'))
+        const select = screen.getByLabelText('Page numbers')
+        expect(container.querySelector('.reader-theme-menu')).toContainElement(select)
+        fireEvent.change(select, { target: { value: 'print' } })
+        expect(localStorage.getItem('tandem_reader_page_mode')).toBe('print')
+    })
+
+    it('on a wide screen it stays in the toolbar beside the font buttons', async () => {
+        countSectionPagesMock.mockReturnValue(new Promise(() => {}))
+        const { container } = await openReader()
+        expect(container.querySelector('.font-size-controls')).toContainElement(screen.getByLabelText('Page numbers'))
+        fireEvent.click(screen.getByTitle('Reader theme'))
+        expect(screen.getAllByLabelText('Page numbers')).toHaveLength(1)
     })
 })

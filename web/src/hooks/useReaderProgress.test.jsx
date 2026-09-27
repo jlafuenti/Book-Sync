@@ -47,7 +47,7 @@ function setup({ book = fakeBook(), ...overrides } = {}) {
 }
 
 function location(page, total = 5, cfi = 'cfi') {
-    return { start: { cfi, displayed: { page, total } } }
+    return { start: { cfi, location: 10, displayed: { page, total } } }
 }
 
 beforeEach(() => {
@@ -221,6 +221,38 @@ describe('useReaderProgress — the page count', () => {
 })
 
 describe('useReaderProgress — relocations', () => {
+    it('a location outside the spine clears the previous section\'s print page', async () => {
+        countSectionPagesMock.mockReturnValue(new Promise(() => {}))
+        localStorage.setItem(PROGRESS_MODE_KEY, 'pages')
+        localStorage.setItem(PAGE_MODE_KEY, 'print')
+        const book = fakeBook({ pageList: { pageList: [
+            { href: 'ch0.xhtml#p1', page: 1 },
+            { href: 'ch1.xhtml#p2', page: 2 },
+        ] } })
+        const { result } = setup({ book })
+        act(() => result.current.onRelocated({ location: location(1), spineIndex: 1, fraction: 0.5, book }))
+        expect(result.current.text).toBe('1 of 2')
+        act(() => result.current.onRelocated({ location: location(1), spineIndex: -1, fraction: 0.5, book }))
+        expect(result.current.text).toBe('…')
+    })
+
+    it('a replaced file with the same spine is counted afresh', async () => {
+        countSectionPagesMock.mockResolvedValue(COUNTED)
+        const first = setup()
+        await waitFor(() => expect(localStorage.getItem('tandem_page_counts_v1')).not.toBeNull())
+        first.unmount()
+        expect(countSectionPagesMock).toHaveBeenCalledTimes(1)
+
+        // Same spine, same bytes: the cache answers.
+        setup().unmount()
+        await act(async () => {})
+        expect(countSectionPagesMock).toHaveBeenCalledTimes(1)
+
+        // Same spine, different bytes: counted again.
+        setup({ bufferRef: { current: new ArrayBuffer(9) } })
+        await waitFor(() => expect(countSectionPagesMock).toHaveBeenCalledTimes(2))
+    })
+
     it('a location with no page, or outside the spine, records no dwell', async () => {
         countSectionPagesMock.mockResolvedValue(COUNTED)
         localStorage.setItem(PROGRESS_MODE_KEY, 'chapter')

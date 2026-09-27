@@ -58,6 +58,8 @@ export async function countSectionPages(openBook, { width, height, fontSize, sig
     const book = openBook()
     const host = document.createElement('div')
     host.setAttribute('aria-hidden', 'true')
+    // Nothing in the off-screen copy may take focus or clicks.
+    host.inert = true
     Object.assign(host.style, { position: 'fixed', left: '-100000px', top: '0', width: `${width}px`, height: `${height}px`, overflow: 'hidden' })
     document.body.appendChild(host)
     let rendition = null

@@ -112,6 +112,22 @@ button.ebook-progress-text {
     cursor: pointer;
 }
 
+/* The indicator is the one item in the right-hand group that gives way
+   when the toolbar is short of room: the others keep their size, and the
+   indicator keeps a floor and truncates with an ellipsis, so the save
+   button never leaves the screen. Its accessible name keeps the full text. */
+.ebook-toolbar-right > * {
+    flex-shrink: 0;
+}
+
+.ebook-toolbar-right > button.ebook-progress-text {
+    flex-shrink: 1;
+    min-width: 3.5em;
+    max-width: 16em;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
 button.ebook-progress-text:hover {
     color: var(--text-primary);
 }
@@ -172,6 +188,16 @@ button.ebook-progress-text sup {
 .reader-theme-menu button.active {
     color: var(--accent-ink);
     font-weight: 600;
+}
+
+/* The page-number select, in the menu on phones (issue #730). */
+.reader-theme-menu-row {
+    padding: 8px 12px;
+    border-top: 1px solid var(--border);
+}
+
+.reader-theme-menu-row .reader-page-mode {
+    width: 100%;
 }
 
 /* Font size controls */
@@ -388,9 +414,15 @@ button.ebook-progress-text sup {
         font-size: 0.72rem;
     }
 
-    /* A touch target for the tap-to-change indicator (issue #730). */
-    button.ebook-progress-text {
+    /* A touch target for the tap-to-change indicator (issue #730), with a
+       floor that still fits a percentage; longer text truncates. */
+    .ebook-toolbar-right {
+        gap: 4px;
+    }
+
+    .ebook-toolbar-right > button.ebook-progress-text {
         min-height: 36px;
+        min-width: 4em;
     }
 
     .reader-page-mode {

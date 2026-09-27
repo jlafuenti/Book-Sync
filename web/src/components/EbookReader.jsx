@@ -17,6 +17,7 @@ import {
 import { getReaderPalette, READER_MODES, DEFAULT_THEME } from '../themes'
 import useEpubRendition, { paletteCss } from '../hooks/useEpubRendition'
 import useReaderProgress from '../hooks/useReaderProgress'
+import useIsMobile from '../hooks/useIsMobile'
 import { fontSizeCss } from '../lib/readerRendition'
 import { useTheme } from '../ThemeContext'
 import './EbookReader.css'
@@ -49,6 +50,27 @@ const READER_MODE_LABELS = [
 // Re-exported for the existing unit tests; it lives in lib/restoreController now.
 export { executeRestore }
 
+// The spine index an epub.js location's href belongs to, or -1.
+function spineIndexOf(book, href) {
+    if (!href) return -1
+    return book.spine.items.findIndex(item =>
+        item.href && (href === item.href ||
+        href.endsWith('/' + item.href) ||
+        item.href.endsWith('/' + href))
+    )
+}
+
+// Book-wide percent for an epub.js location.
+function percentOf(book, location) {
+    return book.locations
+        ? location.start.percentage * 100
+        : (location.start.displayed?.page / location.start.displayed?.total) * 100 || 0
+}
+
+// Keys typed into these belong to them, not to page turning (issue #730):
+// arrows move through the page-number select, Space taps the indicator.
+const OWN_KEYS_SELECTOR = 'select, input, textarea, button.ebook-progress-text'
+
 function EbookReader({ ebookId, pairId, initialChapter, initialTextPreview, onClose, bookTitle, onSwitchToAudio, saveFlushRef }) {
     const viewerRef = useRef(null)
     const saveTimerRef = useRef(null)
@@ -80,6 +102,9 @@ function EbookReader({ ebookId, pairId, initialChapter, initialTextPreview, onCl
     )
     // The tap-to-cycle progress indicator (issue #730): mode, page setting,
     // page count, print page count and reading speed.
+    // Below the mobile breakpoint the page-number select moves into the
+    // reader-theme menu: the phone toolbar has no room for it (issue #730).
+    const isMobile = useIsMobile()
     const progress = useReaderProgress({
         ebookId, fontSize, ready: !loading && !error, viewerRef, bufferRef,
     })
@@ -514,15 +539,24 @@ function EbookReader({ ebookId, pairId, initialChapter, initialTextPreview, onCl
         if (!isDestroyed()) {
             setUnresolvedPosition(restored.outcome.unresolved)
             progress.onOpened(book)
+            // The restore's own `relocated` fired before the handler below
+            // exists; seed the indicator from where the restore landed so it
+            // does not read "…" until the first page turn.
+            let landed = null
+            try { landed = rendition.currentLocation?.() } catch { landed = null }
+            if (landed?.start) {
+                progress.onRelocated({
+                    location: landed, spineIndex: spineIndexOf(book, landed.start.href),
+                    fraction: percentOf(book, landed) / 100, book, rendition,
+                })
+            }
         }
 
         // Track position changes
         rendition.on('relocated', (location) => {
             if (isDestroyed()) return
             const cfi = location.start.cfi
-            const percent = book.locations
-                ? location.start.percentage * 100
-                : (location.start.displayed?.page / location.start.displayed?.total) * 100 || 0
+            const percent = percentOf(book, location)
             setCurrentCfi(cfi)
             setProgressPercent(percent)
 
@@ -532,11 +566,7 @@ function EbookReader({ ebookId, pairId, initialChapter, initialTextPreview, onCl
             currentChapterProgressionRef.current = Math.max(0, page - 1) / Math.max(1, total)
 
             // Track spine index for bookmark syncing
-            const spineIndex = book.spine.items.findIndex(item =>
-                item.href && (location.start.href === item.href ||
-                location.start.href.endsWith('/' + item.href) ||
-                item.href.endsWith('/' + location.start.href))
-            )
+            const spineIndex = spineIndexOf(book, location.start.href)
             if (spineIndex >= 0) currentSpineIndexRef.current = spineIndex
 
             progress.onRelocated({ location, spineIndex, fraction: percent / 100, book, rendition })
@@ -778,6 +808,7 @@ function EbookReader({ ebookId, pairId, initialChapter, initialTextPreview, onCl
     // Keyboard navigation
     useEffect(() => {
         function handleKey(e) {
+            if (e.key !== 'Escape' && e.target?.closest?.(OWN_KEYS_SELECTOR)) return
             if (e.key === 'ArrowLeft' || e.key === 'PageUp') {
                 e.preventDefault()
                 noteUserNavigation()
@@ -836,6 +867,19 @@ function EbookReader({ ebookId, pairId, initialChapter, initialTextPreview, onCl
         localStorage.setItem(READER_THEME_KEY, mode)
         setShowThemeMenu(false)
     }, [])
+
+    const pageModeSelect = (
+        <select
+            className="reader-page-mode"
+            aria-label="Page numbers"
+            title="Page numbers"
+            value={progress.pageMode}
+            onChange={e => progress.setPageMode(e.target.value)}
+        >
+            <option value="ebook">Ebook pages</option>
+            <option value="print">Print pages</option>
+        </select>
+    )
 
     // What the progress indicator shows; its accessible name carries the same.
     const progressText = progress.mode === 'percent' ? `${progressPercent.toFixed(1)}%` : progress.text
@@ -905,22 +949,16 @@ function EbookReader({ ebookId, pairId, initialChapter, initialTextPreview, onCl
                                         {label}
                                     </button>
                                 ))}
+                                {isMobile && (
+                                    <div className="reader-theme-menu-row">{pageModeSelect}</div>
+                                )}
                             </div>
                         )}
                     </div>
                     <div className="font-size-controls">
                         <button onClick={() => setFontSize(s => Math.max(MIN_FONT, s - 10))} title="Decrease font">A-</button>
                         <button onClick={() => setFontSize(s => Math.min(MAX_FONT, s + 10))} title="Increase font">A+</button>
-                        <select
-                            className="reader-page-mode"
-                            aria-label="Page numbers"
-                            title="Page numbers"
-                            value={progress.pageMode}
-                            onChange={e => progress.setPageMode(e.target.value)}
-                        >
-                            <option value="ebook">Ebook pages</option>
-                            <option value="print">Print pages</option>
-                        </select>
+                        {!isMobile && pageModeSelect}
                     </div>
                     <button
                         type="button"
