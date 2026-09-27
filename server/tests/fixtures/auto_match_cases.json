@@ -395,5 +395,87 @@
       "author": "Brandon Sanderson"
     },
     "expected_score": null
+  },
+  {
+    "name": "audiobook_series_is_its_own_folder_title",
+    "why": "Issue #712: Author/Book Title/Book Title.m4b read the book's own folder as its series. A series that equals the book's title and has no number is missing metadata, not a different series.",
+    "ebook": {
+      "title": "Book Title",
+      "author": "Some Author",
+      "series": "Some Chronicles",
+      "series_index": 4
+    },
+    "audiobook": {
+      "title": "Book Title",
+      "author": "Some Author",
+      "series": "Book Title"
+    },
+    "expected_score": 100
+  },
+  {
+    "name": "series_differs_only_by_a_trilogy_suffix",
+    "why": "Issue #712: 'Soldier Saga' and 'Soldier Saga Trilogy' name one series; trailing trilogy/series/saga/cycle/chronicles words are dropped before comparing.",
+    "ebook": {
+      "title": "First Book",
+      "author": "Some Author",
+      "series": "Soldier Saga",
+      "series_index": 1
+    },
+    "audiobook": {
+      "title": "First Book",
+      "author": "Some Author",
+      "series": "Soldier Saga Trilogy",
+      "series_index": 1
+    },
+    "expected_score": 100
+  },
+  {
+    "name": "suffix_stripping_keeps_the_index_check",
+    "why": "Issue #712 regression guard: the same series after suffix stripping, but books 1 and 2, are still different books.",
+    "ebook": {
+      "title": "First Book",
+      "author": "Some Author",
+      "series": "Soldier Saga",
+      "series_index": 1
+    },
+    "audiobook": {
+      "title": "First Book",
+      "author": "Some Author",
+      "series": "Soldier Saga Trilogy",
+      "series_index": 2
+    },
+    "expected_score": null
+  },
+  {
+    "name": "different_series_are_still_rejected",
+    "why": "Issue #712 regression guard: neither series is a book title or a suffix variant, so two named series that differ still reject.",
+    "ebook": {
+      "title": "First Book",
+      "author": "Some Author",
+      "series": "Soldier Saga"
+    },
+    "audiobook": {
+      "title": "First Book",
+      "author": "Some Author",
+      "series": "Harbour Tales"
+    },
+    "expected_score": null
+  },
+  {
+    "name": "a_numbered_series_named_like_the_book_still_counts",
+    "why": "Issue #712: a series equal to the title WITH a number is a real series (book 1 of 'Dune'), so it is compared, not ignored - and here it disagrees.",
+    "ebook": {
+      "title": "Book Title",
+      "author": "Some Author",
+      "series": "Other Saga",
+      "series_index": 1
+    },
+    "audiobook": {
+      "title": "Book Title",
+      "author": "Some Author",
+      "series": "Book Title",
+      "series_index": 1
+    },
+    "expected_score": null
   }
 ]

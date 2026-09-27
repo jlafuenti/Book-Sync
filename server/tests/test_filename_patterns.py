@@ -294,3 +294,62 @@ async def test_a_pattern_that_blows_up_on_one_path_does_not_abort_the_scan(db, c
     assert meta["_metadata_source"] == "filename"
     messages = [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING]
     assert any("Some Title.epub" in m for m in messages), messages
+
+
+# ---------------------------------------------------------------------------
+# Issue #712: a book's own folder read as its series
+# ---------------------------------------------------------------------------
+#
+# The stored audiobook patterns try `<Author>/<Series>/<Title>` before
+# `<Author>/<Title>/<Title>`, so `Author/Book Title/Book Title.m4b` - the
+# standard Audiobookshelf layout - came back with series = "Book Title", and
+# the auto-matcher then refused to pair it with its ebook's real series.
+
+_AUDIO_PATTERNS = [
+    "<Author>/<Series>/<Book Number> - <Title>",
+    "<Author>/<Series>/<Title>",
+    "<Author>/<Title>/<Title>",
+    "<Author>/<Title>",
+]
+
+
+async def _parse_audio(db, relative_path):
+    from pathlib import PurePosixPath
+
+    from services.metadata_extract import parse_filename_metadata_with_settings
+
+    await _set_patterns(db, _AUDIO_PATTERNS, key="audiobook_filename_patterns")
+    p = PurePosixPath(relative_path)
+    return await parse_filename_metadata_with_settings(
+        p.name, db, parent_dir_name=p.parent.name, file_type="audiobook", relative_path=relative_path,
+    )
+
+
+async def test_a_folder_named_after_the_book_is_not_its_series(db):
+    meta = await _parse_audio(db, "Some Author/Book Title/Book Title.m4b")
+
+    assert meta["title"] == "Book Title"
+    assert meta["author"] == "Some Author"
+    assert meta["series"] is None
+    assert meta["series_index"] is None
+
+
+async def test_that_holds_through_case_and_punctuation(db):
+    meta = await _parse_audio(db, "Some Author/Book Title!/book title.m4b")
+
+    assert meta["series"] is None
+
+
+async def test_a_real_series_folder_is_still_a_series(db):
+    meta = await _parse_audio(db, "Some Author/Real Series/Book Title.m4b")
+
+    assert meta["series"] == "Real Series"
+    assert meta["title"] == "Book Title"
+
+
+async def test_a_series_named_like_its_book_is_kept_when_it_has_a_number(db):
+    """`Author/Dune/1 - Dune` is book 1 of a series called Dune, not a book folder."""
+    meta = await _parse_audio(db, "Some Author/Book Title/1 - Book Title.m4b")
+
+    assert meta["series"] == "Book Title"
+    assert meta["series_index"] == 1.0
