@@ -46,6 +46,7 @@ from schemas import (
     LibraryItem, LibraryItemKind, LibraryTab, LibrarySort, SortDir,
     LibraryFacets, LibraryCounts, FacetCount,
     CalibreStatusResponse, CleanupResponse, MessageResponse, VerifyFilesResponse,
+    ActionResult, PrintPagesProgress,
 )
 from rate_limit import expensive_reads, search_reads
 from routers.auth import get_current_user, get_editor_user, rate_limited
@@ -115,6 +116,7 @@ from services.position_service import (
     repoint_standalone_positions_to_ebook,
 )
 from services import library_jobs
+from services import print_pages
 from services import audio_change
 from services.library_jobs import LibraryJobBusy
 from services.uploads import stream_upload_to_path
@@ -1793,6 +1795,34 @@ async def _enrich_abs_impl(db: AsyncSession) -> dict:
         "updated": updated_count,
         "tag_write_failures": tag_write_failures,
     }
+
+
+# ---------------------------------------------------------------------------
+# Print page counts from Google Books (issue #739): a background job, since a
+# whole library takes far longer than the proxy's request timeout.
+# ---------------------------------------------------------------------------
+
+@router.post("/print-pages/start", status_code=202, response_model=ActionResult)
+async def start_print_page_fill(_: User = Depends(get_editor_user)):
+    """Start looking up print page counts for ebooks without one. 409 while a run is going."""
+    if not await print_pages.start():
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT,
+                            detail="Print page counts are already being looked up.")
+    return {"status": "started"}
+
+
+@router.get("/print-pages/status", response_model=PrintPagesProgress)
+async def print_page_fill_status(_: User = Depends(get_current_user)):
+    """The current or last run, and how many ebooks the next run would look up."""
+    return {**print_pages.get_progress(), "remaining": await print_pages.remaining(),
+            "api_key_configured": print_pages.api_key_configured()}
+
+
+@router.post("/print-pages/cancel", response_model=ActionResult)
+async def cancel_print_page_fill(_: User = Depends(get_editor_user)):
+    """Stop the running lookup after the book it is on."""
+    print_pages.request_cancel()
+    return {"status": "cancel_requested"}
 
 
 @router.post("/audiobooks/{audiobook_id}/enrich-abs")

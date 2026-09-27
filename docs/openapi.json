@@ -3938,6 +3938,121 @@
         "title": "PositionUpdate",
         "type": "object"
       },
+      "PrintPagesProgress": {
+        "additionalProperties": false,
+        "description": "`services.print_pages` state as `GET /api/library/print-pages/status`\nreports it (issue #739), plus how many ebooks the next run would look up.\n`stopped_reason` is null for a run that finished, else `quota`, `errors`,\n`cancelled` or `error`. Timestamps are ISO-8601 strings.",
+        "properties": {
+          "api_key_configured": {
+            "title": "Api Key Configured",
+            "type": "boolean"
+          },
+          "cancel_requested": {
+            "title": "Cancel Requested",
+            "type": "boolean"
+          },
+          "current": {
+            "title": "Current",
+            "type": "integer"
+          },
+          "errors": {
+            "title": "Errors",
+            "type": "integer"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "found": {
+            "title": "Found",
+            "type": "integer"
+          },
+          "last_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Error"
+          },
+          "message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message"
+          },
+          "no_match": {
+            "title": "No Match",
+            "type": "integer"
+          },
+          "remaining": {
+            "title": "Remaining",
+            "type": "integer"
+          },
+          "running": {
+            "title": "Running",
+            "type": "boolean"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "stopped_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stopped Reason"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "running",
+          "current",
+          "total",
+          "found",
+          "no_match",
+          "errors",
+          "remaining",
+          "started_at",
+          "finished_at",
+          "cancel_requested",
+          "stopped_reason",
+          "message",
+          "last_error",
+          "api_key_configured"
+        ],
+        "title": "PrintPagesProgress",
+        "type": "object"
+      },
       "ProgressResponse": {
         "properties": {
           "audio_position_ms": {
@@ -9387,6 +9502,87 @@
           }
         ],
         "summary": "Resolve Metadata Discrepancy",
+        "tags": [
+          "library"
+        ]
+      }
+    },
+    "/api/library/print-pages/cancel": {
+      "post": {
+        "description": "Stop the running lookup after the book it is on.",
+        "operationId": "cancel_print_page_fill_api_library_print_pages_cancel_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActionResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Cancel Print Page Fill",
+        "tags": [
+          "library"
+        ]
+      }
+    },
+    "/api/library/print-pages/start": {
+      "post": {
+        "description": "Start looking up print page counts for ebooks without one. 409 while a run is going.",
+        "operationId": "start_print_page_fill_api_library_print_pages_start_post",
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActionResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Start Print Page Fill",
+        "tags": [
+          "library"
+        ]
+      }
+    },
+    "/api/library/print-pages/status": {
+      "get": {
+        "description": "The current or last run, and how many ebooks the next run would look up.",
+        "operationId": "print_page_fill_status_api_library_print_pages_status_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PrintPagesProgress"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Print Page Fill Status",
         "tags": [
           "library"
         ]

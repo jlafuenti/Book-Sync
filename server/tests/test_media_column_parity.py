@@ -67,9 +67,10 @@ def _columns(model):
 # ---------- the two tables stay the same table ----------
 
 def test_ebook_and_audiobook_share_common_columns():
-    """The symmetric difference is exactly `duration_seconds` and
-    `print_page_count` — one column genuinely audiobook-only, one genuinely
-    ebook-only (issue #730: an audiobook has no printed page count).
+    """The symmetric difference is exactly `duration_seconds`, audiobook-only,
+    and the ebook-only print page columns: `print_page_count` (issue #730: an
+    audiobook has no printed page count) and `print_pages_looked_up_at`, when
+    the Google Books fill last tried it (issue #739).
 
     This fails the moment someone adds a column to one model and not the other
     for any other reason — which is how the metadata features drifted apart in
@@ -78,7 +79,7 @@ def test_ebook_and_audiobook_share_common_columns():
     ebook_names = set(_columns(EBook))
     audio_names = set(_columns(AudioBook))
 
-    assert ebook_names ^ audio_names == {"duration_seconds", "print_page_count"}
+    assert ebook_names ^ audio_names == {"duration_seconds", "print_page_count", "print_pages_looked_up_at"}
     assert "duration_seconds" in audio_names
     assert "print_page_count" in ebook_names
 

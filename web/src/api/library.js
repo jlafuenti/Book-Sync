@@ -256,6 +256,22 @@ export async function enrichLibraryFromAbs() {
     return jsonOrThrow(resp, `HTTP ${resp.status}`);
 }
 
+// Print page counts from Google Books (issue #739): a background job on the server.
+export async function getPrintPageFillStatus() {
+    const resp = await fetchWithAuth(`${API_BASE}/library/print-pages/status`);
+    return jsonOrThrow(resp, 'Failed to load print page status');
+}
+
+export async function startPrintPageFill() {
+    const resp = await fetchWithAuth(`${API_BASE}/library/print-pages/start`, { method: 'POST' });
+    return jsonOrThrow(resp, 'Failed to start the lookup');
+}
+
+export async function cancelPrintPageFill() {
+    const resp = await fetchWithAuth(`${API_BASE}/library/print-pages/cancel`, { method: 'POST' });
+    return jsonOrThrow(resp, 'Failed to cancel the lookup');
+}
+
 export async function enrichAudiobookFromAbs(id) {
     const resp = await fetchWithAuth(`${API_BASE}/library/audiobooks/${id}/enrich-abs`, { method: 'POST' });
     await ensureOk(resp, `HTTP ${resp.status}`);

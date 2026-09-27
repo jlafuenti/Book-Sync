@@ -29,6 +29,11 @@ operator must do by hand rather than read about afterwards.
   background once the book opens, at the current window and font size, and kept on the device so
   the next open is instant. The time left uses your reading speed on this device, learned from
   ordinary page turns. The chosen view and setting are kept per device.
+- **System → Print Page Counts** looks up printed page counts on Google Books for every ebook that
+  has none (#739), so existing books get real print pages without editing them one by one. Books
+  with an ISBN are matched by it; the rest only when title and author match exactly. It never
+  changes a count someone set, runs in the background with live progress, and remembers the books
+  it has tried, so a run that stops at Google's daily limit carries on from there the next day.
 
 ### Fixed
 
@@ -45,6 +50,9 @@ operator must do by hand rather than read about afterwards.
 ### Upgrade notes
 
 - Migration `0028_ebook_print_page_count` adds a nullable column to `ebooks` and fills nothing.
+- Migration `0029_print_pages_looked_up` adds another nullable column to `ebooks`, for the print
+  page count lookup, and fills nothing. The lookup works without `GOOGLE_BOOKS_API_KEY`, but
+  Google's anonymous limit is low and shared; with a key it gets about 1,000 lookups a day.
 
 - Migration `0027_false_capture_dates` moves those "last read" dates back to the latest time the
   database can vouch for: the position's last recorded move or sync before the false date,
