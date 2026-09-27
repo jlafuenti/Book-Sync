@@ -55,6 +55,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
@@ -1188,9 +1189,9 @@ class ReaderActivity : AppCompatActivity() {
         progressState.printPageCount = progressPrefs.printPageCount(id)
         if (!networkMonitor.isOnline.value) return
         lifecycleScope.launch {
-            // Null on failure as well as when the server has none: either way
-            // the stored count stands (LibraryRepository.fetchPrintPageCount).
-            val fresh = repository.fetchPrintPageCount(id) ?: return@launch
+            // A failed request keeps the stored count; a success replaces it,
+            // and a success with null (cleared on the server) clears it.
+            val fresh = repository.fetchPrintPageCount(id).getOrElse { return@launch }
             progressPrefs.setPrintPageCount(id, fresh)
             progressState.printPageCount = fresh
             renderProgress()
@@ -1286,7 +1287,12 @@ class ReaderActivity : AppCompatActivity() {
         val link = pub.readingOrder.getOrNull(ReaderProgressInputs.sectionIndexOf(spineHrefs, href)) ?: return
         val raw = readResourceText(pub, link) ?: return
         val captured = try {
-            LiveHeadCapture.parse(nav.evaluateJavascript(LiveHeadCapture.script(ReaderProgressInputs.rawHead(raw))))
+            val result = nav.evaluateJavascript(LiveHeadCapture.script(ReaderProgressInputs.rawHead(raw)))
+            // Not cancellable either (see probeLivePage): a trigger job
+            // replaced while this ran must stop here, not mark the layout
+            // captured.
+            currentCoroutineContext().ensureActive()
+            LiveHeadCapture.parse(result)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {

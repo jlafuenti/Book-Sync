@@ -103,9 +103,12 @@
 
   // Book content shares this document with the bridge, so none of its
   // scripts or inline handlers may run here. (The live reader runs them; they
-  // do not change layout in any book we have seen.)
+  // do not change layout in any book we have seen.) Frames are sandboxed
+  // rather than removed: their box still takes its place in the layout, but
+  // nothing inside them can script, so nothing can reach the bridge.
   function sanitize(root) {
     root.querySelectorAll('script').forEach(function (s) { s.remove(); });
+    root.querySelectorAll('iframe, frame').forEach(function (f) { f.setAttribute('sandbox', ''); });
     var all = [root].concat(Array.prototype.slice.call(root.querySelectorAll('*')));
     all.forEach(function (el) {
       Array.prototype.slice.call(el.attributes).forEach(function (a) {

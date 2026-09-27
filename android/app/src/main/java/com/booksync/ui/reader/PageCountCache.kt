@@ -104,7 +104,7 @@ class PageCountCache(
          * [LiveHeadCapture] change how pages are laid out or counted, so counts
          * cached by the old logic are not reused.
          */
-        const val COUNTER_VERSION = 1
+        const val COUNTER_VERSION = 2
 
         private val json = Json { ignoreUnknownKeys = true }
 

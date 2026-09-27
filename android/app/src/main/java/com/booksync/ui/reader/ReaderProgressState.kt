@@ -145,6 +145,10 @@ class ReaderProgressState(private val prefs: ReaderProgressPrefs) {
      * when that is unknown. The web divides by its counted total; Android
      * deliberately prefers the live one, as the probe wins over the count for
      * the chapter state (issue #730, ruling 4).
+     *
+     * Android samples only the user's own turns: echoes, slider jumps and
+     * re-layouts arrive with [userTurn] false and are skipped. The web samples
+     * any forward adjacent turn; the difference is deliberate.
      */
     fun onPageShown(sectionIndex: Int, page: Int, pages: Int, nowMs: Long, userTurn: Boolean = true) {
         if (sectionIndex < 0 || page < 1) return

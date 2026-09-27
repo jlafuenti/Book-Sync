@@ -529,20 +529,24 @@ class LibraryRepository @Inject constructor(
     /**
      * The print page count for one ebook's tap-to-cycle progress indicator
      * (issue #730), fetched fresh rather than read from the Room cache — the
-     * caller (Task 12's `ReaderActivity` wiring) stores the result itself, in
-     * `ReaderProgressPrefs`, and falls back to whatever is already stored
-     * there when this returns null. Unlike [resolveEbookById], any failure —
-     * not just 404 — is swallowed: an offline reader should keep showing its
-     * last-known page count rather than blocking the indicator on a retry.
+     * caller (`ReaderActivity`) stores the result itself, in
+     * `ReaderProgressPrefs`.
+     *
+     * A success carries the server's value, and null there means the server
+     * has no count (never set, or cleared), so the caller clears its stored
+     * one. A failure means the request failed and says nothing about the
+     * count, so the caller keeps what it has. Unlike [resolveEbookById], every
+     * failure — not just 404 — comes back as one rather than being thrown: an
+     * offline reader should keep its last-known page count, not block on a retry.
      */
-    suspend fun fetchPrintPageCount(ebookId: Int): Int? =
+    suspend fun fetchPrintPageCount(ebookId: Int): Result<Int?> =
         try {
-            api.getEbook(ebookId).print_page_count
+            Result.success(api.getEbook(ebookId).print_page_count)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
             log("fetchPrintPageCount — ebook $ebookId request failed: ${e.message}")
-            null
+            Result.failure(e)
         }
 
     /** Reactive single-pair flow for the details screen. */
