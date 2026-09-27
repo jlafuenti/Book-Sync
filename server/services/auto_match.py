@@ -106,16 +106,47 @@ def _parse_series_index(value) -> Optional[float]:
         return None
 
 
-def _series_compatible(eb_series, eb_idx, ab_series, ab_idx) -> bool:
-    """Return False if series metadata indicates these are different books."""
+# Trailing words that name a kind of series rather than which one: "Soldier
+# Saga" and "Soldier Saga Trilogy" are one series (issue #712).
+_SERIES_SUFFIXES = {"trilogy", "duology", "quartet", "series", "saga", "cycle", "chronicles", "sequence"}
+
+
+def _series_key(text) -> str:
+    """A series or title reduced for comparison: lowercase, no leading article,
+    no punctuation, and no trailing series-kind words (unless that is all
+    there is)."""
+    words = re.sub(r"[^\w\s]", " ", _normalize_for_comparison(text or "")).split()
+    while len(words) > 1 and words[-1] in _SERIES_SUFFIXES:
+        words.pop()
+    return " ".join(words)
+
+
+def _is_own_title(series, index, *titles) -> bool:
+    """True when a series is really a book's own name: it reads the same as a
+    title and carries no number. That is what a filename pattern produces from
+    `Author/Book Title/Book Title.m4b` (issue #712); a numbered one ("Dune" #1)
+    is a real series."""
+    if not series or _parse_series_index(index) is not None:
+        return False
+    key = _series_key(series)
+    return bool(key) and any(key == _series_key(t) for t in titles if t)
+
+
+def _series_compatible(eb_series, eb_idx, ab_series, ab_idx, eb_title=None, ab_title=None) -> bool:
+    """Return False if series metadata indicates these are different books.
+
+    A series that is really a book's own title (`_is_own_title`) counts as
+    missing, not as a conflicting series (issue #712).
+    """
+    if _is_own_title(eb_series, eb_idx, eb_title, ab_title):
+        eb_series = None
+    if _is_own_title(ab_series, ab_idx, eb_title, ab_title):
+        ab_series = None
     if not eb_series and not ab_series:
         return True
     if not eb_series or not ab_series:
         return True  # Only one has series — missing metadata is fine
-    series_score = fuzz.token_sort_ratio(
-        _normalize_for_comparison(eb_series),
-        _normalize_for_comparison(ab_series),
-    )
+    series_score = fuzz.token_sort_ratio(_series_key(eb_series), _series_key(ab_series))
     if series_score < AUTO_MATCH_SERIES_THRESHOLD:
         return False  # Clearly different series
     # Same series — if both have a readable index they must be the same number.
@@ -172,7 +203,8 @@ def _score_candidate(ebook, audiobook) -> Optional[float]:
 
     # Reject if series metadata indicates these are different books
     if not _series_compatible(ebook.series, ebook.series_index,
-                              audiobook.series, audiobook.series_index):
+                              audiobook.series, audiobook.series_index,
+                              ebook.title, audiobook.title):
         return None
 
     eb_title = _normalize_for_comparison(ebook.title)

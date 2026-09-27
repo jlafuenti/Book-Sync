@@ -114,6 +114,13 @@ def extract_title_from_filename(filename: str) -> str:
     return name.strip()
 
 
+def _same_name(a: str, b: str) -> bool:
+    """Whether two names read the same ignoring case, punctuation and spacing."""
+    def plain(s):
+        return " ".join(re.sub(r"[^\w\s]", " ", (s or "").lower()).split())
+    return bool(plain(a)) and plain(a) == plain(b)
+
+
 async def parse_filename_metadata_with_settings(
     filename: str, db: AsyncSession, parent_dir_name: str = None,
     file_type: str = "ebook", relative_path: str = None
@@ -186,6 +193,16 @@ async def parse_filename_metadata_with_settings(
                     except ValueError:
                         pass
                 
+                # A <Series> that reads the same as the <Title> and has no
+                # number is the book's own folder, not a series: the stored
+                # patterns try `<Author>/<Series>/<Title>` before
+                # `<Author>/<Title>/<Title>`, so `Author/Book Title/Book
+                # Title.m4b` landed here with series = "Book Title", and the
+                # auto-matcher then refused its ebook's real series (#712).
+                if (meta["series"] and meta["series_index"] is None
+                        and _same_name(meta["series"], meta["title"])):
+                    meta["series"] = None
+
                 # If we have at least a title, we consider it a match
                 if meta["title"]:
                     meta["_metadata_source"] = "pattern"
