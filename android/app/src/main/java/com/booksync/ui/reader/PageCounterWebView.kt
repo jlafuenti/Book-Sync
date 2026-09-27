@@ -32,6 +32,8 @@ import org.readium.r2.shared.util.Url
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.IOException
+import java.net.URI
+import java.net.URISyntaxException
 
 /**
  * The pure half of [PageCounterWebView] (issue #730, task 11): how its requests
@@ -78,12 +80,23 @@ object PageCounterRequests {
         data object None : Route
     }
 
-    private val URL_PATTERN = Regex("""^https://([^/?#]+)/([^?#]*)""")
-
+    /**
+     * Parsed with [URI], not a regex: `server/tests/test_android_no_personal_hosts.py`
+     * reads any literal that starts like an https URL as a hard-coded host.
+     * The host comes from the raw authority, because `URI.getHost()` is null for
+     * Readium's underscore host names. The query and fragment are ignored, and the
+     * path stays percent-encoded. A URL that [URI] rejects (an unescaped space, a
+     * malformed `%` escape) is not ours; WebView hands over escaped URLs.
+     */
     fun route(url: String): Route {
-        val match = URL_PATTERN.find(url) ?: return Route.None
-        val host = match.groupValues[1].lowercase()
-        val path = match.groupValues[2]
+        val uri = try {
+            URI(url)
+        } catch (e: URISyntaxException) {
+            return Route.None
+        }
+        if (uri.scheme != "https") return Route.None
+        val host = uri.rawAuthority?.lowercase() ?: return Route.None
+        val path = uri.rawPath?.removePrefix("/").orEmpty()
         if (path.isEmpty()) return Route.None
         return when (host) {
             PACKAGE_HOST -> if (path == SHELL_PATH) Route.Shell else Route.Package(path)

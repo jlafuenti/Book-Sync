@@ -88,6 +88,24 @@ class PageCounterRequestsTest {
     }
 
     @Test
+    fun `a URL that URI rejects is not ours`() {
+        assertEquals(Route.None, PageCounterRequests.route("https://readium_package/Text/My Chapter.xhtml"))
+        assertEquals(Route.None, PageCounterRequests.route("https://readium_package/a%zz.xhtml"))
+        assertEquals(Route.None, PageCounterRequests.route("https://readium_assets/readium/a b.css"))
+    }
+
+    @Test
+    fun `the shell URL with a load sequence and a fragment still routes to Shell`() {
+        assertEquals(Route.Shell, PageCounterRequests.route("${PageCounterRequests.SHELL_URL}?n=42#top"))
+    }
+
+    @Test
+    fun `a URL with no path after the host is not routed`() {
+        assertEquals(Route.None, PageCounterRequests.route("https://readium_package"))
+        assertEquals(Route.None, PageCounterRequests.route("https://readium_assets?x=1"))
+    }
+
+    @Test
     fun `host match ignores case`() {
         assertEquals(
             Route.Package("a.xhtml"),
