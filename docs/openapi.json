@@ -4383,6 +4383,35 @@
         "title": "QueuePriorityUpdate",
         "type": "object"
       },
+      "RealignResponse": {
+        "description": "`POST /api/transcription/{pair_id}/realign`: the rebuilt map's point\ncount, and how many were matched against the transcript rather than\ninterpolated between matches. The web's transcript view calls it (#713).",
+        "properties": {
+          "interpolated": {
+            "title": "Interpolated",
+            "type": "integer"
+          },
+          "matched": {
+            "title": "Matched",
+            "type": "integer"
+          },
+          "points": {
+            "title": "Points",
+            "type": "integer"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "points",
+          "matched",
+          "interpolated"
+        ],
+        "title": "RealignResponse",
+        "type": "object"
+      },
       "RegistrationModeResponse": {
         "description": "`GET /api/auth/registration` — unauthenticated, and deliberately one\nfield. The login screens need to know whether to show a request form, an\ninvite-code box, or nothing at all, and they ask before anyone has a token.\nNothing else about the server's configuration belongs in a reply a stranger\ncan read.",
         "properties": {
@@ -4958,22 +4987,6 @@
         "title": "SyncMapResponse",
         "type": "object"
       },
-      "SyncMapTextUpdate": {
-        "properties": {
-          "points": {
-            "items": {
-              "$ref": "#/components/schemas/SyncPointTextUpdate"
-            },
-            "title": "Points",
-            "type": "array"
-          }
-        },
-        "required": [
-          "points"
-        ],
-        "title": "SyncMapTextUpdate",
-        "type": "object"
-      },
       "SyncPointResponse": {
         "properties": {
           "audio_end_ms": {
@@ -5033,24 +5046,6 @@
           "audio_end_ms"
         ],
         "title": "SyncPointResponse",
-        "type": "object"
-      },
-      "SyncPointTextUpdate": {
-        "properties": {
-          "audio_text": {
-            "title": "Audio Text",
-            "type": "string"
-          },
-          "id": {
-            "title": "Id",
-            "type": "integer"
-          }
-        },
-        "required": [
-          "id",
-          "audio_text"
-        ],
-        "title": "SyncPointTextUpdate",
         "type": "object"
       },
       "TestAbsRequest": {
@@ -5220,6 +5215,51 @@
           "refresh_token"
         ],
         "title": "TokenResponse",
+        "type": "object"
+      },
+      "TranscriptResponse": {
+        "description": "`GET /api/transcription/{pair_id}/transcript`: the cached transcript,\nsentence by sentence, for the alignment view (#713).",
+        "properties": {
+          "pair_id": {
+            "title": "Pair Id",
+            "type": "integer"
+          },
+          "sentences": {
+            "items": {
+              "$ref": "#/components/schemas/TranscriptSentence"
+            },
+            "title": "Sentences",
+            "type": "array"
+          }
+        },
+        "required": [
+          "pair_id",
+          "sentences"
+        ],
+        "title": "TranscriptResponse",
+        "type": "object"
+      },
+      "TranscriptSentence": {
+        "properties": {
+          "end_ms": {
+            "title": "End Ms",
+            "type": "integer"
+          },
+          "start_ms": {
+            "title": "Start Ms",
+            "type": "integer"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "text",
+          "start_ms",
+          "end_ms"
+        ],
+        "title": "TranscriptSentence",
         "type": "object"
       },
       "TranscriptionStatusResponse": {
@@ -11772,7 +11812,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/RealignResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -11895,10 +11937,10 @@
         ]
       }
     },
-    "/api/transcription/{pair_id}/text": {
-      "put": {
-        "description": "Update transcription text for specific sync points without altering timestamps.\nUseful for correcting Whisper transcription errors from the frontend.",
-        "operationId": "update_transcription_text_api_transcription__pair_id__text_put",
+    "/api/transcription/{pair_id}/transcript": {
+      "get": {
+        "description": "The pair's cached transcript: what Whisper heard, sentence by sentence,\nwith times. The web's alignment view shows it beside each ebook sentence;\n`SyncPoint.audio_text` cannot serve, because alignment never writes it.",
+        "operationId": "get_cached_transcript_api_transcription__pair_id__transcript_get",
         "parameters": [
           {
             "in": "path",
@@ -11910,21 +11952,13 @@
             }
           }
         ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/SyncMapTextUpdate"
-              }
-            }
-          },
-          "required": true
-        },
         "responses": {
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/TranscriptResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -11945,7 +11979,7 @@
             "OAuth2PasswordBearer": []
           }
         ],
-        "summary": "Update Transcription Text",
+        "summary": "Get Cached Transcript",
         "tags": [
           "transcription"
         ]

@@ -64,7 +64,7 @@ Because the whole precache is re-fetched wherever a content hash changed, the
 build is split so a deploy invalidates as little as possible (issue #281). The
 rarely-first-visited routes are `React.lazy` in `web/src/App.jsx` — Book detail
 (the reader), System, Import sources, Troubleshoot, Transcription and the
-transcription editor — and the epub.js dependency tree gets its own vendor chunk
+transcript alignment view — and the epub.js dependency tree gets its own vendor chunk
 (`web/src/build/manualChunks.js`). Home, Library and Login stay eager: they are
 the first paint. `web/src/App.codeSplit.test.jsx` fails if a lazy route is
 quietly hoisted back to a static import.

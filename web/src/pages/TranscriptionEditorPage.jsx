@@ -1,52 +1,70 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react'
+import React, { useState, useEffect, useMemo, useCallback } from 'react'
 import { useParams, Link } from 'react-router-dom'
-import { getSyncMap, updateTranscriptionText, getPair } from '../api'
+import { getSyncMap, getPair, realignPair, getTranscript } from '../api'
+import { heardTextByPoint } from '../lib/heardText'
+import { useAuth } from '../contexts/AuthContext'
 import './TranscriptionPage.css'
 
+/**
+ * How a pair's ebook sentences line up with its audio: for each sentence, the
+ * audio time range, what the transcript heard there, and whether the aligner
+ * matched it or filled it in between matches.
+ *
+ * Read-only since issue #713. The page used to let you edit the heard text, but
+ * re-alignment rebuilds the map from the saved transcript, so an edit never
+ * changed where either app lands - and alignment never even wrote that text
+ * (`audio_text` is NULL on every point), so the boxes held the ebook sentence.
+ * The heard text now comes from the saved transcript itself. Re-align here is
+ * the rebuild - cheap, and no re-transcription.
+ */
 function TranscriptionEditorPage() {
     const { pairId } = useParams()
+    const { hasMinRole } = useAuth()
+    const canEdit = hasMinRole('editor')
     const [points, setPoints] = useState([])
     const [pair, setPair] = useState(null)
     const [loading, setLoading] = useState(true)
-    const [saving, setSaving] = useState(false)
+    const [realigning, setRealigning] = useState(false)
     const [error, setError] = useState('')
     const [successMessage, setSuccessMessage] = useState('')
+    const [query, setQuery] = useState('')
+    // The saved transcript's sentences; null while loading or when there is none.
+    const [transcript, setTranscript] = useState(null)
+    const [transcriptMissing, setTranscriptMissing] = useState(false)
 
-    // Find and Replace state
-    const [findText, setFindText] = useState('')
-    const [replaceText, setReplaceText] = useState('')
-
-    // Track which points have been edited
-    const [editedPoints, setEditedPoints] = useState({})
-
-    const listRef = useRef(null)
+    const loadPoints = useCallback(async () => {
+        const data = await getSyncMap(pairId)
+        setPoints((data.sync_points || []).map(pt => ({
+            id: pt.id,
+            ebookText: pt.epub_text_preview || '',
+            start_ms: pt.audio_start_ms,
+            end_ms: pt.audio_end_ms,
+            chapter: pt.epub_chapter,
+            sentence: pt.epub_sentence_index,
+            matched: pt.confidence > 0,
+        })))
+    }, [pairId])
 
     useEffect(() => {
         const load = async () => {
             try {
-                // Fetch the sync map points
-                const data = await getSyncMap(pairId)
-                // Map the data into something easier to edit
-                const pts = (data.sync_points || []).map(pt => ({
-                    id: pt.id,
-                    originalText: pt.audio_text !== null ? pt.audio_text : pt.epub_text_preview || '',
-                    text: pt.audio_text !== null ? pt.audio_text : pt.epub_text_preview || '',
-                    start_ms: pt.audio_start_ms,
-                    end_ms: pt.audio_end_ms,
-                    chapter: pt.epub_chapter,
-                    sentence: pt.epub_sentence_index
-                }))
-                setPoints(pts)
+                await loadPoints()
             } catch (err) {
                 setError(err.message)
             } finally {
                 setLoading(false)
             }
 
+            // What was heard comes from the saved transcript; without one the
+            // alignment still shows, just without that line.
+            getTranscript(pairId)
+                .then(t => setTranscript(t.sentences || []))
+                .catch(() => setTranscriptMissing(true))
+
             // The pair is only the subheading's title/author (issue #277). It
             // used to come from `getPairs()` — the whole library, filtered
             // client-side to one row. Fetch the one, and keep its failure off
-            // the editor: a missing pair must not blank the points.
+            // the page: a missing pair must not blank the points.
             try {
                 setPair(await getPair(pairId))
             } catch {
@@ -54,74 +72,31 @@ function TranscriptionEditorPage() {
             }
         }
         load()
-    }, [pairId])
+    }, [pairId, loadPoints])
 
-    const handleTextChange = (id, newText) => {
-        setPoints(points.map(pt => pt.id === id ? { ...pt, text: newText } : pt))
-
-        // Mark as edited
-        setEditedPoints(prev => ({
-            ...prev,
-            [id]: true
-        }))
-    }
-
-    const handleFindReplaceAll = () => {
-        if (!findText) return
-        let count = 0
-        const newPoints = points.map(pt => {
-            if (pt.text.includes(findText)) {
-                count++
-                const updatedText = pt.text.split(findText).join(replaceText)
-                setEditedPoints(prev => ({ ...prev, [pt.id]: true }))
-                return { ...pt, text: updatedText }
-            }
-            return pt
-        })
-
-        setPoints(newPoints)
-        if (count > 0) {
-            setSuccessMessage(`Replaced ${count} instances.`)
-            setTimeout(() => setSuccessMessage(''), 3000)
-        } else {
-            setError(`"${findText}" not found.`)
-            setTimeout(() => setError(''), 3000)
-        }
-    }
-
-    const handleSave = async () => {
-        setSaving(true)
+    const handleRealign = async () => {
+        setRealigning(true)
         setError('')
         setSuccessMessage('')
         try {
-            // Find all points that have been edited
-            const toUpdate = points
-                .filter(pt => editedPoints[pt.id] && pt.text !== pt.originalText)
-                .map(pt => ({
-                    id: pt.id,
-                    audio_text: pt.text
-                }))
-
-            if (toUpdate.length === 0) {
-                setSuccessMessage('No changes to save.')
-                setSaving(false)
-                return
-            }
-
-            const res = await updateTranscriptionText(pairId, toUpdate)
-            setSuccessMessage(`Successfully updated ${res.updated} points.`)
-
-            // Re-sync originalText
-            setPoints(points.map(pt => ({ ...pt, originalText: pt.text })))
-            setEditedPoints({})
-
-            setTimeout(() => setSuccessMessage(''), 3000)
+            const r = await realignPair(pairId)
+            await loadPoints()
+            setSuccessMessage(`Re-aligned: ${r.points} sentences, ${r.matched} matched.`)
         } catch (err) {
             setError(err.message)
         } finally {
-            setSaving(false)
+            setRealigning(false)
         }
     }
+
+    const matchedCount = useMemo(() => points.filter(pt => pt.matched).length, [points])
+    const heard = useMemo(() => heardTextByPoint(points, transcript), [points, transcript])
+    const shown = useMemo(() => {
+        const q = query.trim().toLowerCase()
+        if (!q) return points
+        return points.filter(pt => pt.ebookText.toLowerCase().includes(q) ||
+            (heard.get(pt.id) || '').toLowerCase().includes(q))
+    }, [points, query, heard])
 
     const formatTime = (ms) => {
         const totalSec = Math.floor(ms / 1000)
@@ -131,7 +106,7 @@ function TranscriptionEditorPage() {
     }
 
     if (loading) {
-        return <div className="loading-page"><div className="spinner"></div> Loading transcription...</div>
+        return <div className="loading-page"><div className="spinner"></div> Loading transcript...</div>
     }
 
     return (
@@ -140,7 +115,7 @@ function TranscriptionEditorPage() {
                 <Link to="/transcription/transcribed" className="btn btn-secondary btn-sm" style={{ textDecoration: 'none' }}>
                     ← Back
                 </Link>
-                <h2 style={{ margin: 0, fontSize: '1.2rem', fontWeight: 700 }}>Edit Transcription</h2>
+                <h2 style={{ margin: 0, fontSize: '1.2rem', fontWeight: 700 }}>Transcript Alignment</h2>
             </div>
             {pair && (
                 <p style={{ margin: '0 0 16px 0', color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
@@ -152,76 +127,71 @@ function TranscriptionEditorPage() {
             {successMessage && <div className="alert alert-success" style={{ marginBottom: '12px' }}>✅ {successMessage}</div>}
 
             <div className="transcription-editor-card" style={{ marginBottom: '16px' }}>
-                <h3 style={{ margin: '0 0 10px 0', fontSize: '1rem' }}>Find & Replace</h3>
+                <p style={{ margin: '0 0 10px 0', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+                    Each ebook sentence, where it falls in the audio, and what the transcript heard there.
+                    If the book lands in the wrong place, Re-align rebuilds this from the saved transcript,
+                    without transcribing again.
+                </p>
                 <div style={{ display: 'flex', gap: '10px', alignItems: 'flex-end', flexWrap: 'wrap' }}>
-                    <div style={{ flex: '1', minWidth: '150px' }}>
-                        <label style={{ display: 'block', fontSize: '0.8rem', marginBottom: '4px' }}>Find</label>
+                    <div style={{ flex: '1', minWidth: '180px' }}>
+                        <label htmlFor="alignmentSearch" style={{ display: 'block', fontSize: '0.8rem', marginBottom: '4px' }}>Search</label>
                         <input
-                            type="text"
+                            id="alignmentSearch"
+                            type="search"
                             className="form-input"
-                            value={findText}
-                            onChange={e => setFindText(e.target.value)}
-                            placeholder="Word to find..."
+                            aria-label="Search sentences"
+                            value={query}
+                            onChange={e => setQuery(e.target.value)}
+                            placeholder="Find a word in the ebook or the transcript..."
                         />
                     </div>
-                    <div style={{ flex: '1', minWidth: '150px' }}>
-                        <label style={{ display: 'block', fontSize: '0.8rem', marginBottom: '4px' }}>Replace With</label>
-                        <input
-                            type="text"
-                            className="form-input"
-                            value={replaceText}
-                            onChange={e => setReplaceText(e.target.value)}
-                            placeholder="Replacement word..."
-                        />
-                    </div>
-                    <button className="btn btn-secondary" onClick={handleFindReplaceAll} disabled={!findText}>
-                        Replace All
-                    </button>
-                    <button className="btn btn-primary" onClick={handleSave} disabled={saving || Object.keys(editedPoints).length === 0}>
-                        {saving ? 'Saving...' : 'Save Changes'}
-                    </button>
+                    {canEdit && (
+                        <button className="btn btn-primary" onClick={handleRealign} disabled={realigning || points.length === 0}>
+                            {realigning ? 'Re-aligning…' : 'Re-align'}
+                        </button>
+                    )}
                 </div>
+                {transcriptMissing && (
+                    <p style={{ margin: '10px 0 0 0', fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                        This book has no saved transcript, so what was heard cannot be shown, and Re-align
+                        needs a full transcription first.
+                    </p>
+                )}
+                {points.length > 0 && (
+                    <p style={{ margin: '10px 0 0 0', fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                        <span>{matchedCount} matched, {points.length - matchedCount} filled in between matches</span>
+                        {query.trim() && <span> · <span>{shown.length} of {points.length} sentences</span></span>}
+                    </p>
+                )}
             </div>
 
             <div
-                ref={listRef}
                 className="transcription-editor-card"
-                style={{
-                    flex: '1',
-                    overflowY: 'auto',
-                    display: 'flex',
-                    flexDirection: 'column',
-                    gap: '15px'
-                }}
+                style={{ flex: '1', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '12px' }}
             >
                 {points.length === 0 ? (
                     <div style={{ textAlign: 'center', color: 'var(--text-muted)', marginTop: '40px' }}>
-                        No transcription points found for this sync map.
+                        No alignment for this book yet.
                     </div>
                 ) : (
-                    points.map(pt => (
-                        <div key={pt.id} style={{ display: 'flex', gap: '15px', paddingBottom: '15px', borderBottom: '1px solid var(--border)' }}>
-                            <div style={{ width: '80px', flexShrink: 0, color: 'var(--text-muted)', fontSize: '0.85rem' }}>
-                                <div>{formatTime(pt.start_ms)}</div>
-                                <div>↓</div>
-                                <div>{formatTime(pt.end_ms)}</div>
-                                <div style={{ marginTop: '5px', fontSize: '0.75rem', color: 'var(--accent-ink)' }}>
-                                    Ch {pt.chapter}, S {pt.sentence}
-                                </div>
+                    shown.map(pt => (
+                        <div key={pt.id} style={{ display: 'flex', gap: '15px', paddingBottom: '12px', borderBottom: '1px solid var(--border)' }}>
+                            <div style={{ width: '96px', flexShrink: 0, color: 'var(--text-muted)', fontSize: '0.8rem' }}>
+                                <div>{formatTime(pt.start_ms)} – {formatTime(pt.end_ms)}</div>
+                                <div style={{ marginTop: '4px', color: 'var(--accent-ink)' }}>Ch {pt.chapter}, S {pt.sentence}</div>
+                                {!pt.matched && (
+                                    <div style={{ marginTop: '4px' }} title="Not matched to the transcript: its time is estimated from the matched sentences around it">
+                                        Filled in
+                                    </div>
+                                )}
                             </div>
-                            <div style={{ flex: '1' }}>
-                                <textarea
-                                    className="form-input"
-                                    style={{
-                                        width: '100%',
-                                        minHeight: '60px',
-                                        resize: 'vertical',
-                                        backgroundColor: pt.text !== pt.originalText ? 'var(--accent-light)' : 'var(--bg-card)',
-                                        borderColor: pt.text !== pt.originalText ? 'var(--accent)' : 'var(--border)'
-                                    }}
-                                    value={pt.text}
-                                    onChange={(e) => handleTextChange(pt.id, e.target.value)}
-                                />
+                            <div style={{ flex: '1', minWidth: 0 }}>
+                                <div style={{ fontSize: '0.9rem' }}>{pt.ebookText}</div>
+                                {transcript && (
+                                    <div style={{ marginTop: '4px', fontSize: '0.82rem', color: 'var(--text-secondary)', fontStyle: heard.has(pt.id) ? 'normal' : 'italic' }}>
+                                        {heard.get(pt.id) || 'No transcript text in this range'}
+                                    </div>
+                                )}
                             </div>
                         </div>
                     ))

@@ -16,6 +16,7 @@ Endpoints:
 """
 
 import asyncio
+import json
 from typing import Dict, List
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -26,15 +27,16 @@ from sqlalchemy.orm import selectinload
 from database import get_db, async_session
 from models.user import User
 from models.book import BookPair, PairStatus
-from models.sync_map import SyncMap, SyncPoint
 from models.transcription_queue import TranscriptionQueueItem
+from models.transcript import AudioTranscript
 from schemas import (
     TranscriptionStatusResponse,
-    SyncMapTextUpdate,
     OffHoursStatusResponse,
     QueueItemResponse,
     QueueAddRequest,
     QueuePriorityUpdate,
+    RealignResponse,
+    TranscriptResponse,
 )
 from rate_limit import search_reads
 from routers.auth import (
@@ -462,57 +464,34 @@ async def get_queue_history(
 
 
 # ====================================================================
-# Sync Text Editing (unchanged from before)
+# The cached transcript, read-only (issue #713)
 # ====================================================================
 
-@router.put("/{pair_id}/text")
-async def update_transcription_text(
+@router.get("/{pair_id}/transcript", response_model=TranscriptResponse)
+async def get_cached_transcript(
     pair_id: int,
-    update_data: SyncMapTextUpdate,
     db: AsyncSession = Depends(get_db, scope="function"),
-    _: User = Depends(get_editor_user),
+    _: User = Depends(get_current_user),
 ):
-    """
-    Update transcription text for specific sync points without altering timestamps.
-    Useful for correcting Whisper transcription errors from the frontend.
-    """
-    result = await db.execute(
-        select(SyncMap).where(SyncMap.book_pair_id == pair_id)
-    )
-    sync_map = result.scalar_one_or_none()
-
-    if not sync_map:
-        raise HTTPException(status_code=404, detail="Sync map not found")
-
-    point_ids = [p.id for p in update_data.points]
-    if not point_ids:
-        return {"status": "success", "updated": 0}
-
-    points_result = await db.execute(
-        select(SyncPoint).where(
-            SyncPoint.sync_map_id == sync_map.id,
-            SyncPoint.id.in_(point_ids)
-        )
-    )
-    existing_points = {p.id: p for p in points_result.scalars().all()}
-
-    updated_count = 0
-    for update_pt in update_data.points:
-        db_pt = existing_points.get(update_pt.id)
-        if db_pt:
-            db_pt.audio_text = update_pt.audio_text
-            updated_count += 1
-
-    await db.commit()
-
-    return {"status": "success", "updated": updated_count}
+    """The pair's cached transcript: what Whisper heard, sentence by sentence,
+    with times. The web's alignment view shows it beside each ebook sentence;
+    `SyncPoint.audio_text` cannot serve, because alignment never writes it."""
+    transcript = (await db.execute(
+        select(AudioTranscript).where(AudioTranscript.pair_id == pair_id)
+    )).scalar_one_or_none()
+    if not transcript:
+        raise HTTPException(status_code=404, detail="No cached transcript for this pair")
+    # A whole book's transcript is megabytes of JSON: parse it off the event
+    # loop (CLAUDE.md, "Nothing blocking inside an async def").
+    sentences = await asyncio.to_thread(json.loads, transcript.sentences_json)
+    return {"pair_id": pair_id, "sentences": sentences}
 
 
 # ====================================================================
 # Re-alignment (uses cached transcript — no re-transcription needed)
 # ====================================================================
 
-@router.post("/{pair_id}/realign")
+@router.post("/{pair_id}/realign", response_model=RealignResponse)
 async def realign_pair(
     pair_id: int,
     db: AsyncSession = Depends(get_db, scope="function"),

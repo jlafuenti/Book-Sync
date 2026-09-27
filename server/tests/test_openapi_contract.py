@@ -97,9 +97,7 @@ UNTYPED_ALLOWLIST = {
     # --- transcription -----------------------------------------------------
     "DELETE /api/transcription/queue/{item_id}",
     "POST /api/transcription/{pair_id}/cancel",
-    "POST /api/transcription/{pair_id}/realign",
     "PUT /api/transcription/queue/{item_id}/priority",
-    "PUT /api/transcription/{pair_id}/text",
     # --- troubleshoot: fully typed (issue #258) ------------------------------
     # --- users -------------------------------------------------------------
     "DELETE /api/users/{user_id}",

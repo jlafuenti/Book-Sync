@@ -40,6 +40,14 @@ operator must do by hand rather than read about afterwards.
 
 ### Fixed
 
+- The Transcription page's **Edit Transcription** is now **View Alignment** (#713). Edits made
+  there never changed where either app lands, because re-aligning rebuilds from the saved
+  transcript. The page is read-only now: each ebook sentence beside its audio time and what was
+  heard, which sentences were matched and which filled in, a search, and a **Re-align** button
+  that rebuilds the alignment without transcribing again. What was heard comes from the book's
+  saved transcript (new `GET /api/transcription/{pair_id}/transcript`): the text the old editor
+  showed was never filled in by alignment, so its boxes held the ebook's own sentence. The edit
+  endpoint `PUT /api/transcription/{pair_id}/text` is removed.
 - The web reader no longer shows **0.0%** for the first seconds after opening a book, and no longer
   saves 0% if you turn a page in that time (#733). Until the reader has worked out the book's
   percentages it now shows "…" and leaves the saved percent alone, then saves the real one. The

@@ -160,7 +160,7 @@ function getMobilePageTitle(pathname) {
     if (pathname.startsWith('/library')) return 'Library'
     if (pathname.startsWith('/series')) return 'Series'
     if (pathname.startsWith('/pairs')) return 'Book Pairs'
-    if (pathname.startsWith('/transcription/edit')) return 'Transcription Editor'
+    if (pathname.startsWith('/transcription/edit')) return 'Transcript Alignment'
     if (pathname.startsWith('/transcription')) return 'Transcription'
     if (pathname.startsWith('/system')) return 'Admin Console'
     if (pathname.startsWith('/account')) return 'Account'

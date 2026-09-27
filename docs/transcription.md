@@ -17,7 +17,12 @@ Deploying the remote worker itself is a separate walkthrough:
 4. [`services/alignment.py`](../server/services/alignment.py) fuzzy-matches transcript sentences
    against EPUB sentences and writes the `SyncMap` / `SyncPoint` rows the clients read.
 
-The transcript is editable afterwards (Transcription → editor) if the alignment came out poor.
+If a book lands in the wrong place, open it under Transcription → View Alignment. The page shows
+each ebook sentence, its audio time range, what the transcript heard there, and whether the
+aligner matched it or filled it in between matches. **Re-align** there (or Troubleshoot →
+Sync-Map Audit) rebuilds the map from the cached transcript, without re-transcribing. The
+transcript itself is not editable: re-alignment always reads the cached `AudioTranscript`, so an
+edit to the displayed text could never change where the apps land (issue #713).
 
 Both the server and Jetson images bake NLTK's `punkt_tab` sentence tokenizer in at build time
 (into `/usr/local/share/nltk_data`, named by `NLTK_DATA`), so a running container needs no
