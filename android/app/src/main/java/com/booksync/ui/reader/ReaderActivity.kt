@@ -139,6 +139,8 @@ class ReaderActivity : AppCompatActivity() {
         private const val PAGE_COUNTER_LAYOUT_TIMEOUT_MS = 1000L
         // How many times a failed page count is retried for the same layout.
         private const val PAGE_COUNT_MAX_RETRIES = 2
+        // Waits before each live page probe attempt (issue #730); a newer locator cancels them.
+        private val PROBE_RETRY_DELAYS_MS = longArrayOf(0L, 250L, 500L, 1000L, 2000L, 4000L)
     }
 
     @Inject lateinit var repository: BookSyncRepository
@@ -1210,13 +1212,27 @@ class ReaderActivity : AppCompatActivity() {
         if (section < 0) return
         probeJob = lifecycleScope.launch {
             val script = LivePageProbe.script(pageListInputs.fragmentsIn(section))
-            val result = try {
-                LivePageProbe.parse(nav.evaluateJavascript(script))
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                Log.w(TAG, "Live page probe failed", e)
-                null
+            // The first locator of an open arrives before the live page can
+            // answer, or before Readium has scrolled it to the restored spot,
+            // and no second one follows until a page turn: ask again a few
+            // times rather than leave the chapter's pages unknown or wrong.
+            // Without a settled answer the locator's estimate stands.
+            var result: LivePageProbe.Result? = null
+            for (wait in PROBE_RETRY_DELAYS_MS) {
+                if (wait > 0) delay(wait)
+                val answer = try {
+                    LivePageProbe.parse(nav.evaluateJavascript(script))
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    Log.w(TAG, "Live page probe failed", e)
+                    null
+                }
+                ensureActive()
+                if (answer != null && progressState.settled(answer)) {
+                    result = answer
+                    break
+                }
             }
             // Readium's evaluateJavascript is not cancellable (it ends in a
             // plain suspendCoroutine), so a probe a newer locator cancelled

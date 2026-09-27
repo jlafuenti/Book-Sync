@@ -86,6 +86,58 @@ class ReaderProgressStateTest {
         assertEquals("…", s.text())
     }
 
+    @Test
+    fun `a count that lands after an unanswered probe gives the chapter its estimate`() {
+        // The open: the locator comes before the count, the live page is not
+        // ready for the probe, and no second locator follows until a page turn.
+        val s = state()
+        s.onLocator(sectionIndex = 1, progression = 0.2, fraction = 0.4)
+        s.onProbed(1, probe = null, shownAtMs = 0, userTurn = false)
+
+        s.counts = twoSections
+
+        assertEquals(2, s.pageInChapter)
+        assertEquals(5, s.pagesInChapter)
+        assertEquals("pages", s.cycle())
+        assertEquals("5 of 8", s.text())
+        assertEquals("chapter", s.cycle())
+        assertEquals("2 of 5 in chapter", s.text())
+        assertEquals("time", s.cycle())
+        assertEquals("3 min left in chapter", s.text())
+    }
+
+    @Test
+    fun `a count that lands after a probe answer leaves the live page alone`() {
+        val s = state()
+        s.onLocator(sectionIndex = 1, progression = 0.2, fraction = 0.4)
+        s.onProbe(1, LivePageProbe.Result(page = 4, total = 6, fragmentsBeforeOrAt = emptySet()))
+
+        s.counts = twoSections
+
+        assertEquals(4, s.pageInChapter)
+        assertEquals(6, s.pagesInChapter)
+    }
+
+    @Test
+    fun `a probe that disagrees with the locator's page has not settled yet`() {
+        // A restore to page 30 of 32: the live page answers once at its top,
+        // before Readium has scrolled it to the locator, then where it lands.
+        val s = state()
+        s.onLocator(sectionIndex = 1, progression = 0.906, fraction = 0.19)
+
+        assertFalse(s.settled(LivePageProbe.Result(page = 1, total = 32, fragmentsBeforeOrAt = emptySet())))
+        assertTrue(s.settled(LivePageProbe.Result(page = 30, total = 32, fragmentsBeforeOrAt = emptySet())))
+        assertTrue(s.settled(LivePageProbe.Result(page = 29, total = 32, fragmentsBeforeOrAt = emptySet())))
+    }
+
+    @Test
+    fun `any probe has settled when the locator gave no progression`() {
+        val s = state()
+        s.onLocator(sectionIndex = 1, progression = null, fraction = null)
+
+        assertTrue(s.settled(LivePageProbe.Result(page = 7, total = 32, fragmentsBeforeOrAt = emptySet())))
+    }
+
     // ---- Case 3: the mode survives a reopen ----
 
     @Test
