@@ -1,5 +1,7 @@
 package com.booksync.ui.reader
 
+import kotlin.math.abs
+
 /**
  * The reader's tap-to-cycle progress indicator (issue #730) as plain state:
  * the Android twin of the text logic in the web's `useReaderProgress` hook.
@@ -38,11 +40,21 @@ class ReaderProgressState(private val prefs: ReaderProgressPrefs) {
             prefs.pageMode = field
         }
 
-    /** Pages and characters per reading-order resource, or null until counted. */
+    /**
+     * Pages and characters per reading-order resource, or null until counted.
+     * A count that lands while the chapter's pages are still unknown - the
+     * open's probe went unanswered and no page turn has followed - fills them
+     * in from the last locator, as [onLocator] would have.
+     */
     var counts: Counts? = null
         set(value) {
             field = value
             reportedDrift.clear()
+            val pages = value?.counts?.getOrNull(sectionIndex) ?: return
+            if (pagesInChapter < 1) {
+                pagesInChapter = pages
+                pageInChapter = ReaderProgress.pageInSection(progression, pages) ?: 0
+            }
         }
 
     var sectionIndex: Int = -1
@@ -51,6 +63,9 @@ class ReaderProgressState(private val prefs: ReaderProgressPrefs) {
         private set
     var pagesInChapter: Int = 0
         private set
+
+    /** The last locator's in-resource progression, for [counts] to estimate from. */
+    private var progression: Double? = null
 
     /** Readium's `totalProgression`, or null when it has not given one. */
     var fraction: Double? = null
@@ -89,12 +104,25 @@ class ReaderProgressState(private val prefs: ReaderProgressPrefs) {
     fun onLocator(sectionIndex: Int, progression: Double?, fraction: Double?) {
         val sameSection = sectionIndex == this.sectionIndex
         this.sectionIndex = sectionIndex
+        this.progression = progression
         this.fraction = fraction
         val pages = counts?.counts?.getOrNull(sectionIndex)
             ?: if (sameSection) pagesInChapter else 0
         pagesInChapter = pages
         pageInChapter = ReaderProgress.pageInSection(progression, pages) ?: 0
         if (!sameSection) printList = printListAt(emptySet())
+    }
+
+    /**
+     * Whether a probe answer shows the page the last locator points at, give or
+     * take one. On a restore or a jump, Readium reports the locator before it
+     * has scrolled the page there, and a probe in that gap reads the section's
+     * top; the caller asks again instead of taking it. Always true without a
+     * progression to compare against.
+     */
+    fun settled(probe: LivePageProbe.Result): Boolean {
+        val expected = ReaderProgress.pageInSection(progression ?: return true, probe.total) ?: return true
+        return abs(probe.page - expected) <= 1
     }
 
     /**
