@@ -1,6 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { AudioPlayerView, MiniPlayer } from './AudioPlayer'
+import { TourAnchors, TourScreens, TourRegistryContext, TourControllerContext } from '../tour/anchors'
+import { TourAnchorRegistry } from '../tour/TourAnchorRegistry'
 
 const {
     getAudiobookChaptersMock, getBookmarkLogMock, getAccessTokenMock, useAudioPlayerMock, coverSrcMock,
@@ -284,5 +286,67 @@ describe('load window', () => {
         expect(screen.getByTitle('Forward 30s')).toBeDisabled()
         // Stop stays available: the listener can still back out of a slow load.
         expect(screen.getByTitle('Stop')).toBeEnabled()
+    })
+})
+
+// Issue #598 Track B: the walkthrough's Player step needs a real element per
+// anchor, a settled report tied to the same "saved position applied" gate
+// that already drives the transport's disabled state, and a one-time
+// playerReady() event.
+describe('AudioPlayerView tour anchors, screen readiness and events (issue #598 Track B)', () => {
+    function renderWithTour(overrides = {}, { registry, controller } = {}) {
+        useAudioPlayerMock.mockReturnValue(basePlayer(overrides))
+        let tree = <AudioPlayerView onClose={vi.fn()} onSwitchToEbook={vi.fn()} />
+        if (controller) tree = <TourControllerContext.Provider value={controller}>{tree}</TourControllerContext.Provider>
+        if (registry) tree = <TourRegistryContext.Provider value={registry}>{tree}</TourRegistryContext.Provider>
+        return render(tree)
+    }
+
+    it('tags the transport row and the switch-to-reader button', async () => {
+        renderWithTour({ loading: false })
+        await waitFor(() => expect(getAudiobookChaptersMock).toHaveBeenCalled())
+
+        expect(document.querySelector('.audio-transport')).toHaveAttribute('data-tour', TourAnchors.PlayerTransport)
+        expect(screen.getByTitle('Switch to Ebook')).toHaveAttribute('data-tour', TourAnchors.PlayerSwitchToReader)
+    })
+
+    it('does not tag PlayerSwitchToReader when there is no ebook to switch to', async () => {
+        useAudioPlayerMock.mockReturnValue(basePlayer({ loading: false }))
+        render(<AudioPlayerView onClose={vi.fn()} />)
+        await waitFor(() => expect(getAudiobookChaptersMock).toHaveBeenCalled())
+
+        expect(screen.queryByTitle('Switch to Ebook')).toBeNull()
+        expect(document.querySelector(`[data-tour="${TourAnchors.PlayerSwitchToReader}"]`)).toBeNull()
+    })
+
+    it('reports Player loading while the saved position has not been applied, settled once it has, emitting playerReady() once', async () => {
+        const registry = new TourAnchorRegistry()
+        const controller = { onEvent: vi.fn() }
+        const { rerender } = renderWithTour({ loading: true }, { registry, controller })
+        await waitFor(() => expect(getAudiobookChaptersMock).toHaveBeenCalled())
+        expect(registry.screenState(TourScreens.Player)).toBe('loading')
+        expect(controller.onEvent).not.toHaveBeenCalled()
+
+        useAudioPlayerMock.mockReturnValue(basePlayer({ loading: false }))
+        rerender(
+            <TourRegistryContext.Provider value={registry}>
+                <TourControllerContext.Provider value={controller}>
+                    <AudioPlayerView onClose={vi.fn()} onSwitchToEbook={vi.fn()} />
+                </TourControllerContext.Provider>
+            </TourRegistryContext.Provider>,
+        )
+
+        await waitFor(() => expect(registry.screenState(TourScreens.Player)).toBe('settled'))
+        expect(controller.onEvent).toHaveBeenCalledTimes(1)
+        expect(controller.onEvent).toHaveBeenCalledWith(expect.objectContaining({ kind: 'playerReady' }))
+    })
+
+    it('never autoplays — the tour never presses play', async () => {
+        const player = basePlayer({ loading: false })
+        useAudioPlayerMock.mockReturnValue(player)
+        render(<AudioPlayerView onClose={vi.fn()} onSwitchToEbook={vi.fn()} />)
+        await waitFor(() => expect(getAudiobookChaptersMock).toHaveBeenCalled())
+
+        expect(player.togglePlayPause).not.toHaveBeenCalled()
     })
 })

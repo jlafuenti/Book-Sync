@@ -10,6 +10,7 @@ import { useAuth } from '../contexts/AuthContext'
 import useIsMobile from '../hooks/useIsMobile'
 import FilterPill from '../components/FilterPill'
 import CoverImg from '../components/CoverImg'
+import { TourAnchors, TourScreens, useTourAnchor, useTourScreen } from '../tour/anchors'
 import './TranscriptionPage.css'
 // Server timestamps are naive UTC — one parser for the whole app (issue #216).
 // `formatDate` here has always meant date + time; `formatDay` is date-only.
@@ -104,6 +105,14 @@ function TranscriptionPage({ tab }) {
     // outcome is a 403 in the error banner (issue #312).
     const canCancel = hasMinRole('editor')
     const isMobile = useIsMobile()
+
+    // ---- Tour anchors and screen readiness (issue #598 Track B) ----
+    const tabsAnchorRef = useTourAnchor(TourAnchors.TranscriptionTabs)
+    // Registered only when rendered — the Queue All button itself is gated on
+    // `canManageQueue` above (admin, not editor: the walkthrough script's own
+    // `transcription_queue` step is written as editor-level, a pre-existing
+    // mismatch this anchor does not attempt to paper over).
+    const queueAllAnchorRef = useTourAnchor(TourAnchors.TranscriptionQueueAll, { enabled: canManageQueue })
 
     // Mobile collapsible sections
     const [mobileSections, setMobileSections] = useState({
@@ -498,6 +507,8 @@ function TranscriptionPage({ tab }) {
         { id: 'in-progress',     label: 'In Progress',     count: inProgress.length },
         { id: 'transcribed',     label: 'Transcribed',     count: transcribed.length },
     ]
+
+    useTourScreen(TourScreens.Transcription, !loading)
 
     if (loading) {
         return <div className="loading-page"><div className="spinner"></div> Loading...</div>
@@ -1080,7 +1091,7 @@ function TranscriptionPage({ tab }) {
                     <div className="transcription-toolbar">
                         <div className="transcription-toolbar-left">
                             {/* Tab pills */}
-                            <div className="library-filter-pills">
+                            <div className="library-filter-pills" ref={tabsAnchorRef}>
                                 {tabs.map(t => (
                                     <button
                                         key={t.id}
@@ -1126,7 +1137,7 @@ function TranscriptionPage({ tab }) {
 
                             {/* Queue All / Queue Visible */}
                             {canManageQueue && activeTab === 'not-transcribed' && notTranscribedPairs.length > 0 && (
-                                <button className="btn btn-primary btn-sm" onClick={handleAddVisibleToQueue}>
+                                <button className="btn btn-primary btn-sm" ref={queueAllAnchorRef} onClick={handleAddVisibleToQueue}>
                                     {queueBtnLabel}
                                 </button>
                             )}

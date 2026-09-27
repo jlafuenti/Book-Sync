@@ -93,8 +93,10 @@ export function TourProvider({ children }) {
                     break
                 }
                 case 'closeOverlays':
-                    // Nothing to do at this layer — the reader/player surface
-                    // itself (Track B) listens for this to tear itself down.
+                    // The reader/player surface (Track B) consumes this the
+                    // same way it consumes openReader/openPlayer: a bit of
+                    // router state it clears once it has closed its overlay.
+                    navigate(location.pathname, { replace: true, state: { closeOverlays: true } })
                     break
                 case 'cleanUp':
                     // The server-side reset already happened inside the
@@ -107,7 +109,7 @@ export function TourProvider({ children }) {
             }
             // eslint-disable-next-line react-hooks/exhaustive-deps
         })
-    }, [controller, navigate, state.pairId])
+    }, [controller, navigate, state.pairId, location.pathname])
 
     // Every route change is a tour event, whether the tour drove it (a
     // tapAnchor step's own click) or the user navigated some other way.
@@ -131,6 +133,7 @@ export function TourProvider({ children }) {
         quit: () => controller.quit(),
         skip: () => controller.skip(),
         replay: () => controller.start(user?.role),
+        adoptPair: (pair) => controller.adoptPair(pair),
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }), [state, controller, user?.role])
 

@@ -3,6 +3,7 @@ import { useAudioPlayer } from '../contexts/AudioPlayerContext'
 import { getAudiobookChapters, getBookmarkLog } from '../api'
 import useCoverSrc from '../hooks/useCoverSrc'
 import { formatDate as formatServerDate, formatTime as formatServerTime } from '../lib/datetime'
+import { TourAnchors, TourScreens, TourEvents, useTourAnchor, useTourScreen, useTourEmit } from '../tour/anchors'
 import './AudioPlayer.css'
 
 function formatTime(seconds) {
@@ -64,6 +65,22 @@ export function AudioPlayerView({ onClose, onSwitchToEbook }) {
         }
     }, [showHistory, pairIdForHistory])
 
+    // ---- Tour anchors, screen readiness and events (issue #598 Track B) ----
+    const emitTourEvent = useTourEmit()
+    const transportAnchorRef = useTourAnchor(TourAnchors.PlayerTransport)
+    const switchToReaderAnchorRef = useTourAnchor(TourAnchors.PlayerSwitchToReader, { enabled: !!onSwitchToEbook })
+    // `player.loading` is the same "saved position not yet applied" gate that
+    // already disables the transport below (issue #697) — the walkthrough
+    // waits on the same signal rather than inventing a second one.
+    useTourScreen(TourScreens.Player, !player.loading)
+    const emittedPlayerReadyRef = useRef(false)
+    useEffect(() => {
+        if (!player.loading && !emittedPlayerReadyRef.current) {
+            emittedPlayerReadyRef.current = true
+            emitTourEvent(TourEvents.playerReady())
+        }
+    }, [player.loading]) // eslint-disable-line react-hooks/exhaustive-deps
+
     if (!player.currentAudiobook) return null
 
     const { currentAudiobook, pairedEbookId, playing, currentTime, duration, speed, sleepMinutes, staleConflict, playbackError, loading } = player
@@ -85,6 +102,7 @@ export function AudioPlayerView({ onClose, onSwitchToEbook }) {
                 {onSwitchToEbook && (
                     <button
                         className="btn-icon switch-format-btn"
+                        ref={switchToReaderAnchorRef}
                         onClick={() => onSwitchToEbook(currentAudiobook.pairId, pairedEbookId)}
                         title="Switch to Ebook"
                     >
@@ -200,7 +218,7 @@ export function AudioPlayerView({ onClose, onSwitchToEbook }) {
                     {/* Until the saved position has been applied the transport
                         is disabled (issue #697): a press at the empty
                         element's 0:00 used to start from the top of the file. */}
-                    <div className="audio-transport">
+                    <div className="audio-transport" ref={transportAnchorRef}>
                         <button onClick={() => player.skipBackward()} title="Back 30s" disabled={loading}>
                             <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" strokeWidth="2">
                                 <path d="M12.5 8V4l-5 4 5 4V8" /><path d="M19 12a7 7 0 1 1-7-7" />

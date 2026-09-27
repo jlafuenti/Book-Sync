@@ -3,6 +3,7 @@ import { Link, useLocation } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
 import { ThemePicker } from './ThemePicker'
 import SignOutEverywhere from './SignOutEverywhere'
+import { useTourAnchor, TourAnchors } from '../tour/anchors'
 
 const DRAWER_NAV = [
     { path: '/continue', label: 'Home', exact: true,
@@ -33,6 +34,10 @@ export default function MobileDrawer({ open, onClose, user, onLogout, onSignedOu
     const { hasMinRole } = useAuth()
     const drawerRef = useRef(null)
     const startXRef = useRef(null)
+    // The drawer's user block is the only way into Account below 768px (the
+    // sidebar footer's own NavAccount anchor is display:none there) — see
+    // App.jsx's accountAnchorRef and issue #146's comment below.
+    const accountAnchorRef = useTourAnchor(TourAnchors.NavAccount)
 
     const items = DRAWER_NAV.filter(item => !item.minRole || hasMinRole(item.minRole))
     const target = (item) => (
@@ -90,7 +95,7 @@ export default function MobileDrawer({ open, onClose, user, onLogout, onSignedOu
                     {/* The user block is the way into Account (issue #146) — the
                         same affordance as the desktop sidebar footer, and on
                         mobile it is the only one, since the bottom nav is full. */}
-                    <Link to="/account" className="drawer-user">
+                    <Link to="/account" className="drawer-user" ref={accountAnchorRef}>
                         <div className="drawer-avatar">
                             {user?.username?.[0]?.toUpperCase() || '?'}
                         </div>

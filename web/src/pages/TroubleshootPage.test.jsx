@@ -2,6 +2,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import TroubleshootPage from './TroubleshootPage'
+import { TourAnchors, TourScreens, TourRegistryContext } from '../tour/anchors'
+import { TourAnchorRegistry } from '../tour/TourAnchorRegistry'
 
 const {
     getLibraryIssuesMock, repairChapterEncodingMock, bulkRepairChapterEncodingMock,
@@ -503,5 +505,36 @@ describe('TroubleshootPage print page counts', () => {
 
         expect(await screen.findByText(/312 ebooks have no print page count/i)).toBeInTheDocument()
         expect(screen.getByRole('button', { name: /look up print page counts/i })).toBeInTheDocument()
+    })
+})
+
+// Issue #598 Track B: the walkthrough's `troubleshoot_page` step spotlights
+// the header block (title + Run Verification Scan) together, and needs to
+// know once the issues list has actually loaded.
+describe('TroubleshootPage tour anchor and screen readiness (issue #598 Track B)', () => {
+    it('tags a container that holds both the title and Run Verification Scan', async () => {
+        getLibraryIssuesMock.mockResolvedValue(issuesWithChapterEncodingBad([]))
+        getLibraryScanProgressMock.mockReset().mockResolvedValue({ running: false })
+        renderPage()
+
+        await screen.findByText('No issues detected 🎉')
+        const anchor = document.querySelector(`[data-tour="${TourAnchors.TroubleshootHeader}"]`)
+        expect(anchor).toBeTruthy()
+        expect(anchor).toHaveTextContent('Troubleshoot Library')
+        expect(anchor).toHaveTextContent('Run Verification Scan')
+    })
+
+    it('reports Troubleshoot settled once the issues list has loaded', async () => {
+        getLibraryIssuesMock.mockResolvedValue(issuesWithChapterEncodingBad([]))
+        getLibraryScanProgressMock.mockReset().mockResolvedValue({ running: false })
+        const registry = new TourAnchorRegistry()
+        render(
+            <TourRegistryContext.Provider value={registry}>
+                <MemoryRouter><TroubleshootPage /></MemoryRouter>
+            </TourRegistryContext.Provider>,
+        )
+
+        expect(registry.screenState(TourScreens.Troubleshoot)).toBe('loading')
+        await waitFor(() => expect(registry.screenState(TourScreens.Troubleshoot)).toBe('settled'))
     })
 })

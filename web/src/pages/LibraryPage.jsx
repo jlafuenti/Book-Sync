@@ -22,6 +22,8 @@ import MetadataCleanupModal from '../components/MetadataCleanupModal'
 import { useAuth } from '../contexts/AuthContext'
 import useIsMobile from '../hooks/useIsMobile'
 import useCoverSrc from '../hooks/useCoverSrc'
+import { TourAnchors, TourScreens, TourEvents, useTourAnchor, useTourScreen, useTourEmit } from '../tour/anchors'
+import { useTour } from '../tour/TourContext'
 import './LibraryPage.css'
 
 // ---- Browse constants (issue #120) ----
@@ -92,7 +94,7 @@ function TypeBadge({ mediaType }) {
 
 // ---- Book Card (Grid View) ----
 
-export function BookCard({ book, selectMode, isSelected, onSelect, onStartSelect, onEdit, onDelete, onNavigate, canEdit }) {
+export function BookCard({ book, selectMode, isSelected, onSelect, onStartSelect, onEdit, onDelete, onNavigate, canEdit, tourWanted, onTourScrolled }) {
     const [menuOpen, setMenuOpen] = useState(false)
     const menuRef = useRef(null)
 
@@ -107,6 +109,32 @@ export function BookCard({ book, selectMode, isSelected, onSelect, onStartSelect
 
     const coverUrl = useCoverSrc(book.cover_path)
 
+    // The walkthrough's `library_open_book` step spotlights one card — the
+    // pair the tour adopted (LibraryPage) — out of a whole grid that renders
+    // this component (issue #598 Track B). Registering the anchor on every
+    // card would be wasteful (a resize/scroll listener each) and the hook's
+    // own `pairId` gate only ever activates it for `registry.wantedPairId`,
+    // so the ref is attached at all only for a synced pair — cheap no-op for
+    // every ebook/audiobook/unsynced-pair card in the list.
+    const isSyncedPair = book.mediaType === 'pair' && book.pair_status === 'synced'
+    const pairAnchorRef = useTourAnchor(TourAnchors.LibraryPairCard, {
+        enabled: isSyncedPair,
+        pairId: isSyncedPair ? book.pair_id : undefined,
+    })
+    const rootRef = useRef(null)
+    const setRootRef = useCallback((el) => {
+        rootRef.current = el
+        if (isSyncedPair) pairAnchorRef(el)
+    }, [isSyncedPair, pairAnchorRef])
+
+    useEffect(() => {
+        if (tourWanted && rootRef.current) {
+            rootRef.current.scrollIntoView({ block: 'center' })
+            onTourScrolled?.()
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [tourWanted])
+
     const handleClick = (e) => {
         if (selectMode) { onSelect(e); return }
         onNavigate()
@@ -114,6 +142,7 @@ export function BookCard({ book, selectMode, isSelected, onSelect, onStartSelect
 
     return (
         <div
+            ref={setRootRef}
             className={`lib-book-card${isSelected ? ' selected' : ''}${selectMode ? ' select-mode' : ''}`}
             onClick={handleClick}
         >
@@ -174,8 +203,29 @@ export function BookCard({ book, selectMode, isSelected, onSelect, onStartSelect
 
 // ---- Book Row (List View) ----
 
-export function BookRow({ book, selectMode, isSelected, onSelect, onEdit, onDelete, onNavigate, canEdit }) {
+export function BookRow({ book, selectMode, isSelected, onSelect, onEdit, onDelete, onNavigate, canEdit, tourWanted, onTourScrolled }) {
     const coverUrl = useCoverSrc(book.cover_path)
+
+    // Same anchor as BookCard's (issue #598 Track B) — list view is the same
+    // "one card out of the grid" spotlight, just a different row shape.
+    const isSyncedPair = book.mediaType === 'pair' && book.pair_status === 'synced'
+    const pairAnchorRef = useTourAnchor(TourAnchors.LibraryPairCard, {
+        enabled: isSyncedPair,
+        pairId: isSyncedPair ? book.pair_id : undefined,
+    })
+    const rootRef = useRef(null)
+    const setRootRef = useCallback((el) => {
+        rootRef.current = el
+        if (isSyncedPair) pairAnchorRef(el)
+    }, [isSyncedPair, pairAnchorRef])
+
+    useEffect(() => {
+        if (tourWanted && rootRef.current) {
+            rootRef.current.scrollIntoView({ block: 'center' })
+            onTourScrolled?.()
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [tourWanted])
 
     const handleClick = (e) => {
         if (selectMode) { onSelect(e); return }
@@ -184,6 +234,7 @@ export function BookRow({ book, selectMode, isSelected, onSelect, onEdit, onDele
 
     return (
         <div
+            ref={setRootRef}
             className={`lib-book-row${selectMode ? ' select-mode' : ''}${isSelected ? ' selected' : ''}`}
             onClick={handleClick}
         >
@@ -248,6 +299,8 @@ function LibraryPage({ tab }) {
     const { hasMinRole } = useAuth()
     const canEdit = hasMinRole('editor')
     const isMobile = useIsMobile()
+    const tour = useTour()
+    const emitTourEvent = useTourEmit()
     const [mobileUploadOpen, setMobileUploadOpen] = useState(false)
     const mobileUploadRef = useRef(null)
     const [mobileFilterOpen, setMobileFilterOpen] = useState(false)
@@ -349,6 +402,16 @@ function LibraryPage({ tab }) {
     const ebookFileRef = useRef(null)
     const audiobookFileRef = useRef(null)
 
+    // ---- Tour anchors (issue #598 Track B) ----
+    // LibrarySortSearch has two possible homes: the desktop toolbar's
+    // author/series/sort group, or the mobile search box — never both at
+    // once, `enabled` follows the same `isMobile` breakpoint the CSS uses to
+    // show one and hide the other.
+    const filterPillsAnchorRef = useTourAnchor(TourAnchors.LibraryFilterPills)
+    const sortSearchDesktopAnchorRef = useTourAnchor(TourAnchors.LibrarySortSearch, { enabled: !isMobile })
+    const sortSearchMobileAnchorRef = useTourAnchor(TourAnchors.LibrarySortSearch, { enabled: isMobile })
+    const maintenanceAnchorRef = useTourAnchor(TourAnchors.LibraryMaintenance, { enabled: canEdit })
+
     // ---- Server-driven list (issue #120) ----
     const q = useDebouncedValue(searchTerm, SEARCH_DEBOUNCE_MS)
     const browseQuery = useMemo(() => ({
@@ -390,6 +453,44 @@ function LibraryPage({ tab }) {
     const total = browse.total
     const loading = facets === null || (browse.loading && browse.page === 0)
 
+    // ---- Tour: adopt a real, on-screen pair (issue #598 Track B) ----
+    // Mirrors Android's rule (issue #652): the Library adopts the first
+    // synced pair in its own current ordering — not necessarily the one the
+    // tour started with — once its first page has actually rendered, so the
+    // spotlighted card is guaranteed to be on screen rather than one from a
+    // stale pick made before this page's own sort/filter applied.
+    const firstSyncedPair = useMemo(
+        () => filteredBooks.find(b => b.mediaType === 'pair' && b.pair_status === 'synced') || null,
+        [filteredBooks],
+    )
+    const lastAdoptedPairIdRef = useRef(undefined)
+    useEffect(() => {
+        if (tour.state.status !== 'running') {
+            lastAdoptedPairIdRef.current = undefined
+            return
+        }
+        if (loading) return
+        const pairId = firstSyncedPair ? firstSyncedPair.pair_id : null
+        if (lastAdoptedPairIdRef.current === pairId) return
+        lastAdoptedPairIdRef.current = pairId
+        tour.adoptPair(pairId != null ? { id: pairId } : null)
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [tour.state.status, loading, firstSyncedPair?.pair_id])
+
+    const tourWantedPairId = tour.state.status === 'running' ? tour.state.pairId : null
+    // The pairId the page has already scrolled its card into view for — not a
+    // plain boolean reset on every wanted-pair change, which would race the
+    // card's own "I just scrolled" effect: both fire in the same commit (the
+    // wanted id changing is what triggers the card's scroll in the first
+    // place), and a parent effect runs after its children's, so a bare reset
+    // would always overwrite the flag the card had just set to true.
+    const [scrolledForPairId, setScrolledForPairId] = useState(null)
+
+    // Report loading until the thing the current step needs actually exists
+    // on screen (issue #652's rule): the first page loaded, and — when a pair
+    // is wanted — the scroll into view has already happened for that pair.
+    useTourScreen(TourScreens.Library, !loading && (tourWantedPairId == null || scrolledForPairId === tourWantedPairId))
+
     // Infinite scroll: a sentinel below the list asks for the next page as it
     // scrolls into view; the "Show more" button below it is the fallback.
     const sentinelRef = useRef(null)
@@ -427,6 +528,16 @@ function LibraryPage({ tab }) {
     // ---- Selection helpers ----
 
     const bookKey = entryKey
+
+    // A card/row click that opens the book page (issue #598 Track B): report
+    // it as `detailsOpened` before navigating so the walkthrough's
+    // `library_open_book` tapAnchor step advances regardless of which pair
+    // (or unpaired book) the click actually landed on — `TourEvents.matchesKind`
+    // only compares the event's kind for this one, not the pair id.
+    const navigateToBook = (book) => {
+        emitTourEvent(TourEvents.detailsOpened(book.mediaType === 'pair' ? book.pair_id : null))
+        navigate(book.mediaType === 'pair' ? pairTargetPath(book, book.lastFormat) : `/book/${book.mediaType}/${book.id}`)
+    }
 
     const handleSelect = useCallback((book, idx, shiftKey) => {
         const key = bookKey(book)
@@ -730,7 +841,7 @@ function LibraryPage({ tab }) {
             <div className="library-toolbar">
                 <div className="library-toolbar-left">
                     {/* Filter Pills */}
-                    <div className="library-filter-pills">
+                    <div className="library-filter-pills" ref={filterPillsAnchorRef}>
                         {filterPills.map(p => (
                             <button
                                 key={p.key}
@@ -742,19 +853,33 @@ function LibraryPage({ tab }) {
                         ))}
                     </div>
 
-                    {/* Author / Series filter pills */}
-                    <FilterPill
-                        label="Author"
-                        value={authorFilter}
-                        options={allAuthors}
-                        onChange={setAuthorFilter}
-                    />
-                    <FilterPill
-                        label="Series"
-                        value={seriesFilter}
-                        options={allSeriesNames}
-                        onChange={setSeriesFilter}
-                    />
+                    {/* Author / Series filter pills + sort — the walkthrough's
+                        "Group and search" step (issue #598 Track B); on mobile
+                        this whole toolbar is CSS-hidden and the equivalent
+                        anchor lives on the search box below instead. */}
+                    <div className="library-sort-search-group" ref={sortSearchDesktopAnchorRef}>
+                        <FilterPill
+                            label="Author"
+                            value={authorFilter}
+                            options={allAuthors}
+                            onChange={setAuthorFilter}
+                        />
+                        <FilterPill
+                            label="Series"
+                            value={seriesFilter}
+                            options={allSeriesNames}
+                            onChange={setSeriesFilter}
+                        />
+                        <LibrarySortPill
+                            sortField={sortField}
+                            setSortField={setSortField}
+                            sortDir={sortDir}
+                            setSortDir={setSortDir}
+                            sortOpen={sortOpen}
+                            setSortOpen={setSortOpen}
+                            sortRef={sortRef}
+                        />
+                    </div>
 
                     {/* Active search chip (cleared via global search bar or ✕) */}
                     {searchTerm && (
@@ -766,17 +891,6 @@ function LibraryPage({ tab }) {
                 </div>
 
                 <div className="library-toolbar-right">
-                    {/* Sort pill */}
-                    <LibrarySortPill
-                        sortField={sortField}
-                        setSortField={setSortField}
-                        sortDir={sortDir}
-                        setSortDir={setSortDir}
-                        sortOpen={sortOpen}
-                        setSortOpen={setSortOpen}
-                        sortRef={sortRef}
-                    />
-
                     {/* View Toggle */}
                     <div className="library-view-toggle">
                         <button
@@ -807,76 +921,77 @@ function LibraryPage({ tab }) {
                         </button>
                     </div>
 
-                    {/* Upload dropdown */}
+                    {/* Upload / Maintenance / Select — the walkthrough's
+                        "Upload, Maintenance, Select" step (issue #598 Track
+                        B), editor-only like the three controls it wraps. */}
                     {canEdit && (
-                        <div className="library-action-dropdown" ref={uploadRef}>
+                        <div className="library-maintenance-group" ref={maintenanceAnchorRef}>
+                            {/* Upload dropdown */}
+                            <div className="library-action-dropdown" ref={uploadRef}>
+                                <button
+                                    className="btn btn-primary"
+                                    onClick={() => setUploadOpen(o => !o)}
+                                    disabled={selectMode}
+                                    style={{ fontSize: '0.85rem', padding: '6px 14px' }}
+                                >
+                                    + Upload
+                                </button>
+                                {uploadOpen && (
+                                    <div className="library-dropdown-menu">
+                                        <button className="library-dropdown-item" onClick={() => { setUploadOpen(false); ebookFileRef.current?.click() }} disabled={uploadingEbook}>
+                                            {uploadingEbook ? 'Uploading...' : 'Upload Ebook'}
+                                        </button>
+                                        <button className="library-dropdown-item" onClick={() => { setUploadOpen(false); audiobookFileRef.current?.click() }} disabled={uploadingAudiobook}>
+                                            {uploadingAudiobook ? 'Uploading...' : 'Upload Audiobook'}
+                                        </button>
+                                    </div>
+                                )}
+                            </div>
+
+                            {/* Maintenance dropdown */}
+                            <div className="library-action-dropdown" ref={maintenanceRef}>
+                                <button
+                                    className="btn btn-secondary"
+                                    onClick={() => setMaintenanceOpen(o => !o)}
+                                    disabled={scanning || normalizing || rescanningAll || selectMode}
+                                    style={{ fontSize: '0.85rem', padding: '6px 14px' }}
+                                >
+                                    Maintenance
+                                </button>
+                                {maintenanceOpen && (
+                                    <div className="library-dropdown-menu">
+                                        <button className="library-dropdown-item" onClick={() => { setMaintenanceOpen(false); handleScan() }} disabled={scanning}>
+                                            {scanning ? 'Scanning...' : 'Scan Directories'}
+                                        </button>
+                                        <button className="library-dropdown-item" onClick={() => { setMaintenanceOpen(false); handleNormalize() }} disabled={normalizing}>
+                                            {normalizing ? 'Normalizing...' : 'Normalize Metadata'}
+                                        </button>
+                                        <button className="library-dropdown-item danger" onClick={() => { setMaintenanceOpen(false); handleRescanAll() }} disabled={rescanningAll}>
+                                            {rescanningAll ? 'Rescanning...' : 'Force Rescan All'}
+                                        </button>
+                                        <button className="library-dropdown-item" onClick={() => { setMaintenanceOpen(false); handleVerify() }} disabled={verifying}>
+                                            {verifying ? 'Verifying...' : 'Verify Files'}
+                                        </button>
+                                        <button className="library-dropdown-item" onClick={() => { setMaintenanceOpen(false); setShowMetadataCleanup(true) }}>
+                                            Resolve Mismatches
+                                        </button>
+                                        <hr style={{ margin: '4px 0', border: 'none', borderTop: '1px solid var(--border)' }} />
+                                        <button className="library-dropdown-item" onClick={() => { setMaintenanceOpen(false); navigate('/pairs/unpaired') }}>
+                                            Pair Ebook + Audiobook
+                                        </button>
+                                    </div>
+                                )}
+                            </div>
+
+                            {/* Select mode toggle */}
                             <button
-                                className="btn btn-primary"
-                                onClick={() => setUploadOpen(o => !o)}
-                                disabled={selectMode}
+                                className={`btn ${selectMode ? 'btn-primary' : 'btn-secondary'}`}
+                                onClick={() => selectMode ? exitSelectMode() : setSelectMode(true)}
                                 style={{ fontSize: '0.85rem', padding: '6px 14px' }}
                             >
-                                + Upload
+                                {selectMode ? `Cancel (${selectedIds.size})` : 'Select'}
                             </button>
-                            {uploadOpen && (
-                                <div className="library-dropdown-menu">
-                                    <button className="library-dropdown-item" onClick={() => { setUploadOpen(false); ebookFileRef.current?.click() }} disabled={uploadingEbook}>
-                                        {uploadingEbook ? 'Uploading...' : 'Upload Ebook'}
-                                    </button>
-                                    <button className="library-dropdown-item" onClick={() => { setUploadOpen(false); audiobookFileRef.current?.click() }} disabled={uploadingAudiobook}>
-                                        {uploadingAudiobook ? 'Uploading...' : 'Upload Audiobook'}
-                                    </button>
-                                </div>
-                            )}
                         </div>
-                    )}
-
-                    {/* Maintenance dropdown */}
-                    {canEdit && (
-                        <div className="library-action-dropdown" ref={maintenanceRef}>
-                            <button
-                                className="btn btn-secondary"
-                                onClick={() => setMaintenanceOpen(o => !o)}
-                                disabled={scanning || normalizing || rescanningAll || selectMode}
-                                style={{ fontSize: '0.85rem', padding: '6px 14px' }}
-                            >
-                                Maintenance
-                            </button>
-                            {maintenanceOpen && (
-                                <div className="library-dropdown-menu">
-                                    <button className="library-dropdown-item" onClick={() => { setMaintenanceOpen(false); handleScan() }} disabled={scanning}>
-                                        {scanning ? 'Scanning...' : 'Scan Directories'}
-                                    </button>
-                                    <button className="library-dropdown-item" onClick={() => { setMaintenanceOpen(false); handleNormalize() }} disabled={normalizing}>
-                                        {normalizing ? 'Normalizing...' : 'Normalize Metadata'}
-                                    </button>
-                                    <button className="library-dropdown-item danger" onClick={() => { setMaintenanceOpen(false); handleRescanAll() }} disabled={rescanningAll}>
-                                        {rescanningAll ? 'Rescanning...' : 'Force Rescan All'}
-                                    </button>
-                                    <button className="library-dropdown-item" onClick={() => { setMaintenanceOpen(false); handleVerify() }} disabled={verifying}>
-                                        {verifying ? 'Verifying...' : 'Verify Files'}
-                                    </button>
-                                    <button className="library-dropdown-item" onClick={() => { setMaintenanceOpen(false); setShowMetadataCleanup(true) }}>
-                                        Resolve Mismatches
-                                    </button>
-                                    <hr style={{ margin: '4px 0', border: 'none', borderTop: '1px solid var(--border)' }} />
-                                    <button className="library-dropdown-item" onClick={() => { setMaintenanceOpen(false); navigate('/pairs/unpaired') }}>
-                                        Pair Ebook + Audiobook
-                                    </button>
-                                </div>
-                            )}
-                        </div>
-                    )}
-
-                    {/* Select mode toggle */}
-                    {canEdit && (
-                        <button
-                            className={`btn ${selectMode ? 'btn-primary' : 'btn-secondary'}`}
-                            onClick={() => selectMode ? exitSelectMode() : setSelectMode(true)}
-                            style={{ fontSize: '0.85rem', padding: '6px 14px' }}
-                        >
-                            {selectMode ? `Cancel (${selectedIds.size})` : 'Select'}
-                        </button>
                     )}
                 </div>
             </div>
@@ -956,7 +1071,7 @@ function LibraryPage({ tab }) {
                 `?search=` on a phone (the desktop bar and toolbar chip are
                 both hidden below 768px). See issue #213. */}
             {isMobile && (
-                <div className="library-mobile-search">
+                <div className="library-mobile-search" ref={sortSearchMobileAnchorRef}>
                     <span className="search-icon material-symbols-outlined" style={{ fontSize: 20 }}>search</span>
                     <input
                         type="text"
@@ -1154,12 +1269,10 @@ function LibraryPage({ tab }) {
                                 onStartSelect={(e) => { setSelectMode(true); handleSelect(book, idx, e?.shiftKey) }}
                                 onEdit={() => openEdit(book)}
                                 onDelete={() => openDeleteModal(book)}
-                                onNavigate={() => navigate(
-                                    book.mediaType === 'pair'
-                                        ? pairTargetPath(book, book.lastFormat)
-                                        : `/book/${book.mediaType}/${book.id}`
-                                )}
+                                onNavigate={() => navigateToBook(book)}
                                 canEdit={canEdit}
+                                tourWanted={book.mediaType === 'pair' && book.pair_id === tourWantedPairId}
+                                onTourScrolled={() => setScrolledForPairId(book.pair_id)}
                             />
                         ))}
                     </div>
@@ -1204,12 +1317,10 @@ function LibraryPage({ tab }) {
                             onSelect={(e) => handleSelect(book, idx, e?.shiftKey)}
                             onEdit={() => openEdit(book)}
                             onDelete={() => openDeleteModal(book)}
-                            onNavigate={() => navigate(
-                                book.mediaType === 'pair'
-                                    ? pairTargetPath(book, book.lastFormat)
-                                    : `/book/${book.mediaType}/${book.id}`
-                            )}
+                            onNavigate={() => navigateToBook(book)}
                             canEdit={canEdit}
+                            tourWanted={book.mediaType === 'pair' && book.pair_id === tourWantedPairId}
+                            onTourScrolled={() => setScrolledForPairId(book.pair_id)}
                         />
                     ))}
                     {browse.hasMore && (

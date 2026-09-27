@@ -2,7 +2,7 @@ import React, { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { deleteAccount } from '../api'
 import { COMMUNITY_DISCORD_URL } from '../lib/community'
-import { useTourAnchor, TourAnchors } from '../tour/anchors'
+import { useTourAnchor, useTourScreen, TourAnchors, TourScreens } from '../tour/anchors'
 import { useTour } from '../tour/TourContext'
 
 const CONFIRM_WORD = 'DELETE'
@@ -28,6 +28,9 @@ export default function AccountPage({ user, onAccountDeleted }) {
     const [busy, setBusy] = useState(false)
     const { replay } = useTour()
     const replayAnchorRef = useTourAnchor(TourAnchors.AccountReplayTour)
+    // Nothing on this page loads asynchronously — settled the moment it
+    // mounts (issue #598 Track B).
+    useTourScreen(TourScreens.Account, true)
 
     const ready = password.length > 0 && confirm === CONFIRM_WORD && !busy
 

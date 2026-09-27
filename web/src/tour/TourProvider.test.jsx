@@ -17,14 +17,17 @@ vi.mock('../api/library', () => ({ getPairs: getPairsMock }))
 vi.mock('../api/sync', () => ({ getPosition: getPositionMock, resetPairProgress: resetPairProgressMock }))
 
 function Probe() {
-    const { state, start, next } = useTour()
+    const { state, start, next, quit, adoptPair } = useTour()
     const emit = useTourEmit()
     return (
         <div>
             <div data-testid="tour-status">{state.status}</div>
             <div data-testid="tour-step">{state.step?.id || ''}</div>
+            <div data-testid="tour-pair-id">{state.pairId ?? ''}</div>
             <button onClick={start}>start-tour</button>
             <button onClick={next}>next-step</button>
+            <button onClick={quit}>quit-tour</button>
+            <button onClick={() => adoptPair({ id: 42 })}>adopt-pair-42</button>
             <button onClick={() => emit(TourEvents.detailsOpened(1))}>emit-details-opened</button>
             <button onClick={() => emit(TourEvents.readerOpened(1))}>emit-reader-opened</button>
             <button onClick={() => emit(TourEvents.readerReady())}>emit-reader-ready</button>
@@ -36,7 +39,8 @@ function Probe() {
 }
 
 function LocationProbe() {
-    return <div data-testid="pathname">{useLocation().pathname}</div>
+    const loc = useLocation()
+    return <div data-testid="pathname" data-state={JSON.stringify(loc.state)}>{loc.pathname}</div>
 }
 
 function renderProvider(user, { initialEntry = '/continue' } = {}) {
@@ -147,5 +151,40 @@ describe('TourProvider — routing', () => {
 
         expect(screen.getByTestId('tour-step')).toHaveTextContent('troubleshoot_page')
         expect(screen.getByTestId('pathname')).toHaveTextContent('/system/troubleshoot')
+    })
+})
+
+describe('TourProvider — closeOverlays consumption (issue #598 Track B)', () => {
+    it('quitting out of the reader replaces location state with closeOverlays: true, for the reader/player surface to consume', async () => {
+        renderProvider({ username: 'alice', role: 'user' }, { initialEntry: '/continue' })
+        fireEvent.click(screen.getByText('start-tour'))
+        await waitFor(() => expect(screen.getByTestId('tour-status')).toHaveTextContent('running'))
+
+        for (let i = 0; i < 4; i++) fireEvent.click(screen.getByText('next-step'))
+        fireEvent.click(screen.getByText('go-library'))
+        fireEvent.click(screen.getByText('next-step')) // library_sort_and_search
+        fireEvent.click(screen.getByText('next-step')) // library_open_book (maintenance is editor-only, filtered for a plain user)
+        fireEvent.click(screen.getByText('emit-details-opened'))
+        fireEvent.click(screen.getByText('next-step')) // details_click_read
+        fireEvent.click(screen.getByText('emit-reader-opened'))
+        expect(screen.getByTestId('tour-step')).toHaveTextContent('reader_toolbar')
+
+        fireEvent.click(screen.getByText('quit-tour'))
+
+        expect(screen.getByTestId('pathname')).toHaveTextContent('/library')
+        expect(JSON.parse(screen.getByTestId('pathname').dataset.state)).toEqual({ closeOverlays: true })
+    })
+})
+
+describe('TourProvider — adoptPair (issue #598 Track B, Library re-adoption)', () => {
+    it('exposes adoptPair() through useTour(), updating state.pairId and re-checking willCleanUp', async () => {
+        renderProvider({ username: 'alice', role: 'user' }, { initialEntry: '/continue' })
+        fireEvent.click(screen.getByText('start-tour'))
+        await waitFor(() => expect(screen.getByTestId('tour-status')).toHaveTextContent('running'))
+
+        fireEvent.click(screen.getByText('adopt-pair-42'))
+
+        expect(screen.getByTestId('tour-pair-id')).toHaveTextContent('42')
+        await waitFor(() => expect(getPositionMock).toHaveBeenCalledWith('pair', 42))
     })
 })

@@ -14,6 +14,7 @@ import { useAuth } from '../contexts/AuthContext'
 import EnhancedMetadataModal from '../components/EnhancedMetadataModal'
 import PrintPageFill from '../components/PrintPageFill'
 import Modal from '../components/Modal'
+import { TourAnchors, TourScreens, useTourAnchor, useTourScreen } from '../tour/anchors'
 import './TroubleshootPage.css'
 
 /* ── Category metadata ─────────────────────────────────────────────── */
@@ -564,6 +565,10 @@ function TroubleshootPage() {
     const [editType, setEditType] = useState(null)
     const pollRef = useRef(null)
 
+    // ---- Tour anchor and screen readiness (issue #598 Track B) ----
+    const headerAnchorRef = useTourAnchor(TourAnchors.TroubleshootHeader)
+    useTourScreen(TourScreens.Troubleshoot, !loading)
+
     const load = useCallback(async () => {
         try { setData(await getLibraryIssues()) }
         catch (e) { setError(e.message) }
@@ -647,23 +652,27 @@ function TroubleshootPage() {
             </div>
             )}
 
-            <div className="system-section-header">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="18" height="18" className="system-section-icon">
-                    <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
-                    <line x1="12" y1="9" x2="12" y2="13" /><line x1="12" y1="17" x2="12.01" y2="17" />
-                </svg>
-                <h3>Troubleshoot Library</h3>
-            </div>
-
-            <div className="ts-toolbar">
-                <div className="ts-summary">
-                    {loading ? 'Loading…' : total === 0 ? 'No issues detected 🎉' : `${total} issue${total !== 1 ? 's' : ''} across ${activeCats.length} categor${activeCats.length !== 1 ? 'ies' : 'y'}`}
+            {/* The walkthrough's `troubleshoot_page` step spotlights title +
+                Run Verification Scan together (issue #598 Track B). */}
+            <div ref={headerAnchorRef}>
+                <div className="system-section-header">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="18" height="18" className="system-section-icon">
+                        <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+                        <line x1="12" y1="9" x2="12" y2="13" /><line x1="12" y1="17" x2="12.01" y2="17" />
+                    </svg>
+                    <h3>Troubleshoot Library</h3>
                 </div>
-                <div style={{ display: 'flex', gap: 8 }}>
-                    <button className="btn btn-secondary" onClick={load} disabled={loading || scanning}>Refresh</button>
-                    {canEdit && (scanning
-                        ? <button className="btn btn-danger" onClick={stopScan}>Cancel Scan</button>
-                        : <button className="btn btn-primary" onClick={runScan}>Run Verification Scan</button>)}
+
+                <div className="ts-toolbar">
+                    <div className="ts-summary">
+                        {loading ? 'Loading…' : total === 0 ? 'No issues detected 🎉' : `${total} issue${total !== 1 ? 's' : ''} across ${activeCats.length} categor${activeCats.length !== 1 ? 'ies' : 'y'}`}
+                    </div>
+                    <div style={{ display: 'flex', gap: 8 }}>
+                        <button className="btn btn-secondary" onClick={load} disabled={loading || scanning}>Refresh</button>
+                        {canEdit && (scanning
+                            ? <button className="btn btn-danger" onClick={stopScan}>Cancel Scan</button>
+                            : <button className="btn btn-primary" onClick={runScan}>Run Verification Scan</button>)}
+                    </div>
                 </div>
             </div>
 

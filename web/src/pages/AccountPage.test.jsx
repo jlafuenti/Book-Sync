@@ -2,6 +2,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import AccountPage from './AccountPage'
+import { TourScreens, TourRegistryContext } from '../tour/anchors'
+import { TourAnchorRegistry } from '../tour/TourAnchorRegistry'
 
 /**
  * Self-service account deletion on the web (issue #146).
@@ -162,5 +164,18 @@ describe('AccountPage — Help card / replay the walkthrough (issue #598)', () =
         // Rendered without a <TourProvider> (like every other page test in this
         // file); useTour() falls back to a no-op, so the click must not throw.
         expect(() => fireEvent.click(screen.getByRole('button', { name: 'Replay' }))).not.toThrow()
+    })
+
+    // Issue #598 Track B: nothing on this page loads asynchronously, so it
+    // reports Account settled the moment it mounts, unlike every data-backed
+    // page which starts loading.
+    it('reports Account settled immediately on mount', () => {
+        const registry = new TourAnchorRegistry()
+        render(
+            <TourRegistryContext.Provider value={registry}>
+                <MemoryRouter><AccountPage user={user} onAccountDeleted={vi.fn()} /></MemoryRouter>
+            </TourRegistryContext.Provider>,
+        )
+        expect(registry.screenState(TourScreens.Account)).toBe('settled')
     })
 })

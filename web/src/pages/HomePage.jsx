@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useLocation } from 'react-router-dom'
+import { TourAnchors, TourScreens, TourEvents, useTourAnchor, useTourScreen, useTourEmit } from '../tour/anchors'
 import {
     getAllProgress, getEbooks, getAudiobooks, getPairs, getTranscriptionQueue,
     resetPairProgress, resetPosition, getProgress as apiGetProgress, getPosition,
@@ -235,8 +236,13 @@ export function BookCard({ book, size = 'continue', progress, onPrimary, onRead,
 
 function HomePage() {
     const navigate = useNavigate()
+    const location = useLocation()
     const audioPlayer = useAudioPlayer()
     const isMobile = useIsMobile()
+    const emitTourEvent = useTourEmit()
+    const continueReadingAnchorRef = useTourAnchor(TourAnchors.HomeContinueReading)
+    const nextUpAnchorRef = useTourAnchor(TourAnchors.HomeNextUp)
+    const recentlyAddedAnchorRef = useTourAnchor(TourAnchors.HomeRecentlyAdded)
 
     const [continueItems, setContinueItems] = useState([])
     const [seriesItems, setSeriesItems] = useState([])
@@ -397,6 +403,39 @@ function HomePage() {
     }, [])
 
     useEffect(() => { loadData() }, [loadData])
+
+    // The walkthrough's `closeOverlays` nav request (issue #598 Track B):
+    // TourProvider replaces location state with `{ closeOverlays: true }`
+    // rather than acting on the overlay directly — same pattern as the
+    // `openReader`/`openPlayer` consumption in BookDetailPage — because Home
+    // can be the current route while its own reader/player overlay is open
+    // (opened locally, from a Continue Reading card, with no navigation).
+    useEffect(() => {
+        if (!location.state?.closeOverlays) return
+        setReaderOpen(null)
+        setPlayerOpen(false)
+        navigate(location.pathname, { replace: true, state: null })
+    }, [location.state?.closeOverlays]) // eslint-disable-line react-hooks/exhaustive-deps
+
+    // Screen readiness (issue #652's rule, mirrored from Android): report
+    // loading until the data this screen shows has arrived, and go back to
+    // loading — not settled — while either overlay is covering it, since a
+    // step spotlighting a Home anchor would otherwise resolve against a
+    // section that isn't actually on screen.
+    useTourScreen(TourScreens.Home, !loading && !readerOpen && !playerOpen)
+
+    // The reader/player overlays here are opened the same way BookDetailPage's
+    // are (issue #598 Track B) — report the same events so a tapAnchor step
+    // waiting on readerOpened/playerOpened advances regardless of which page
+    // actually opened the overlay.
+    useEffect(() => {
+        if (readerOpen) emitTourEvent(TourEvents.readerOpened(readerOpen.pairId ?? null))
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [readerOpen])
+    useEffect(() => {
+        if (playerOpen) emitTourEvent(TourEvents.playerOpened(audioPlayer.currentAudiobook?.pair_id ?? null))
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [playerOpen])
 
     // --- Actions ---
 
@@ -653,7 +692,7 @@ function HomePage() {
             )}
 
             {/* ── Continue Reading/Listening ── */}
-            <section className="home-section">
+            <section className="home-section" ref={continueReadingAnchorRef}>
                 <div className="home-section-header">
                     <h3>Continue Reading</h3>
                     {isMobile && continueItems.length > 0 && (
@@ -697,7 +736,7 @@ function HomePage() {
 
             {/* ── Next up (issue #716) ── */}
             {seriesItems.length > 0 && (
-                <section className="home-section">
+                <section className="home-section" ref={nextUpAnchorRef}>
                     <div className="home-section-header">
                         <h3>Next up</h3>
                     </div>
@@ -751,7 +790,7 @@ function HomePage() {
 
             {/* ── Recently Added ── */}
             {recentItems.length > 0 && (
-                <section className="home-section">
+                <section className="home-section" ref={recentlyAddedAnchorRef}>
                     <div className="home-section-header">
                         <h3>Recently Added</h3>
                     </div>
