@@ -230,7 +230,7 @@ export const TOUR = [
         body: 'Queue sends a pair to the transcription worker; one job runs at a time. Cancel '
             + 'stops a running job at its next checkpoint.',
         advance: ADVANCE.next(),
-        minRole: 'editor',
+        minRole: 'admin',
     },
     {
         id: 'troubleshoot_page',

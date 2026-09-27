@@ -75,15 +75,17 @@ describe('stepsForRole', () => {
         expect(steps.length).toBe(23)
     })
 
-    it('gives an editor the maintenance, queue and troubleshoot steps, but not System', () => {
+    it('gives an editor the maintenance and troubleshoot steps, but not the queue or System', () => {
+        // Queue All is admin-gated on the Transcription page (canManageQueue),
+        // so the step that spotlights it is too; editors only get Cancel.
         const steps = stepsForRole('editor')
         const ids = steps.map((s) => s.id)
         expect(ids).toContain('library_upload_and_maintenance')
-        expect(ids).toContain('transcription_queue')
+        expect(ids).not.toContain('transcription_queue')
         expect(ids).toContain('troubleshoot_page')
         expect(ids).not.toContain('click_system')
         expect(ids).not.toContain('system_status')
-        expect(steps.length).toBe(26)
+        expect(steps.length).toBe(25)
     })
 
     it('gives an admin the System block instead of troubleshoot_page', () => {
