@@ -526,6 +526,25 @@ class LibraryRepository @Inject constructor(
             if (e.code() == 404) null else throw e
         }
 
+    /**
+     * The print page count for one ebook's tap-to-cycle progress indicator
+     * (issue #730), fetched fresh rather than read from the Room cache — the
+     * caller (Task 12's `ReaderActivity` wiring) stores the result itself, in
+     * `ReaderProgressPrefs`, and falls back to whatever is already stored
+     * there when this returns null. Unlike [resolveEbookById], any failure —
+     * not just 404 — is swallowed: an offline reader should keep showing its
+     * last-known page count rather than blocking the indicator on a retry.
+     */
+    suspend fun fetchPrintPageCount(ebookId: Int): Int? =
+        try {
+            api.getEbook(ebookId).print_page_count
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            log("fetchPrintPageCount — ebook $ebookId request failed: ${e.message}")
+            null
+        }
+
     /** Reactive single-pair flow for the details screen. */
     fun getPairByIdFlow(pairId: Int): Flow<BookPairEntity?> = bookPairDao.getPairByIdFlow(pairId)
 
