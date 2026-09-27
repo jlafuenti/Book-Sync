@@ -5217,6 +5217,51 @@
         "title": "TokenResponse",
         "type": "object"
       },
+      "TranscriptResponse": {
+        "description": "`GET /api/transcription/{pair_id}/transcript`: the cached transcript,\nsentence by sentence, for the alignment view (#713).",
+        "properties": {
+          "pair_id": {
+            "title": "Pair Id",
+            "type": "integer"
+          },
+          "sentences": {
+            "items": {
+              "$ref": "#/components/schemas/TranscriptSentence"
+            },
+            "title": "Sentences",
+            "type": "array"
+          }
+        },
+        "required": [
+          "pair_id",
+          "sentences"
+        ],
+        "title": "TranscriptResponse",
+        "type": "object"
+      },
+      "TranscriptSentence": {
+        "properties": {
+          "end_ms": {
+            "title": "End Ms",
+            "type": "integer"
+          },
+          "start_ms": {
+            "title": "Start Ms",
+            "type": "integer"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "text",
+          "start_ms",
+          "end_ms"
+        ],
+        "title": "TranscriptSentence",
+        "type": "object"
+      },
       "TranscriptionStatusResponse": {
         "properties": {
           "book_pair_id": {
@@ -11887,6 +11932,54 @@
           }
         ],
         "summary": "Get Transcription Status",
+        "tags": [
+          "transcription"
+        ]
+      }
+    },
+    "/api/transcription/{pair_id}/transcript": {
+      "get": {
+        "description": "The pair's cached transcript: what Whisper heard, sentence by sentence,\nwith times. The web's alignment view shows it beside each ebook sentence;\n`SyncPoint.audio_text` cannot serve, because alignment never writes it.",
+        "operationId": "get_cached_transcript_api_transcription__pair_id__transcript_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pair_id",
+            "required": true,
+            "schema": {
+              "title": "Pair Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TranscriptResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Get Cached Transcript",
         "tags": [
           "transcription"
         ]

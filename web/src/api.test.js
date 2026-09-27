@@ -2133,3 +2133,14 @@ describe('realignPair() (issue #713)', () => {
         await expect(realignPair(42)).rejects.toThrow('No cached transcript')
     })
 })
+
+describe('getTranscript() (issue #713)', () => {
+    it('reads the pair\'s cached transcript', async () => {
+        const body = { pair_id: 42, sentences: [{ text: 'a', start_ms: 0, end_ms: 10 }] }
+        const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => body })
+        vi.stubGlobal('fetch', fetchMock)
+        const { getTranscript } = await import('./api')
+        expect(await getTranscript(42)).toEqual(body)
+        expect(fetchMock.mock.calls[0][0]).toBe('/api/transcription/42/transcript')
+    })
+})

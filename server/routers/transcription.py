@@ -16,6 +16,7 @@ Endpoints:
 """
 
 import asyncio
+import json
 from typing import Dict, List
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -27,6 +28,7 @@ from database import get_db, async_session
 from models.user import User
 from models.book import BookPair, PairStatus
 from models.transcription_queue import TranscriptionQueueItem
+from models.transcript import AudioTranscript
 from schemas import (
     TranscriptionStatusResponse,
     OffHoursStatusResponse,
@@ -34,6 +36,7 @@ from schemas import (
     QueueAddRequest,
     QueuePriorityUpdate,
     RealignResponse,
+    TranscriptResponse,
 )
 from rate_limit import search_reads
 from routers.auth import (
@@ -458,6 +461,30 @@ async def get_queue_history(
         ))
 
     return responses
+
+
+# ====================================================================
+# The cached transcript, read-only (issue #713)
+# ====================================================================
+
+@router.get("/{pair_id}/transcript", response_model=TranscriptResponse)
+async def get_cached_transcript(
+    pair_id: int,
+    db: AsyncSession = Depends(get_db, scope="function"),
+    _: User = Depends(get_current_user),
+):
+    """The pair's cached transcript: what Whisper heard, sentence by sentence,
+    with times. The web's alignment view shows it beside each ebook sentence;
+    `SyncPoint.audio_text` cannot serve, because alignment never writes it."""
+    transcript = (await db.execute(
+        select(AudioTranscript).where(AudioTranscript.pair_id == pair_id)
+    )).scalar_one_or_none()
+    if not transcript:
+        raise HTTPException(status_code=404, detail="No cached transcript for this pair")
+    # A whole book's transcript is megabytes of JSON: parse it off the event
+    # loop (CLAUDE.md, "Nothing blocking inside an async def").
+    sentences = await asyncio.to_thread(json.loads, transcript.sentences_json)
+    return {"pair_id": pair_id, "sentences": sentences}
 
 
 # ====================================================================

@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react'
 import { useParams, Link } from 'react-router-dom'
-import { getSyncMap, getPair, realignPair } from '../api'
+import { getSyncMap, getPair, realignPair, getTranscript } from '../api'
+import { heardTextByPoint } from '../lib/heardText'
 import { useAuth } from '../contexts/AuthContext'
 import './TranscriptionPage.css'
 
@@ -10,9 +11,11 @@ import './TranscriptionPage.css'
  * matched it or filled it in between matches.
  *
  * Read-only since issue #713. The page used to let you edit the heard text, but
- * that text is display-only: re-alignment rebuilds the map from the saved
- * transcript, so an edit never changed where either app lands. Re-align here
- * is the rebuild - cheap, and no re-transcription.
+ * re-alignment rebuilds the map from the saved transcript, so an edit never
+ * changed where either app lands - and alignment never even wrote that text
+ * (`audio_text` is NULL on every point), so the boxes held the ebook sentence.
+ * The heard text now comes from the saved transcript itself. Re-align here is
+ * the rebuild - cheap, and no re-transcription.
  */
 function TranscriptionEditorPage() {
     const { pairId } = useParams()
@@ -25,13 +28,15 @@ function TranscriptionEditorPage() {
     const [error, setError] = useState('')
     const [successMessage, setSuccessMessage] = useState('')
     const [query, setQuery] = useState('')
+    // The saved transcript's sentences; null while loading or when there is none.
+    const [transcript, setTranscript] = useState(null)
+    const [transcriptMissing, setTranscriptMissing] = useState(false)
 
     const loadPoints = useCallback(async () => {
         const data = await getSyncMap(pairId)
         setPoints((data.sync_points || []).map(pt => ({
             id: pt.id,
             ebookText: pt.epub_text_preview || '',
-            heardText: pt.audio_text || '',
             start_ms: pt.audio_start_ms,
             end_ms: pt.audio_end_ms,
             chapter: pt.epub_chapter,
@@ -49,6 +54,12 @@ function TranscriptionEditorPage() {
             } finally {
                 setLoading(false)
             }
+
+            // What was heard comes from the saved transcript; without one the
+            // alignment still shows, just without that line.
+            getTranscript(pairId)
+                .then(t => setTranscript(t.sentences || []))
+                .catch(() => setTranscriptMissing(true))
 
             // The pair is only the subheading's title/author (issue #277). It
             // used to come from `getPairs()` — the whole library, filtered
@@ -79,11 +90,13 @@ function TranscriptionEditorPage() {
     }
 
     const matchedCount = useMemo(() => points.filter(pt => pt.matched).length, [points])
+    const heard = useMemo(() => heardTextByPoint(points, transcript), [points, transcript])
     const shown = useMemo(() => {
         const q = query.trim().toLowerCase()
         if (!q) return points
-        return points.filter(pt => pt.ebookText.toLowerCase().includes(q) || pt.heardText.toLowerCase().includes(q))
-    }, [points, query])
+        return points.filter(pt => pt.ebookText.toLowerCase().includes(q) ||
+            (heard.get(pt.id) || '').toLowerCase().includes(q))
+    }, [points, query, heard])
 
     const formatTime = (ms) => {
         const totalSec = Math.floor(ms / 1000)
@@ -138,6 +151,12 @@ function TranscriptionEditorPage() {
                         </button>
                     )}
                 </div>
+                {transcriptMissing && (
+                    <p style={{ margin: '10px 0 0 0', fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                        This book has no saved transcript, so what was heard cannot be shown, and Re-align
+                        needs a full transcription first.
+                    </p>
+                )}
                 {points.length > 0 && (
                     <p style={{ margin: '10px 0 0 0', fontSize: '0.8rem', color: 'var(--text-muted)' }}>
                         <span>{matchedCount} matched, {points.length - matchedCount} filled in between matches</span>
@@ -168,9 +187,11 @@ function TranscriptionEditorPage() {
                             </div>
                             <div style={{ flex: '1', minWidth: 0 }}>
                                 <div style={{ fontSize: '0.9rem' }}>{pt.ebookText}</div>
-                                <div style={{ marginTop: '4px', fontSize: '0.82rem', color: 'var(--text-secondary)', fontStyle: pt.heardText ? 'normal' : 'italic' }}>
-                                    {pt.heardText || 'No transcript text in this range'}
-                                </div>
+                                {transcript && (
+                                    <div style={{ marginTop: '4px', fontSize: '0.82rem', color: 'var(--text-secondary)', fontStyle: heard.has(pt.id) ? 'normal' : 'italic' }}>
+                                        {heard.get(pt.id) || 'No transcript text in this range'}
+                                    </div>
+                                )}
                             </div>
                         </div>
                     ))

@@ -3,8 +3,9 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { MemoryRouter, Routes, Route } from 'react-router-dom'
 import TranscriptionEditorPage from './TranscriptionEditorPage'
 
-const { getSyncMapMock, getPairMock, getPairsMock, realignPairMock, authRef } = vi.hoisted(() => ({
+const { getSyncMapMock, getPairMock, getPairsMock, realignPairMock, getTranscriptMock, authRef } = vi.hoisted(() => ({
     getSyncMapMock: vi.fn(),
+    getTranscriptMock: vi.fn(),
     getPairMock: vi.fn(),
     getPairsMock: vi.fn(),
     realignPairMock: vi.fn(),
@@ -16,6 +17,7 @@ vi.mock('../api', () => ({
     getPair: getPairMock,
     getPairs: getPairsMock,
     realignPair: realignPairMock,
+    getTranscript: getTranscriptMock,
 }))
 
 vi.mock('../contexts/AuthContext', () => ({
@@ -24,7 +26,7 @@ vi.mock('../contexts/AuthContext', () => ({
 
 const POINTS = [
     {
-        id: 1, epub_text_preview: 'Ash fell from the sky.', audio_text: 'ash fell from the sky',
+        id: 1, epub_text_preview: 'Ash fell from the sky.', audio_text: null,
         audio_start_ms: 0, audio_end_ms: 2000, epub_chapter: 1, epub_sentence_index: 0, confidence: 0.92,
     },
     {
@@ -33,12 +35,16 @@ const POINTS = [
     },
 ]
 
+// What the transcript heard; sync points carry none of it themselves (#713).
+const TRANSCRIPT = { pair_id: 42, sentences: [{ text: 'ash fell from the sky', start_ms: 100, end_ms: 1800 }] }
+
 beforeEach(() => {
     authRef.editor = true
     getSyncMapMock.mockReset()
     getPairMock.mockReset()
     getPairsMock.mockReset()
     realignPairMock.mockReset()
+    getTranscriptMock.mockReset().mockResolvedValue(TRANSCRIPT)
     getSyncMapMock.mockResolvedValue({ sync_points: [] })
     getPairMock.mockResolvedValue({
         id: 42,
@@ -148,6 +154,24 @@ describe('TranscriptionEditorPage is a read-only alignment view (issue #713)', (
         fireEvent.click(screen.getByRole('button', { name: 'Re-align' }))
 
         expect(await screen.findByText(/No cached transcript for this pair/)).toBeInTheDocument()
+    })
+
+    it('takes the heard text from the saved transcript', async () => {
+        getSyncMapMock.mockResolvedValue({ sync_points: POINTS })
+        renderAt('42')
+
+        expect(await screen.findByText('ash fell from the sky')).toBeInTheDocument()
+        expect(getTranscriptMock).toHaveBeenCalledWith('42')
+    })
+
+    it('says so when the book has no saved transcript, and still shows the alignment', async () => {
+        getSyncMapMock.mockResolvedValue({ sync_points: POINTS })
+        getTranscriptMock.mockRejectedValue(new Error('No cached transcript for this pair'))
+        renderAt('42')
+
+        expect(await screen.findByText('Ash fell from the sky.')).toBeInTheDocument()
+        expect(await screen.findByText(/no saved transcript/i)).toBeInTheDocument()
+        expect(screen.queryByText('No transcript text in this range')).toBeNull()
     })
 
     it('offers no Re-align below the editor role', async () => {

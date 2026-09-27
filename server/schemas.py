@@ -426,6 +426,20 @@ class SyncMapSummaryResponse(BaseModel):
         from_attributes = True
 
 
+class TranscriptSentence(BaseModel):
+    text: str
+    start_ms: int
+    end_ms: int
+
+
+class TranscriptResponse(BaseModel):
+    """`GET /api/transcription/{pair_id}/transcript`: the cached transcript,
+    sentence by sentence, for the alignment view (#713)."""
+
+    pair_id: int
+    sentences: List[TranscriptSentence]
+
+
 class RealignResponse(BaseModel):
     """`POST /api/transcription/{pair_id}/realign`: the rebuilt map's point
     count, and how many were matched against the transcript rather than
