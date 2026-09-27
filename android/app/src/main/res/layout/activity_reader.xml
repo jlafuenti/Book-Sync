@@ -10,6 +10,17 @@
         android:layout_width="match_parent"
         android:layout_height="match_parent">
 
+    <!-- Hosts the hidden page counter (issue #730): a PageCounterWebView,
+         added in code and sized to the live reader WebView, laid out beneath
+         the book so it never draws over it or takes a touch. -->
+    <FrameLayout
+        android:id="@+id/page_counter_host"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:clickable="false"
+        android:focusable="false"
+        android:importantForAccessibility="noHideDescendants" />
+
     <!-- EPUB Content -->
     <androidx.fragment.app.FragmentContainerView
         android:id="@+id/navigator_container"
@@ -53,10 +64,15 @@
         android:visibility="gone">
 
         <!-- Progress text -->
+        <!-- Tap to cycle percent / pages / chapter / time (issue #730) -->
         <TextView
             android:id="@+id/progress_text"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
+            android:minHeight="48dp"
+            android:clickable="true"
+            android:focusable="true"
+            android:background="?attr/selectableItemBackground"
             android:textColor="@android:color/white"
             android:textSize="13sp"
             android:gravity="center"

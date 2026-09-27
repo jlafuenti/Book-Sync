@@ -49,4 +49,11 @@ class FetchPrintPageCountTest {
 
         assertNull(library().fetchPrintPageCount(42))
     }
+
+    @Test
+    fun `the repository facade the reader uses delegates to the library`() = runTest {
+        coEvery { api.getEbook(42) } returns ebookResponse(42, printPageCount = 342)
+
+        assertEquals(342, buildRepository(api = api).fetchPrintPageCount(42))
+    }
 }

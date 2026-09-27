@@ -17,9 +17,8 @@ import kotlinx.serialization.json.Json
  * scope, so there is no new prefs file to migrate.
  *
  * Takes the `SharedPreferences` instance directly (rather than a `Context`)
- * so tests can hand it an in-memory fake; a caller builds it with
- * `context.getSharedPreferences(ReaderEdgeTapSettings.PREFS_NAME, MODE_PRIVATE)`
- * or the equivalent `ReaderDisplaySettings` constant — wiring left to Task 12.
+ * so tests can hand it an in-memory fake; [ReaderActivity] builds it with
+ * `getSharedPreferences(ReaderDisplaySettings.PREFS_NAME, MODE_PRIVATE)`.
  */
 class ReaderProgressPrefs(private val prefs: SharedPreferences) {
 
