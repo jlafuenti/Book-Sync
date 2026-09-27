@@ -40,6 +40,10 @@ operator must do by hand rather than read about afterwards.
 
 ### Fixed
 
+- The web reader's first page turns in a large book no longer stutter while it works out page
+  numbers (#736): the background page count now waits until the reader has finished its own pass
+  over the book, and a count already saved on the device still applies at once. Closing a book, and
+  each page count, also no longer leaves a stray window listener behind.
 - Auto-pairing no longer misses an audiobook stored as `Author/Book Title/Book Title.m4b` (#712).
   The filename patterns read the book's own folder as its series, and the matcher then refused its
   ebook's real series; a series that reads the same as the title and has no book number is now

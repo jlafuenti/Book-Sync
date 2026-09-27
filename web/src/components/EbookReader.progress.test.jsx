@@ -69,7 +69,8 @@ function makeFakeBook() {
         renderTo: vi.fn(() => rendition),
         loaded: { navigation: Promise.resolve({ toc: [] }) },
         spine: { items, spineItems: items, get: vi.fn(() => null) },
-        locations: { generate: vi.fn().mockResolvedValue(undefined) },
+        // Locations already generated, so the page count starts at once (issue #736).
+        locations: { generate: vi.fn().mockResolvedValue(undefined), length: () => 100 },
         ready: Promise.resolve(),
         destroy: vi.fn(),
     }

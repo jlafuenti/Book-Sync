@@ -15,6 +15,11 @@ export const PROGRESS_MODE_KEY = 'tandem_reader_progress_mode'
 export const PAGE_MODE_KEY = 'tandem_reader_page_mode'
 export const SPEED_SAMPLES_KEY = 'tandem_reader_speed_samples'
 const RESIZE_DEBOUNCE_MS = 500
+// A fresh page count waits until epub.js has generated its locations (the
+// first relocation with a real location index), so the two passes over the
+// book do not run at once and stutter the first page turns (issue #736). If
+// the locations never come - generation failed - it counts after this anyway.
+export const COUNT_FALLBACK_MS = 15000
 // `locationsReady`: before `book.locations` has been generated, epub.js
 // (0.3.93, rendition.located) reports `start.location` as -1 and
 // `start.percentage` as 0 (locationFromCfi returns -1 on an empty list and
@@ -155,9 +160,28 @@ export default function useReaderProgress({ ebookId, fontSize, ready, viewerRef,
         }
     }, [ready, viewerRef])
 
+    // Whether a fresh count may start: epub.js has its locations, or waiting
+    // for them has timed out (issue #736). Reset for each opened book.
+    const [countMayStart, setCountMayStart] = useState(false)
+    useEffect(() => {
+        if (!opened) {
+            setCountMayStart(false)
+            return undefined
+        }
+        // Locations that already exist (epub.js Locations.length()) need no wait.
+        let have = 0
+        try { have = opened.book?.locations?.length?.() || 0 } catch { have = 0 }
+        setCountMayStart(have > 0)
+        if (have > 0) return undefined
+        const timer = setTimeout(() => setCountMayStart(true), COUNT_FALLBACK_MS)
+        return () => clearTimeout(timer)
+    }, [opened])
+
     // The page count. Starts only once the book has opened, so it never
-    // competes with the open; a font size or viewer size change aborts it
-    // and counts again (or takes the cached result for the new settings).
+    // competes with the open, and a fresh count only once epub.js has its
+    // locations; a cached one applies at once. A font size or viewer size
+    // change aborts it and counts again (or takes the cached result for the
+    // new settings).
     useEffect(() => {
         if (!ready || !viewerSize || !opened || opened.ebookId !== ebookId) return undefined
         const { book, buffer } = opened
@@ -174,6 +198,7 @@ export default function useReaderProgress({ ebookId, fontSize, ready, viewerRef,
             return undefined
         }
         applyCounts(null)
+        if (!countMayStart) return undefined
         const controller = new AbortController()
         countSectionPages(() => ePub(buffer.slice(0)), { width, height, fontSize, signal: controller.signal })
             .then(result => {
@@ -186,7 +211,7 @@ export default function useReaderProgress({ ebookId, fontSize, ready, viewerRef,
                 console.warn('[EbookReader] page count failed:', err?.message || err)
             })
         return () => controller.abort()
-    }, [ebookId, fontSize, viewerSize, ready, opened, applyCounts])
+    }, [ebookId, fontSize, viewerSize, ready, opened, applyCounts, countMayStart])
 
     const onOpened = useCallback((book) => {
         const hrefs = (book?.spine?.items || []).map(item => item.href)
@@ -200,6 +225,7 @@ export default function useReaderProgress({ ebookId, fontSize, ready, viewerRef,
         const page = location.start.displayed?.page || 0
         const total = location.start.displayed?.total || 0
         const locationsReady = location.start.location >= 0
+        if (locationsReady) setCountMayStart(true)
         setPosition({ sectionIndex: spineIndex, page, total, fraction, locationsReady })
 
         const entries = printEntriesRef.current

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import ePub from 'epubjs'
 import { fetchEbookBlob } from '../api'
-import { RENDITION_OPTIONS, READER_THEME_RULES, fontSizeCss } from '../lib/readerRendition'
+import { RENDITION_OPTIONS, READER_THEME_RULES, fontSizeCss, destroyBook } from '../lib/readerRendition'
 
 /**
  * The epub.js lifecycle for one book (issue #278): blob fetch, `ePub()`,
@@ -124,9 +124,8 @@ export default function useEpubRendition(viewerRef, ebookId, {
         return () => {
             destroyed = true
             onTeardownRef.current?.()
-            if (bookRef.current) {
-                try { bookRef.current.destroy() } catch (e) {}
-            }
+            // destroyBook also removes the window listener epub.js leaks (#736).
+            destroyBook(bookRef.current)
         }
     }, [ebookId]) // eslint-disable-line react-hooks/exhaustive-deps
 

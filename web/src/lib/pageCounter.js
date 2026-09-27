@@ -1,4 +1,4 @@
-import { RENDITION_OPTIONS, READER_THEME_RULES, fontSizeCss } from './readerRendition'
+import { RENDITION_OPTIONS, READER_THEME_RULES, fontSizeCss, destroyBook } from './readerRendition'
 
 const RENDERED_TIMEOUT_MS = 3000
 
@@ -98,7 +98,8 @@ export async function countSectionPages(openBook, { width, height, fontSize, sig
     } finally {
         // Book.destroy() already destroys book.rendition, so this is the only
         // rendition teardown call — no separate rendition?.destroy() alongside it.
-        try { book.destroy() } catch { /* already gone */ }
+        // destroyBook also removes the listener epub.js leaks per rendition (#736).
+        destroyBook(book)
         host.remove()
     }
 }

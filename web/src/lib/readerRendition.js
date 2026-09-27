@@ -32,3 +32,14 @@ export const READER_THEME_RULES = {
 export function fontSizeCss(pct) {
     return `html { font-size: ${pct}% !important; }`
 }
+
+// Destroy an epub.js Book, and remove the window listener its rendition leaves
+// behind (issue #736): epub.js 0.3.93's Stage adds "orientationchange" but its
+// destroy() removes "orientationChange", so every reader open and every page
+// count left one handler on window. Never throws.
+export function destroyBook(book) {
+    if (!book) return
+    const onOrientation = book.rendition?.manager?.stage?.orientationChangeFunc
+    try { book.destroy() } catch { /* already gone */ }
+    if (onOrientation) window.removeEventListener('orientationchange', onOrientation, false)
+}

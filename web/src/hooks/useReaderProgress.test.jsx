@@ -2,6 +2,9 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { renderHook, act, waitFor } from '@testing-library/react'
 import useReaderProgress, { PROGRESS_MODE_KEY, PAGE_MODE_KEY, SPEED_SAMPLES_KEY } from './useReaderProgress'
 import { FALLBACK_NOTICE, FALLBACK_NOTICE_MS } from '../lib/readerProgress'
+import { COUNT_FALLBACK_MS } from './useReaderProgress'
+import { cacheKey, writeCounts } from '../lib/pageCountCache'
+import { spineSignature } from '../lib/pageCounter'
 
 // Edge paths of the progress indicator's hook (issue #730); the main flows
 // are pinned through the reader in EbookReader.progress.test.jsx.
@@ -30,7 +33,9 @@ function viewer(width = 800, height = 600) {
 
 function fakeBook(extra = {}) {
     const items = [{ href: 'ch0.xhtml' }, { href: 'ch1.xhtml' }]
-    return { spine: { items, spineItems: items, get: vi.fn(() => null) }, ...extra }
+    // Locations already generated, so a count may start at once (issue #736);
+    // the tests of that wait pass `locations` with none.
+    return { spine: { items, spineItems: items, get: vi.fn(() => null) }, locations: { length: () => 100 }, ...extra }
 }
 
 // Renders the hook and opens `book` in it, as the reader does once the
@@ -376,5 +381,57 @@ describe('useReaderProgress — no print pages notice', () => {
 
         await waitFor(() => expect(result.current.notice).toBe(FALLBACK_NOTICE))
         expect(result.current.text).toBe('5 of 8')
+    })
+})
+
+describe('useReaderProgress — the count waits for epub.js locations (issue #736)', () => {
+    it('counts at once when the book already has its locations', async () => {
+        countSectionPagesMock.mockResolvedValue(COUNTED)
+        setup()
+        await waitFor(() => expect(countSectionPagesMock).toHaveBeenCalledTimes(1))
+    })
+
+    // epub.js generates its locations right after the book opens, and the
+    // off-screen count used to run at the same time: two full passes over a
+    // large book at once made the first page turns stutter.
+    const notYet = () => ({ start: { cfi: 'c', location: -1, displayed: { page: 1, total: 5 } } })
+
+    afterEach(() => vi.useRealTimers())
+
+    it('does not count while relocations report no location, then counts once they do', async () => {
+        countSectionPagesMock.mockResolvedValue(COUNTED)
+        const { result } = setup({ book: fakeBook({ locations: { length: () => 0 } }) })
+        act(() => result.current.onRelocated({ location: notYet(), spineIndex: 1, fraction: 0 }))
+        await act(async () => { await new Promise(r => setTimeout(r, 50)) })
+        expect(countSectionPagesMock).not.toHaveBeenCalled()
+
+        act(() => result.current.onRelocated({ location: location(2), spineIndex: 1, fraction: 0.4 }))
+
+        await waitFor(() => expect(countSectionPagesMock).toHaveBeenCalledTimes(1))
+    })
+
+    it('uses a cached count at once, without waiting', async () => {
+        const book = fakeBook({ locations: { length: () => 0 } })
+        const key = cacheKey({ ebookId: 7, signature: `${spineSignature(book)}:4`, width: 800, height: 600, fontSize: 100 })
+        writeCounts(key, COUNTED)
+        localStorage.setItem(PROGRESS_MODE_KEY, 'pages')
+        const { result } = setup({ book })
+
+        act(() => result.current.onRelocated({ location: notYet(), spineIndex: 1, fraction: 0 }))
+
+        await waitFor(() => expect(result.current.text).toBe('4 of 8'))
+        expect(countSectionPagesMock).not.toHaveBeenCalled()
+    })
+
+    it('counts anyway if the locations never come', async () => {
+        vi.useFakeTimers()
+        countSectionPagesMock.mockResolvedValue(COUNTED)
+        setup({ book: fakeBook({ locations: { length: () => 0 } }) })
+        await act(async () => { await vi.advanceTimersByTimeAsync(COUNT_FALLBACK_MS - 1) })
+        expect(countSectionPagesMock).not.toHaveBeenCalled()
+
+        await act(async () => { await vi.advanceTimersByTimeAsync(1) })
+
+        expect(countSectionPagesMock).toHaveBeenCalledTimes(1)
     })
 })
