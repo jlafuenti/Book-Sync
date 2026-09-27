@@ -295,6 +295,7 @@
     );
   };
 
-  // Pure helpers, exposed only so they can be checked outside a WebView.
-  window.tandemPageCounterPure = { hasStyles: hasStyles, resolveLang: resolveLang };
+  // Pure helpers, exposed only so they can be checked outside a WebView
+  // (web/src/androidReaderScripts.test.js, issue #736).
+  window.tandemPageCounterPure = { hasStyles: hasStyles, resolveLang: resolveLang, sanitize: sanitize };
 })();

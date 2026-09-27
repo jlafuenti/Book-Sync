@@ -126,4 +126,63 @@ class ReaderProgressInputsTest {
 
         assertEquals(html, ReaderProgressInputs.rawHead(html))
     }
+    // ---- page-list href collisions (issue #736; the web's spineIndexForPath) ----
+
+    @Test
+    fun `an exact spine path wins over an earlier suffix match`() {
+        val list = ReaderProgressInputs.pageList(
+            listOf("a/ch1.xhtml", "b/ch1.xhtml"), hrefs = listOf("b/ch1.xhtml#p1"), labels = listOf("1"),
+        )
+        assertEquals(listOf(1 to "p1"), list.entries)
+    }
+
+    @Test
+    fun `a suffix that fits more than one spine item is left out`() {
+        val list = ReaderProgressInputs.pageList(
+            listOf("a/ch1.xhtml", "b/ch1.xhtml"), hrefs = listOf("ch1.xhtml#p1"), labels = listOf("1"),
+        )
+        assertEquals(emptyList<Pair<Int, String>>(), list.entries)
+        assertEquals(emptyList<String>(), list.labels)
+    }
+
+    // ---- decodeText (issue #736: not every book is UTF-8) ----
+
+    private fun bytes(vararg b: Int) = ByteArray(b.size) { b[it].toByte() }
+
+    @Test
+    fun `plain bytes decode as UTF-8`() {
+        assertEquals("café", ReaderProgressInputs.decodeText("café".toByteArray(Charsets.UTF_8)))
+    }
+
+    @Test
+    fun `a UTF-8 byte order mark is dropped`() {
+        assertEquals("<p/>", ReaderProgressInputs.decodeText(bytes(0xEF, 0xBB, 0xBF) + "<p/>".toByteArray()))
+    }
+
+    @Test
+    fun `a UTF-16 byte order mark decodes as UTF-16`() {
+        val text = "<p>é</p>"
+        assertEquals(text, ReaderProgressInputs.decodeText(bytes(0xFF, 0xFE) + text.toByteArray(Charsets.UTF_16LE)))
+        assertEquals(text, ReaderProgressInputs.decodeText(bytes(0xFE, 0xFF) + text.toByteArray(Charsets.UTF_16BE)))
+    }
+
+    @Test
+    fun `the XML declaration's encoding is honoured`() {
+        val text = "<?xml version=\"1.0\" encoding=\"ISO-8859-1\"?><p>café</p>"
+        assertEquals(text, ReaderProgressInputs.decodeText(text.toByteArray(Charsets.ISO_8859_1)))
+    }
+
+    @Test
+    fun `a meta charset is honoured`() {
+        val text = "<html><head><meta charset=\"windows-1252\"></head><body>“q”</body></html>"
+        assertEquals(text, ReaderProgressInputs.decodeText(text.toByteArray(charset("windows-1252"))))
+        val httpEquiv = "<meta http-equiv=\"Content-Type\" content=\"text/html; charset=ISO-8859-1\"><p>é</p>"
+        assertEquals(httpEquiv, ReaderProgressInputs.decodeText(httpEquiv.toByteArray(Charsets.ISO_8859_1)))
+    }
+
+    @Test
+    fun `an unknown charset name falls back to UTF-8`() {
+        val text = "<?xml version=\"1.0\" encoding=\"no-such-charset\"?><p>é</p>"
+        assertEquals(text, ReaderProgressInputs.decodeText(text.toByteArray(Charsets.UTF_8)))
+    }
 }

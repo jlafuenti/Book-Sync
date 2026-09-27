@@ -363,6 +363,14 @@ class ReaderActivity : AppCompatActivity() {
     /** Failed counts per layout key, so a failing layout is retried at most [PAGE_COUNT_MAX_RETRIES] times. */
     private val pageCountFailures = mutableMapOf<String, Int>()
 
+    /** Head captures per resource, capped so one that cannot succeed is not retried every page turn (#736). */
+    private val headCaptureRetries = HeadCaptureRetries()
+
+    /** `assets/tandem/live-probe.js`, read once: every page probe sends it (issue #736). */
+    private val liveProbeSource: String by lazy {
+        assets.open(LivePageProbe.SOURCE_ASSET).bufferedReader().use { it.readText() }
+    }
+
     /** The ebook this reader shows, standalone or paired: the page count and print data are per ebook. */
     private val progressEbookId: Int get() = if (isStandalone) ebookId else pair?.ebookId ?: 0
 
@@ -1246,7 +1254,7 @@ class ReaderActivity : AppCompatActivity() {
         val section = progressState.sectionIndex
         if (section < 0) return
         probeJob = lifecycleScope.launch {
-            val script = LivePageProbe.script(pageListInputs.fragmentsIn(section))
+            val script = LivePageProbe.script(pageListInputs.fragmentsIn(section), liveProbeSource)
             // The first locator of an open arrives before the live page can
             // answer, or before Readium has scrolled it to the restored spot,
             // and no second one follows until a page turn: ask again a few
@@ -1294,12 +1302,20 @@ class ReaderActivity : AppCompatActivity() {
     private fun startPageCountTriggers(nav: EpubNavigatorFragment) {
         pageCountSettingsJob?.cancel()
         pageCountSettingsJob = lifecycleScope.launch {
-            nav.settings.collect { if (pageCountStarted) requestPageCount() }
+            nav.settings.collect {
+                if (pageCountStarted) {
+                    headCaptureRetries.reset()
+                    requestPageCount()
+                }
+            }
         }
         findViewById<View>(R.id.navigator_container)
             .addOnLayoutChangeListener { _, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom ->
                 val resized = right - left != oldRight - oldLeft || bottom - top != oldBottom - oldTop
-                if (resized && pageCountStarted) requestPageCount()
+                if (resized && pageCountStarted) {
+                    headCaptureRetries.reset()
+                    requestPageCount()
+                }
             }
     }
 
@@ -1335,8 +1351,10 @@ class ReaderActivity : AppCompatActivity() {
         if (width <= 0 || height <= 0) return
 
         val href = nav.currentLocator.value.href.toString()
-        val link = pub.readingOrder.getOrNull(ReaderProgressInputs.sectionIndexOf(spineHrefs, href)) ?: return
-        val raw = readResourceText(pub, link) ?: return
+        if (!headCaptureRetries.shouldTry(href)) return
+        val link = pub.readingOrder.getOrNull(ReaderProgressInputs.sectionIndexOf(spineHrefs, href))
+            ?: return headCaptureRetries.failed(href)
+        val raw = readResourceText(pub, link) ?: return headCaptureRetries.failed(href)
         val captured = try {
             val result = nav.evaluateJavascript(LiveHeadCapture.script(ReaderProgressInputs.rawHead(raw)))
             // Not cancellable either (see probeLivePage): a trigger job
@@ -1349,7 +1367,7 @@ class ReaderActivity : AppCompatActivity() {
         } catch (e: Exception) {
             Log.w(TAG, "Live head capture failed", e)
             null
-        } ?: return
+        } ?: return headCaptureRetries.failed(href)
         // The head diff is only right against the resource it was read from;
         // requestPageCount tries again.
         if (nav.currentLocator.value.href.toString() != href) return
@@ -1420,7 +1438,8 @@ class ReaderActivity : AppCompatActivity() {
             try {
                 val resource = pub.get(link) ?: return@withContext null
                 try {
-                    resource.read().getOrNull()?.let { String(it, Charsets.UTF_8) }
+                    // In the charset the resource declares, not always UTF-8 (#736).
+                    resource.read().getOrNull()?.let { ReaderProgressInputs.decodeText(it) }
                 } finally {
                     resource.close()
                 }

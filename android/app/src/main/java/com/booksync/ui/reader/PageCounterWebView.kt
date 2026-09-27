@@ -78,6 +78,16 @@ object PageCounterRequests {
 
         /** Not ours: let the WebView handle it, as Readium's own server does. */
         data object None : Route
+
+        /**
+         * A remote resource (issue #736): answered empty instead of fetched.
+         * The counter lays out every chapter when a book opens, so letting it
+         * load a remote image or font would contact that host for chapters the
+         * reader has not opened. The trade: a remote image with no set size
+         * takes no room here, so that chapter's count can come out a little
+         * low - rare, since EPUB content is meant to be self-contained.
+         */
+        data object Blocked : Route
     }
 
     /**
@@ -94,7 +104,9 @@ object PageCounterRequests {
         } catch (e: URISyntaxException) {
             return Route.None
         }
-        if (uri.scheme != "https") return Route.None
+        val scheme = uri.scheme?.lowercase()
+        if (scheme == "http") return Route.Blocked
+        if (scheme != "https") return Route.None
         val host = uri.rawAuthority?.lowercase() ?: return Route.None
         val path = uri.rawPath?.removePrefix("/").orEmpty()
         if (path.isEmpty()) return Route.None
@@ -109,7 +121,7 @@ object PageCounterRequests {
                     else -> Route.Asset(decoded)
                 }
             }
-            else -> Route.None
+            else -> Route.Blocked
         }
     }
 
@@ -351,9 +363,11 @@ object PageCounterRequests {
  * load, at a URL of its own - reusing one document across a settings change
  * left stale layout behind in the spike.
  *
- * Known limitation: the shell is always in standards mode, so an `.html`
- * resource with no doctype, which the live reader renders in quirks mode, can
- * lay out slightly differently.
+ * Known limitation, kept on purpose (issue #736): the shell is always in
+ * standards mode, so an `.html` resource with no doctype, which the live
+ * reader renders in quirks mode, can lay out slightly differently. Such a
+ * resource is not valid EPUB (content documents are XHTML), and matching it
+ * would need a per-resource iframe path in page-counter.js for that case alone.
  *
  * Its settings mirror what Readium 3.4's `R2EpubPageFragment.onCreateView`
  * sets on its `R2WebView` (read from the navigator jar with `javap`): JS on,
@@ -519,6 +533,7 @@ class PageCounterWebView(
                 PageCounterRequests.Route.Shell ->
                     shell?.let { respond("text/html", "utf-8", it.html.toByteArray(Charsets.UTF_8)) } ?: notFound()
                 PageCounterRequests.Route.None -> null
+                PageCounterRequests.Route.Blocked -> blocked()
             }
     }
 
@@ -543,6 +558,13 @@ class PageCounterWebView(
         } ?: return notFound()
         val mediaType = link?.mediaType
         val mime = mediaType?.let { "${it.type}/${it.subtype}" } ?: PageCounterRequests.mediaTypeFor(path)
+        // page-counter.js reads chapters with Response.text(), which always
+        // decodes UTF-8; a chapter in another encoding is re-encoded so it
+        // arrives intact (issue #736).
+        if (mime == "text/html" || mime == "application/xhtml+xml") {
+            val text = ReaderProgressInputs.decodeText(bytes)
+            return respond(mime, "utf-8", text.toByteArray(Charsets.UTF_8))
+        }
         return respond(mime, mediaType?.charset?.name(), bytes)
     }
 
@@ -556,6 +578,9 @@ class PageCounterWebView(
 
     private fun respond(mime: String, charset: String?, bytes: ByteArray) =
         WebResourceResponse(mime, charset, 200, "OK", CORS, ByteArrayInputStream(bytes))
+
+    private fun blocked() =
+        WebResourceResponse("text/plain", "utf-8", 204, "No Content", CORS, ByteArrayInputStream(ByteArray(0)))
 
     private fun notFound() =
         WebResourceResponse("text/plain", "utf-8", 404, "Not Found", CORS, ByteArrayInputStream(ByteArray(0)))
