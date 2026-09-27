@@ -1,13 +1,14 @@
 import { useEffect, useRef, useState } from 'react'
 import ePub from 'epubjs'
 import { fetchEbookBlob } from '../api'
+import { RENDITION_OPTIONS, READER_THEME_RULES, fontSizeCss } from '../lib/readerRendition'
 
 /**
  * The epub.js lifecycle for one book (issue #278): blob fetch, `ePub()`,
  * `renderTo`, the structural theme, the per-chapter <style> injection, the
  * TOC, the locations pass, and teardown.
  *
- *     const { bookRef, renditionRef, toc, loading, error } = useEpubRendition(
+ *     const { bookRef, renditionRef, bufferRef, toc, loading, error } = useEpubRendition(
  *         viewerRef, ebookId, { fontSizeRef, paletteRef, onOpened, onTeardown },
  *     )
  *
@@ -29,6 +30,9 @@ import { fetchEbookBlob } from '../api'
  * The book and rendition are returned as refs, not state: they are set the
  * moment they exist, and every callback in the reader (text extraction,
  * keyboard navigation, the theme effects) reads them synchronously.
+ * `bufferRef` holds the fetched EPUB `ArrayBuffer` itself, so a second
+ * consumer (the off-screen page counter) can open its own `Book` from the
+ * same bytes without re-fetching (issue #730).
  *
  * `fontSizeRef` / `paletteRef` are read inside the content hook at render
  * time, so a preference changed after registration still styles the next
@@ -39,6 +43,7 @@ export default function useEpubRendition(viewerRef, ebookId, {
 }) {
     const bookRef = useRef(null)
     const renditionRef = useRef(null)
+    const bufferRef = useRef(null)
     const [loading, setLoading] = useState(true)
     const [error, setError] = useState(null)
     const [toc, setToc] = useState([])
@@ -56,31 +61,18 @@ export default function useEpubRendition(viewerRef, ebookId, {
             try {
                 const arrayBuffer = await fetchEbookBlob(ebookId)
                 if (destroyed) return
+                bufferRef.current = arrayBuffer
 
                 const book = ePub(arrayBuffer)
                 bookRef.current = book
 
-                const rendition = book.renderTo(viewerRef.current, {
-                    width: '100%',
-                    height: '100%',
-                    flow: 'paginated',
-                    spread: 'none',
-                })
+                const rendition = book.renderTo(viewerRef.current, RENDITION_OPTIONS)
                 renditionRef.current = rendition
 
                 // Structural styles only — colors come from the injected
                 // #tandem-reader-theme <style> below, so the palette can
                 // change live with the reader-theme picker (issue #57).
-                rendition.themes.default({
-                    'body': {
-                        'font-family': 'Georgia, "Times New Roman", serif !important',
-                        'padding': '0 48px !important',
-                        'max-width': '100% !important',
-                        'box-sizing': 'border-box !important',
-                    },
-                    'img': { 'max-width': '100% !important' },
-                    '*': { 'max-width': '100% !important', 'box-sizing': 'border-box !important' },
-                })
+                rendition.themes.default(READER_THEME_RULES)
 
                 // Inject font size + palette via <style> tags (avoids blob URL
                 // MIME rejection; CSS vars don't cross into the iframe). Reads
@@ -89,7 +81,7 @@ export default function useEpubRendition(viewerRef, ebookId, {
                     if (contents.document) {
                         const style = contents.document.createElement('style')
                         style.id = 'tandem-font-size'
-                        style.textContent = `html { font-size: ${fontSizeRef.current}% !important; }`
+                        style.textContent = fontSizeCss(fontSizeRef.current)
                         contents.document.head.appendChild(style)
 
                         const themeStyle = contents.document.createElement('style')
@@ -138,7 +130,7 @@ export default function useEpubRendition(viewerRef, ebookId, {
         }
     }, [ebookId]) // eslint-disable-line react-hooks/exhaustive-deps
 
-    return { bookRef, renditionRef, toc, loading, error }
+    return { bookRef, renditionRef, bufferRef, toc, loading, error }
 }
 
 // The palette must be injected as a <style> into each chapter document — CSS
