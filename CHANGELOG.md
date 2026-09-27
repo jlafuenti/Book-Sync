@@ -40,6 +40,10 @@ operator must do by hand rather than read about afterwards.
 
 ### Fixed
 
+- The web reader's first page turns in a large book no longer stutter while it works out page
+  numbers (#736): the background page count now waits until the reader has finished its own pass
+  over the book, and a count already saved on the device still applies at once. Closing a book, and
+  each page count, also no longer leaves a stray window listener behind.
 - The Transcription page's **Edit Transcription** is now **View Alignment** (#713). Edits made
   there never changed where either app lands, because re-aligning rebuilds from the saved
   transcript. The page is read-only now: each ebook sentence beside its audio time and what was
