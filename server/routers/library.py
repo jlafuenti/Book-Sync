@@ -1815,7 +1815,7 @@ async def start_print_page_fill(_: User = Depends(get_editor_user)):
 async def print_page_fill_status(_: User = Depends(get_current_user)):
     """The current or last run, and how many ebooks the next run would look up."""
     return {**print_pages.get_progress(), "remaining": await print_pages.remaining(),
-            "api_key_configured": print_pages.api_key_configured()}
+            "api_key_configured": await print_pages.api_key_configured()}
 
 
 @router.post("/print-pages/cancel", response_model=ActionResult)

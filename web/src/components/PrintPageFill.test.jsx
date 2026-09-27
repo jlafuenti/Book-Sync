@@ -112,7 +112,7 @@ describe('print page count fill', () => {
     it('warns when no Google Books API key is set', async () => {
         statusMock.mockResolvedValue({ ...IDLE, api_key_configured: false })
         render(<PrintPageFill canEdit />)
-        expect(await screen.findByText(/no google books api key is set/i)).toBeInTheDocument()
+        expect(await screen.findByText(/no google books api key is set/i)).toHaveTextContent(/under Google Books on this page/)
     })
 
     it('does not warn when a key is set', async () => {

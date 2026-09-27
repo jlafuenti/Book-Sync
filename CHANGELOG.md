@@ -34,6 +34,9 @@ operator must do by hand rather than read about afterwards.
   with an ISBN are matched by it; the rest only when title and author match exactly. It never
   changes a count someone set, runs in the background with live progress, and remembers the books
   it has tried, so a run that stops at Google's daily limit carries on from there the next day.
+- **System → Google Books** holds the Google Books API key (#739), stored encrypted like the
+  Hardcover token, with a Test Key button and a note on which Google API the key needs. The Match
+  search and Print Page Counts both use it; a key saved there wins over `GOOGLE_BOOKS_API_KEY`.
 
 ### Fixed
 
@@ -51,8 +54,9 @@ operator must do by hand rather than read about afterwards.
 
 - Migration `0028_ebook_print_page_count` adds a nullable column to `ebooks` and fills nothing.
 - Migration `0029_print_pages_looked_up` adds another nullable column to `ebooks`, for the print
-  page count lookup, and fills nothing. The lookup works without `GOOGLE_BOOKS_API_KEY`, but
-  Google's anonymous limit is low and shared; with a key it gets about 1,000 lookups a day.
+  page count lookup, and fills nothing. Google refuses almost every lookup without an API key:
+  add one under System → Google Books (or keep `GOOGLE_BOOKS_API_KEY`); it needs the Books API
+  enabled, and no HTTP-referrer restriction, since the server makes the calls.
 
 - Migration `0027_false_capture_dates` moves those "last read" dates back to the latest time the
   database can vouch for: the position's last recorded move or sync before the false date,

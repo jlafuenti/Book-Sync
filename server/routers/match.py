@@ -18,6 +18,7 @@ from rate_limit import external_metadata_searches
 from routers.auth import get_current_user, get_editor_user, rate_limited
 from routers.library import sanitize_filename
 from services import credentials as credential_store
+from services import google_books
 from services.url_safety import assert_safe_url_async, UnsafeUrlError
 from utils import resolve_cover_url
 
@@ -57,8 +58,8 @@ def _join_unique(names) -> Optional[str]:
     return ", ".join(seen) if seen else None
 
 
-async def fetch_google_books(query: str, author: Optional[str]) -> List[MatchResult]:
-    """Search Google Books API."""
+async def fetch_google_books(query: str, author: Optional[str], db=None) -> List[MatchResult]:
+    """Search Google Books API, with the System page's key or the environment's (issue #739)."""
     # Build query string
     q = query
     if author:
@@ -71,8 +72,9 @@ async def fetch_google_books(query: str, author: Optional[str]) -> List[MatchRes
     # crafted one could append parameters of its own. httpx encodes these.
     url = "https://www.googleapis.com/books/v1/volumes"
     params = {"q": q, "maxResults": 10}
-    if hasattr(settings, 'google_books_api_key') and settings.google_books_api_key:
-        params["key"] = settings.google_books_api_key
+    key = await google_books.api_key(db)
+    if key:
+        params["key"] = key
 
     async with httpx.AsyncClient() as client:
         try:
@@ -365,7 +367,7 @@ async def search_metadata(
 ):
     """Search external providers for book metadata."""
     if req.provider == "google":
-        return await fetch_google_books(req.query, req.author)
+        return await fetch_google_books(req.query, req.author, db)
     elif req.provider == "openlibrary":
         return await fetch_open_library(req.query, req.author)
     elif req.provider == "audible":

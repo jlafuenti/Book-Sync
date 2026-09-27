@@ -66,8 +66,8 @@ export default function PrintPageFill({ canEdit, pollMs = 2000 }) {
             </p>
             {status && !status.api_key_configured && (
                 <p className="system-form-hint error">
-                    No Google Books API key is set. Google refuses almost every lookup without one: set
-                    GOOGLE_BOOKS_API_KEY on the server first.
+                    No Google Books API key is set. Google refuses almost every lookup without one: add
+                    one under Google Books on this page first.
                 </p>
             )}
             {status && (

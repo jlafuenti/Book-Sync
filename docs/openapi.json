@@ -2387,6 +2387,19 @@
         "title": "InviteResponse",
         "type": "object"
       },
+      "KeyTestResult": {
+        "properties": {
+          "success": {
+            "title": "Success",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "success"
+        ],
+        "title": "KeyTestResult",
+        "type": "object"
+      },
       "LibraryCounts": {
         "properties": {
           "audiobooks": {
@@ -5056,6 +5069,17 @@
           "url"
         ],
         "title": "TestAbsRequest",
+        "type": "object"
+      },
+      "TestGoogleBooksRequest": {
+        "properties": {
+          "key": {
+            "default": "",
+            "title": "Key",
+            "type": "string"
+          }
+        },
+        "title": "TestGoogleBooksRequest",
         "type": "object"
       },
       "TestHardcoverRequest": {
@@ -10280,6 +10304,53 @@
           }
         ],
         "summary": "Test Abs Connection",
+        "tags": [
+          "settings"
+        ]
+      }
+    },
+    "/api/settings/test-google-books": {
+      "post": {
+        "description": "Check a Google Books API key with one small search (issue #739). The\nplaceholder or an empty field tests the key already in use - the saved one,\nelse the environment's.",
+        "operationId": "test_google_books_key_api_settings_test_google_books_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TestGoogleBooksRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KeyTestResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Test Google Books Key",
         "tags": [
           "settings"
         ]

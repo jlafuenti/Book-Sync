@@ -21,7 +21,8 @@ The rules, each pinned by `tests/test_print_page_fill.py`:
   lookup failed (network, 5xx) or hit the quota is not stamped, so it is retried.
 * **Stops on the quota.** Google Books allows about 1,000 requests a day per
   key; a 429 or a quota 403 ends the run with a message saying to run it again
-  tomorrow. Five failures in a row end it too.
+  tomorrow. Five failures in a row end it too. The key is `google_books.api_key()`:
+  the one saved on the System page, else `GOOGLE_BOOKS_API_KEY`.
 
 Not the library job guard (`library_jobs`): that exists to stop two walks of
 the *files* racing on the `file_path` unique index, and this job reads no files
@@ -38,9 +39,9 @@ from typing import Awaitable, Callable, Optional
 import httpx
 from sqlalchemy import func, select, update
 
-from config import settings
 from database import async_session
 from models.book import EBook
+from services import google_books
 from utils import utcnow
 
 logger = logging.getLogger("print-pages")
@@ -69,8 +70,9 @@ Search = Callable[[str], Awaitable[list]]
 async def google_volumes(q: str) -> list:
     """The `volumeInfo` of each Google Books result for query `q`."""
     params = {"q": q, "maxResults": 20, "printType": "books"}
-    if settings.google_books_api_key:
-        params["key"] = settings.google_books_api_key
+    key = await google_books.api_key()
+    if key:
+        params["key"] = key
     try:
         async with httpx.AsyncClient() as client:
             resp = await client.get(GOOGLE_BOOKS_URL, params=params, timeout=15.0)
@@ -176,8 +178,8 @@ _MESSAGES = {
     "quota": "Stopped: Google Books' daily limit is reached. Run it again tomorrow to carry on.",
     "errors": "Stopped: Google Books did not answer several times in a row. Try again later.",
     "cancelled": "Cancelled.",
-    "quota-no-key": "Stopped: Google Books refused. Without an API key its limit is very low; set "
-                    "GOOGLE_BOOKS_API_KEY on the server and run it again.",
+    "quota-no-key": "Stopped: Google Books refused. Without an API key its limit is very low; add one "
+                    "under Google Books on the System page and run it again.",
     "error": "Stopped by an unexpected error.",
 }
 
@@ -198,9 +200,10 @@ def get_progress() -> dict:
     return dict(_state)
 
 
-def api_key_configured() -> bool:
-    """Whether a Google Books API key is set; without one Google refuses almost at once."""
-    return bool(settings.google_books_api_key)
+async def api_key_configured() -> bool:
+    """Whether a Google Books API key is set (System page or environment);
+    without one Google refuses almost at once."""
+    return bool(await google_books.api_key())
 
 
 def reset() -> None:
@@ -265,7 +268,9 @@ async def _run(search: Search = None) -> None:
     search = search or google_volumes
     pending: list = []
     stopped = None
+    has_key = True
     try:
+        has_key = await api_key_configured()
         async with async_session() as db:
             has_isbn = func.coalesce(func.length(EBook.isbn), 0) > 0
             rows = (await db.execute(
@@ -311,7 +316,7 @@ async def _run(search: Search = None) -> None:
         stopped = "error"
         _state["last_error"] = str(e)
     finally:
-        no_key = stopped == "quota" and not settings.google_books_api_key
+        no_key = stopped == "quota" and not has_key
         _state.update(running=False, finished_at=utcnow().isoformat(),
                       stopped_reason=stopped, message=_MESSAGES["quota-no-key" if no_key else stopped])
         logger.info("[print-pages] %s found=%d no_match=%d errors=%d",

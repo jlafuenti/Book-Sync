@@ -9,6 +9,7 @@ import asyncio
 import pytest
 from sqlalchemy import select, update
 
+from config import settings as app_settings
 from database import async_session
 from models.book import EBook
 from routers import library
@@ -176,7 +177,7 @@ async def test_a_count_set_by_hand_during_the_run_wins(db):
 
 
 async def test_the_daily_limit_stops_the_run_and_leaves_the_book_to_retry(db, monkeypatch):
-    monkeypatch.setattr(print_pages.settings, "google_books_api_key", "k")
+    monkeypatch.setattr(app_settings, "google_books_api_key", "k")
     first = await make_ebook(db, title="First", author="Author One")
     second = await make_ebook(db, title="Second", author="Author Two")
     google = FakeGoogle({print_pages.title_query("First", "Author One"): print_pages.QuotaExceeded("429")})
@@ -192,13 +193,13 @@ async def test_the_daily_limit_stops_the_run_and_leaves_the_book_to_retry(db, mo
 
 
 async def test_without_a_key_the_limit_message_points_at_the_key(db, monkeypatch):
-    monkeypatch.setattr(print_pages.settings, "google_books_api_key", None)
+    monkeypatch.setattr(app_settings, "google_books_api_key", None)
     await make_ebook(db, title="First", author="Author One")
     google = FakeGoogle({print_pages.title_query("First", "Author One"): print_pages.QuotaExceeded("429")})
 
     await print_pages.run(search=google)
 
-    assert "GOOGLE_BOOKS_API_KEY" in print_pages.get_progress()["message"]
+    assert "System page" in print_pages.get_progress()["message"]
 
 
 async def test_errors_leave_books_to_retry_and_five_in_a_row_stop_the_run(db):
@@ -298,9 +299,9 @@ async def test_an_editor_starts_the_job_and_reads_its_progress(db, clients, monk
 
 async def test_the_status_says_whether_a_google_books_key_is_set(clients, monkeypatch):
     c, editor, _ = clients
-    monkeypatch.setattr(print_pages.settings, "google_books_api_key", None)
+    monkeypatch.setattr(app_settings, "google_books_api_key", None)
     assert (await c.get("/api/library/print-pages/status", headers=editor)).json()["api_key_configured"] is False
-    monkeypatch.setattr(print_pages.settings, "google_books_api_key", "k")
+    monkeypatch.setattr(app_settings, "google_books_api_key", "k")
     assert (await c.get("/api/library/print-pages/status", headers=editor)).json()["api_key_configured"] is True
 
 
