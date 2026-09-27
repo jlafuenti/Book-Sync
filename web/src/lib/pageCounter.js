@@ -1,5 +1,37 @@
 import { RENDITION_OPTIONS, READER_THEME_RULES, fontSizeCss } from './readerRendition'
 
+const RENDERED_TIMEOUT_MS = 3000
+
+// rendition.display() can resolve before epub.js's hooks.content -> 'rendered'
+// chain finishes (epubjs/src/rendition.js `afterDisplayed`): hooks.render then
+// hooks.content run against the section's view, and only once hooks.content
+// resolves does the rendition emit `EVENTS.RENDITION.RENDERED` ('rendered')
+// with (section, view). hooks.content is where our fontSizeCss style tag is
+// appended, so reading currentLocation() right after display() resolves can
+// see the section before that style landed. Registering the listener before
+// calling display() (rather than after) means a 'rendered' that fires very
+// quickly is never missed. Bounded at 3000 ms in case a section never emits
+// it — the count is read anyway rather than hanging the whole scan.
+function waitForRendered(rendition, href) {
+    return new Promise(resolve => {
+        let settled = false
+        const onRendered = section => {
+            if (settled || (section && section.href !== href)) return
+            settled = true
+            clearTimeout(timer)
+            rendition.off('rendered', onRendered)
+            resolve()
+        }
+        const timer = setTimeout(() => {
+            if (settled) return
+            settled = true
+            rendition.off('rendered', onRendered)
+            resolve()
+        }, RENDERED_TIMEOUT_MS)
+        rendition.on('rendered', onRendered)
+    })
+}
+
 /**
  * Pages per spine section at the reader's live settings (issue #730), counted
  * off-screen in a rendition on its own Book so the reader's Book and rendition
@@ -30,7 +62,9 @@ export async function countSectionPages(openBook, { width, height, fontSize, sig
             if (items[i].linear === 'no' || items[i].linear === false) {
                 counts.push(0); chars.push(0)
             } else {
+                const rendered = waitForRendered(rendition, items[i].href)
                 await rendition.display(items[i].href)
+                await rendered
                 counts.push(Math.max(1, rendition.currentLocation()?.start?.displayed?.total || 1))
                 const doc = rendition.getContents()[0]?.document
                 chars.push((doc?.body?.textContent || '').replace(/\s+/g, ' ').trim().length)
@@ -39,7 +73,8 @@ export async function countSectionPages(openBook, { width, height, fontSize, sig
         }
         return { counts, chars }
     } finally {
-        try { rendition?.destroy() } catch { /* already gone */ }
+        // Book.destroy() already destroys book.rendition, so this is the only
+        // rendition teardown call — no separate rendition?.destroy() alongside it.
         try { book.destroy() } catch { /* already gone */ }
         host.remove()
     }
