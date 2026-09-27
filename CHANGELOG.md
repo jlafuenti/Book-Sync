@@ -44,6 +44,11 @@ operator must do by hand rather than read about afterwards.
   numbers (#736): the background page count now waits until the reader has finished its own pass
   over the book, and a count already saved on the device still applies at once. Closing a book, and
   each page count, also no longer leaves a stray window listener behind.
+- Auto-pairing no longer misses an audiobook stored as `Author/Book Title/Book Title.m4b` (#712).
+  The filename patterns read the book's own folder as its series, and the matcher then refused its
+  ebook's real series; a series that reads the same as the title and has no book number is now
+  treated as no series, both when scanning and when matching. Series names that differ only by a
+  trailing word like Trilogy, Saga, Series or Chronicles now count as the same series.
 - The Transcription page's **Edit Transcription** is now **View Alignment** (#713). Edits made
   there never changed where either app lands, because re-aligning rebuilds from the saved
   transcript. The page is read-only now: each ebook sentence beside its audio time and what was
@@ -68,6 +73,9 @@ operator must do by hand rather than read about afterwards.
 
 ### Upgrade notes
 
+- After deploying #712, run a library scan: every scan retries the unpaired books, so audiobooks
+  the old rule left unpaired get paired then (and queued for transcription if auto-transcribe is on).
+  Their stored series still holds the folder name until the book is re-scanned or edited.
 - Migration `0028_ebook_print_page_count` adds a nullable column to `ebooks` and fills nothing.
 - Migration `0029_print_pages_looked_up` adds another nullable column to `ebooks`, for the print
   page count lookup, and fills nothing. Google refuses almost every lookup without an API key:
