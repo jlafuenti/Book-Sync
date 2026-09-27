@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { renderHook, act, waitFor } from '@testing-library/react'
 import useReaderProgress, { PROGRESS_MODE_KEY, PAGE_MODE_KEY, SPEED_SAMPLES_KEY } from './useReaderProgress'
+import { FALLBACK_NOTICE, FALLBACK_NOTICE_MS } from '../lib/readerProgress'
 
 // Edge paths of the progress indicator's hook (issue #730); the main flows
 // are pinned through the reader in EbookReader.progress.test.jsx.
@@ -291,5 +292,89 @@ describe('useReaderProgress — relocations', () => {
         act(() => result.current.onRelocated({ location: location(2), spineIndex: 1, fraction: 0.4 }))
         await waitFor(() => expect(result.current.text).toBe('5 of 8'))
         expect(result.current.fallback).toBe(true)
+    })
+})
+
+describe('useReaderProgress — no print pages notice', () => {
+    afterEach(() => vi.useRealTimers())
+
+    /** Print pages asked for, none known, counted, at section 1 page 2: 5 of 8 in ebook pages. */
+    async function counted({ mode = 'time', pageMode = 'print', printPageCount = null } = {}) {
+        getEbookMock.mockResolvedValue({ print_page_count: printPageCount })
+        countSectionPagesMock.mockResolvedValue(COUNTED)
+        localStorage.setItem(PROGRESS_MODE_KEY, mode)
+        localStorage.setItem(PAGE_MODE_KEY, pageMode)
+        const hook = setup()
+        await waitFor(() => expect(getEbookMock).toHaveBeenCalled())
+        act(() => hook.result.current.onRelocated({ location: location(2), spineIndex: 1, fraction: 0.4 }))
+        await waitFor(() => expect(hook.result.current.text).not.toBe('…'))
+        return hook
+    }
+
+    it('shows the notice on a tap into pages mode, then the ebook count', async () => {
+        const { result } = await counted()
+        vi.useFakeTimers()
+        act(() => result.current.cycle())
+        act(() => result.current.cycle())
+
+        expect(result.current.mode).toBe('pages')
+        expect(result.current.notice).toBe(FALLBACK_NOTICE)
+        expect(result.current.text).toBe('5 of 8')
+        expect(result.current.fallback).toBe(true)
+        act(() => vi.advanceTimersByTime(FALLBACK_NOTICE_MS - 1))
+        expect(result.current.notice).toBe(FALLBACK_NOTICE)
+        act(() => vi.advanceTimersByTime(1))
+        expect(result.current.notice).toBeNull()
+        expect(result.current.text).toBe('5 of 8')
+    })
+
+    it('shows no notice when the reader opens in pages mode', async () => {
+        const { result } = await counted({ mode: 'pages' })
+        expect(result.current.text).toBe('5 of 8')
+        expect(result.current.notice).toBeNull()
+    })
+
+    it('shows no notice when the book has a print page count', async () => {
+        const { result } = await counted({ printPageCount: 300 })
+        act(() => result.current.cycle())
+        act(() => result.current.cycle())
+        expect(result.current.text).toBe('120 of 300')
+        expect(result.current.notice).toBeNull()
+    })
+
+    it('shows the notice when print pages are chosen in pages mode', async () => {
+        const { result } = await counted({ mode: 'pages', pageMode: 'ebook' })
+        expect(result.current.notice).toBeNull()
+        act(() => result.current.setPageMode('print'))
+        expect(result.current.notice).toBe(FALLBACK_NOTICE)
+    })
+
+    it('ends the notice when the reader cycles away, and shows it again on the way back', async () => {
+        const { result } = await counted()
+        act(() => result.current.cycle())
+        act(() => result.current.cycle())
+        expect(result.current.notice).toBe(FALLBACK_NOTICE)
+        act(() => result.current.cycle())
+        expect(result.current.mode).toBe('chapter')
+        expect(result.current.notice).toBeNull()
+        for (let i = 0; i < 3; i++) act(() => result.current.cycle())
+        expect(result.current.notice).toBe(FALLBACK_NOTICE)
+    })
+
+    it('waits for a pending count and starts the notice when it resolves', async () => {
+        let resolveCount
+        countSectionPagesMock.mockReturnValue(new Promise(r => { resolveCount = r }))
+        localStorage.setItem(PAGE_MODE_KEY, 'print')
+        const { result } = setup()
+        await waitFor(() => expect(getEbookMock).toHaveBeenCalled())
+        act(() => result.current.onRelocated({ location: location(2), spineIndex: 1, fraction: 0.4 }))
+        act(() => result.current.cycle())
+        expect(result.current.text).toBe('…')
+        expect(result.current.notice).toBeNull()
+
+        await act(async () => resolveCount(COUNTED))
+
+        await waitFor(() => expect(result.current.notice).toBe(FALLBACK_NOTICE))
+        expect(result.current.text).toBe('5 of 8')
     })
 })

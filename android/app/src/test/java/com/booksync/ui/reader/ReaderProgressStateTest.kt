@@ -164,18 +164,107 @@ class ReaderProgressStateTest {
         assertFalse(s.isEbookFallback)
     }
 
+    /** Print pages asked for, none known: section 1, page 1 of 660, book-wide 343 of 1002. */
+    private fun ReaderProgressState.printWithoutPrintPages() {
+        pageMode = "print"
+        counts = Counts(counts = listOf(342, 660), chars = listOf(1, 1))
+        onLocator(sectionIndex = 1, progression = 0.0, fraction = 0.34)
+        onProbe(1, LivePageProbe.Result(page = 1, total = 660, fragmentsBeforeOrAt = emptySet()))
+    }
+
     @Test
-    fun `print mode without a count or list falls back to ebook pages with the marker`() {
+    fun `cycling into print pages without any shows a notice, then the ebook count`() {
         val s = state()
-        s.pageMode = "print"
-        s.counts = Counts(counts = listOf(342, 660), chars = listOf(1, 1))
-        s.onLocator(sectionIndex = 1, progression = 0.0, fraction = 0.34)
-        s.onProbe(1, LivePageProbe.Result(page = 1, total = 660, fragmentsBeforeOrAt = emptySet()))
+        s.printWithoutPrintPages()
         s.cycle()
 
-        assertEquals("343 of 1002ᵉ", s.text())
+        assertEquals(ReaderProgress.FALLBACK_NOTICE, s.text(nowMs = 10_000))
+        assertEquals(1_000L, s.noticeRemainingMs(nowMs = 12_000))
+        assertEquals(ReaderProgress.FALLBACK_NOTICE, s.text(nowMs = 12_999))
+        assertEquals("343 of 1002", s.text(nowMs = 13_000))
+        assertNull(s.noticeRemainingMs(nowMs = 13_000))
         assertTrue(s.isEbookFallback)
         assertEquals("Reading progress: 343 of 1002 (ebook pages), tap to change", s.contentDescription())
+    }
+
+    @Test
+    fun `the accessible name keeps the count while the notice shows`() {
+        val s = state()
+        s.printWithoutPrintPages()
+        s.cycle()
+        s.text(nowMs = 0)
+
+        assertEquals("Reading progress: 343 of 1002 (ebook pages), tap to change", s.contentDescription())
+    }
+
+    @Test
+    fun `reopening in print pages without any shows the ebook count without a notice`() {
+        val backing = FakeSharedPreferences()
+        state(backing).apply { pageMode = "print" }.cycle()
+        val s = state(backing)
+        assertEquals("print", s.pageMode)
+        s.printWithoutPrintPages()
+
+        assertEquals("343 of 1002", s.text(nowMs = 0))
+        assertNull(s.noticeRemainingMs(nowMs = 0))
+    }
+
+    @Test
+    fun `the notice waits for a pending count and starts when it resolves`() {
+        val s = state()
+        s.pageMode = "print"
+        s.onLocator(sectionIndex = 1, progression = 0.0, fraction = 0.34)
+        s.cycle()
+        assertEquals("…", s.text(nowMs = 0))
+
+        s.counts = Counts(counts = listOf(342, 660), chars = listOf(1, 1))
+
+        assertEquals(ReaderProgress.FALLBACK_NOTICE, s.text(nowMs = 20_000))
+        assertEquals("343 of 1002", s.text(nowMs = 23_000))
+    }
+
+    @Test
+    fun `no notice when the book has a print page count`() {
+        val s = state()
+        s.printWithoutPrintPages()
+        s.printPageCount = 300
+        s.cycle()
+
+        // ceil(0.34 * 300) in floating point.
+        assertEquals("103 of 300", s.text(nowMs = 0))
+        // Losing the print pages later does not raise a notice the tap never asked for.
+        s.printPageCount = null
+        assertEquals("343 of 1002", s.text(nowMs = 1))
+    }
+
+    @Test
+    fun `choosing print pages while in pages mode shows the notice`() {
+        val s = state()
+        s.printWithoutPrintPages()
+        s.pageMode = "ebook"
+        s.cycle()
+        assertEquals("343 of 1002", s.text(nowMs = 0))
+
+        s.pageMode = "print"
+
+        assertEquals(ReaderProgress.FALLBACK_NOTICE, s.text(nowMs = 5_000))
+    }
+
+    @Test
+    fun `cycling away ends the notice and cycling back shows it again`() {
+        val s = state()
+        s.printWithoutPrintPages()
+        s.cycle()
+        assertEquals(ReaderProgress.FALLBACK_NOTICE, s.text(nowMs = 0))
+
+        s.cycle()
+        assertEquals("1 of 660 in chapter", s.text(nowMs = 1))
+        assertNull(s.noticeRemainingMs(nowMs = 1))
+        s.cycle()
+        s.cycle()
+        s.cycle()
+
+        assertEquals(ReaderProgress.FALLBACK_NOTICE, s.text(nowMs = 2))
     }
 
     @Test

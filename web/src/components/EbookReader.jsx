@@ -965,9 +965,9 @@ function EbookReader({ ebookId, pairId, initialChapter, initialTextPreview, onCl
                         className="ebook-progress-text"
                         onClick={progress.cycle}
                         aria-label={`Reading progress: ${progressText}${progress.fallback ? ' (ebook pages)' : ''}, tap to change`}
+                        title={progress.notice ?? undefined}
                     >
-                        {progressText}
-                        {progress.fallback && <sup aria-hidden="true">e</sup>}
+                        {progress.notice ?? progressText}
                     </button>
                     {saveState === 'error' && (
                         <span className="ebook-progress-text" style={{ color: 'var(--error)' }}>

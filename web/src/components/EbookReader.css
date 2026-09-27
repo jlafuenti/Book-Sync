@@ -132,11 +132,6 @@ button.ebook-progress-text:hover {
     color: var(--text-primary);
 }
 
-button.ebook-progress-text sup {
-    font-size: 0.7em;
-    margin-left: 1px;
-}
-
 /* Ebook pages / Print pages (issue #730), beside the font buttons. */
 .reader-page-mode {
     background: none;

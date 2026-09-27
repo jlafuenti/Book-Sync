@@ -28,6 +28,10 @@ describe('reader progress rules (issue #730, shared with Android)', () => {
         }
     })
     it('time text', () => { for (const [s, want] of cases.time_text) expect(P.formatTimeLeft(s)).toBe(want) })
+    it('fallback notice', () => {
+        expect(P.FALLBACK_NOTICE).toBe(cases.fallback_notice.text)
+        expect(P.FALLBACK_NOTICE_MS).toBe(cases.fallback_notice.ms)
+    })
     it('keeps at most 50 samples', () => {
         let s = []
         for (let i = 0; i < 60; i++) s = P.addSpeedSample(s, 1500, 60)
@@ -55,6 +59,7 @@ describe('reader progress rules (issue #730, shared with Android)', () => {
         const covered = new Set([
             'next_mode', 'parse_progress_mode', 'parse_page_mode', 'page_in_section', 'ebook_position',
             'resolve_page_label', 'chapter_text', 'speed', 'add_sample', 'seconds_left', 'time_text',
+            'fallback_notice',
         ])
         const keys = new Set(Object.keys(cases).filter(k => k !== '_doc'))
         expect(keys).toEqual(covered)

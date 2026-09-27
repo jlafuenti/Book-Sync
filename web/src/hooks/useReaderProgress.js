@@ -4,7 +4,7 @@ import { getEbook } from '../api'
 import {
     nextProgressMode, parseProgressMode, parsePageMode, ebookPosition, resolvePageLabel,
     formatPageLabel, formatChapterPage, addSpeedSample, charsPerSecond,
-    secondsLeftInSection, formatTimeLeft,
+    secondsLeftInSection, formatTimeLeft, FALLBACK_NOTICE, FALLBACK_NOTICE_MS,
 } from '../lib/readerProgress'
 import { countSectionPages, spineSignature } from '../lib/pageCounter'
 import { cacheKey, readCounts, writeCounts } from '../lib/pageCountCache'
@@ -80,17 +80,30 @@ export default function useReaderProgress({ ebookId, fontSize, ready, viewerRef,
         setCounts(value)
     }, [])
 
+    // The "no print page count" notice: armed by a tap into pages mode (or
+    // choosing print pages there), shown once the page label resolves to the
+    // ebook-page fallback, for FALLBACK_NOTICE_MS. Reopening in pages mode
+    // never arms it.
+    const [noticeArmed, setNoticeArmed] = useState(false)
+    const [noticeShown, setNoticeShown] = useState(false)
+
     const cycle = useCallback(() => {
         const next = nextProgressMode(mode)
         writeStored(PROGRESS_MODE_KEY, next)
         setMode(next)
+        setNoticeArmed(next === 'pages')
+        setNoticeShown(false)
     }, [mode])
 
     const setPageMode = useCallback((value) => {
         const next = parsePageMode(value)
         writeStored(PAGE_MODE_KEY, next)
         setPageModeState(next)
-    }, [])
+        if (next === 'print' && pageMode !== 'print' && mode === 'pages') {
+            setNoticeArmed(true)
+            setNoticeShown(false)
+        }
+    }, [mode, pageMode])
 
     // A different ebook under a mounted reader: drop the previous book's
     // numbers at once, so pages and time read "…" rather than stale values
@@ -229,6 +242,7 @@ export default function useReaderProgress({ ebookId, fontSize, ready, viewerRef,
     // The indicator's text in the page-based modes; percent is the reader's own.
     let text = null
     let fallback = false
+    let labelKind = null
     const { sectionIndex, page, total, fraction, locationsReady } = position
     if (mode === 'pages') {
         const ebook = counts ? ebookPosition(counts.counts, sectionIndex, page) : null
@@ -240,6 +254,7 @@ export default function useReaderProgress({ ebookId, fontSize, ready, viewerRef,
             ? { current: null, total: null, kind: 'pending' }
             : resolvePageLabel({ pageMode, fraction, ebook, printList, printPageCount })
         text = formatPageLabel(label)
+        labelKind = label.kind
         fallback = label.kind === 'ebook-fallback'
     } else if (mode === 'chapter') {
         text = formatChapterPage(page, total)
@@ -250,5 +265,20 @@ export default function useReaderProgress({ ebookId, fontSize, ready, viewerRef,
             : formatTimeLeft(secondsLeftInSection(chars, page, total, charsPerSecond(samples)))
     }
 
-    return { mode, cycle, pageMode, setPageMode, text, fallback, onOpened, onRelocated }
+    useEffect(() => {
+        if (!noticeArmed || labelKind === 'pending') return undefined
+        if (labelKind !== 'ebook-fallback') {
+            setNoticeArmed(false)
+            return undefined
+        }
+        setNoticeShown(true)
+        const timer = setTimeout(() => {
+            setNoticeShown(false)
+            setNoticeArmed(false)
+        }, FALLBACK_NOTICE_MS)
+        return () => clearTimeout(timer)
+    }, [noticeArmed, labelKind])
+    const notice = noticeShown && mode === 'pages' ? FALLBACK_NOTICE : null
+
+    return { mode, cycle, pageMode, setPageMode, text, fallback, notice, onOpened, onRelocated }
 }
