@@ -33,4 +33,30 @@ describe('reader progress rules (issue #730, shared with Android)', () => {
         for (let i = 0; i < 60; i++) s = P.addSpeedSample(s, 1500, 60)
         expect(s).toHaveLength(50)
     })
+
+    // JSON cannot carry NaN, so these are plain assertions rather than fixture cases —
+    // pinned on both platforms (ReaderProgressParityTest.kt has the Kotlin equivalents).
+    it('rejects a NaN sample or dwell time', () => {
+        expect(P.addSpeedSample([], NaN, 60)).toEqual([])
+        expect(P.addSpeedSample([], 1500, NaN)).toEqual([])
+    })
+    it('rejects a NaN reading speed', () => {
+        expect(P.secondsLeftInSection(1000, 1, 2, NaN)).toBeNull()
+    })
+    it('treats a NaN progression as the start of the section', () => {
+        expect(P.pageInSection(NaN, 10)).toBe(1)
+    })
+
+    it('treats a non-array samples list (e.g. read back from localStorage) as empty', () => {
+        expect(P.addSpeedSample(null, 1500, 60)).toEqual([25])
+    })
+
+    it('exercises every section of the fixture', () => {
+        const covered = new Set([
+            'next_mode', 'parse_progress_mode', 'parse_page_mode', 'page_in_section', 'ebook_position',
+            'resolve_page_label', 'chapter_text', 'speed', 'add_sample', 'seconds_left', 'time_text',
+        ])
+        const keys = new Set(Object.keys(cases).filter(k => k !== '_doc'))
+        expect(keys).toEqual(covered)
+    })
 })

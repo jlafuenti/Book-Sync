@@ -180,4 +180,32 @@ class ReaderProgressParityTest {
         repeat(60) { s = ReaderProgress.addSpeedSample(s, 1500.0, 60.0) }
         assertEquals(50, s.size)
     }
+
+    // JSON cannot carry NaN, so these are plain assertions rather than fixture cases —
+    // pinned on both platforms (readerProgress.test.js has the JS equivalents).
+    @Test
+    fun `rejects a NaN sample or dwell time`() {
+        assertEquals(emptyList<Double>(), ReaderProgress.addSpeedSample(emptyList(), Double.NaN, 60.0))
+        assertEquals(emptyList<Double>(), ReaderProgress.addSpeedSample(emptyList(), 1500.0, Double.NaN))
+    }
+
+    @Test
+    fun `rejects a NaN reading speed`() {
+        assertNull(ReaderProgress.secondsLeftInSection(1000, 1, 2, Double.NaN))
+    }
+
+    @Test
+    fun `treats a NaN progression as the start of the section`() {
+        assertEquals(1, ReaderProgress.pageInSection(Double.NaN, 10))
+    }
+
+    @Test
+    fun `exercises every section of the fixture`() {
+        val covered = setOf(
+            "next_mode", "parse_progress_mode", "parse_page_mode", "page_in_section", "ebook_position",
+            "resolve_page_label", "chapter_text", "speed", "add_sample", "seconds_left", "time_text",
+        )
+        val keys = cases().keys.filter { it != "_doc" }.toSet()
+        assertEquals(covered, keys)
+    }
 }

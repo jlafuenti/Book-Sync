@@ -49,11 +49,12 @@ export function resolvePageLabel({ pageMode, fraction, ebook, printList, printPa
 }
 
 export const formatPageLabel = r => (r.kind === 'pending' ? '…' : `${r.current} of ${r.total}`)
-export const formatChapterPage = (page, total) => (page && total ? `${page} of ${total} in chapter` : '…')
+export const formatChapterPage = (page, total) => (page > 0 && total > 0 ? `${page} of ${total} in chapter` : '…')
 
 export function addSpeedSample(samples, charsOnPage, dwellSeconds) {
     if (!(charsOnPage > 0) || !(dwellSeconds >= MIN_DWELL_S) || dwellSeconds > MAX_DWELL_S) return samples
-    return [...samples, charsOnPage / dwellSeconds].slice(-MAX_SAMPLES)
+    // samples may come back from localStorage (a later task) as anything JSON.parse produced.
+    return [...(Array.isArray(samples) ? samples : []), charsOnPage / dwellSeconds].slice(-MAX_SAMPLES)
 }
 
 export function charsPerSecond(samples) {

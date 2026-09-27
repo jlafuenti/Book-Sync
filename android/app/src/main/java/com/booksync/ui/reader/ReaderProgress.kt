@@ -17,9 +17,11 @@ object ReaderProgress {
     fun parseProgressMode(v: String?): String = if (v in PROGRESS_MODES) v!! else "percent"
     fun parsePageMode(v: String?): String = if (v == "print") "print" else "ebook"
 
+    /** 1-based page within a section from Readium/epub.js progression (page k starts at (k-1)/total). */
     fun pageInSection(progression: Double?, total: Int): Int? {
         if (total < 1) return null
-        return (((progression ?: 0.0) * total).roundToInt() + 1).coerceIn(1, total)
+        val p = progression?.takeIf { !it.isNaN() } ?: 0.0
+        return ((p * total).roundToInt() + 1).coerceIn(1, total)
     }
 
     data class EbookPosition(val page: Int, val total: Int)
@@ -49,7 +51,7 @@ object ReaderProgress {
         if (page != null && page > 0 && total != null && total > 0) "$page of $total in chapter" else "…"
 
     fun addSpeedSample(samples: List<Double>, charsOnPage: Double, dwellSeconds: Double): List<Double> {
-        if (charsOnPage <= 0 || dwellSeconds < MIN_DWELL_S || dwellSeconds > MAX_DWELL_S) return samples
+        if (!(charsOnPage > 0) || !(dwellSeconds >= MIN_DWELL_S) || dwellSeconds > MAX_DWELL_S) return samples
         return (samples + charsOnPage / dwellSeconds).takeLast(MAX_SAMPLES)
     }
     fun charsPerSecond(samples: List<Double>): Double {
@@ -58,7 +60,7 @@ object ReaderProgress {
         return if (s.size % 2 == 1) s[m] else (s[m - 1] + s[m]) / 2
     }
     fun secondsLeftInSection(sectionChars: Int, page: Int, pages: Int, cps: Double): Double? {
-        if (sectionChars < 0 || pages < 1 || cps <= 0) return null
+        if (sectionChars < 0 || pages < 1 || !(cps > 0)) return null
         val p = page.coerceIn(1, pages)
         return sectionChars * (1 - (p - 1).toDouble() / pages) / cps
     }

@@ -46,7 +46,7 @@
       "printList": {"currentLabel": "", "firstLabel": "", "lastLabel": ""}, "printPageCount": 300},
      "expect": {"current": "120", "total": "300", "kind": "print"}, "text": "120 of 300"}
   ],
-  "chapter_text": [[5, 23, "5 of 23 in chapter"], [null, 23, "…"], [5, null, "…"]],
+  "chapter_text": [[5, 23, "5 of 23 in chapter"], [null, 23, "…"], [5, null, "…"], [0, 23, "…"], [-1, 23, "…"]],
   "speed": [
     {"name": "too few samples uses the default", "samples": [30, 30, 30, 30], "expect": 25},
     {"name": "odd count median", "samples": [10, 50, 20, 40, 30], "expect": 30},
