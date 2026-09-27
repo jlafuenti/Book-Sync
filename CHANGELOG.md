@@ -40,6 +40,10 @@ operator must do by hand rather than read about afterwards.
 
 ### Fixed
 
+- The web reader no longer shows **0.0%** for the first seconds after opening a book, and no longer
+  saves 0% if you turn a page in that time (#733). Until the reader has worked out the book's
+  percentages it now shows "…" and leaves the saved percent alone, then saves the real one. The
+  stray 0% showed on Home and in Continue Reading, and could un-mark a finished book.
 - Next up no longer lists series you never opened, and books you opened once months ago no longer
   sit among the ones you are reading in Continue Reading (#726). Before the #679 fix, a server-side
   rewrite of a position (a realign, an unpair, a batch job) moved a timestamp on positions that had
