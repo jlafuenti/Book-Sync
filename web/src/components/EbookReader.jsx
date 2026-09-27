@@ -60,12 +60,20 @@ function spineIndexOf(book, href) {
     )
 }
 
-// Book-wide percent for an epub.js location.
-function percentOf(book, location) {
-    return book.locations
-        ? location.start.percentage * 100
-        : (location.start.displayed?.page / location.start.displayed?.total) * 100 || 0
+// Book-wide percent for an epub.js location, or null while it is unknown.
+// Until book.locations.generate() finishes, epub.js 0.3.93 reports
+// start.location = -1 and start.percentage = 0 (issue #733): that 0 is not a
+// position, and shown or saved it read as "0.0%" on Home and could clear a
+// completion. The same readiness signal useReaderProgress uses for print pages.
+function percentOf(location) {
+    const pct = location?.start?.percentage
+    if (!(location?.start?.location >= 0) || !Number.isFinite(pct)) return null
+    return pct * 100
 }
+
+// The saved form of a percent: two decimals, or undefined, which the server
+// reads as "leave the stored percent alone".
+const savedPercent = percent => (percent == null ? undefined : Math.round(percent * 100) / 100)
 
 // Keys typed into these belong to them, not to page turning (issue #730):
 // arrows move through the page-number select, Space taps the indicator.
@@ -77,7 +85,8 @@ function EbookReader({ ebookId, pairId, initialChapter, initialTextPreview, onCl
 
     const [showToc, setShowToc] = useState(false)
     const [currentCfi, setCurrentCfi] = useState(null)
-    const [progressPercent, setProgressPercent] = useState(0)
+    // Null until epub.js knows the book-wide percent (issue #733).
+    const [progressPercent, setProgressPercent] = useState(null)
     const [currentChapter, setCurrentChapter] = useState('')
     const [fontSize, setFontSize] = useState(loadStoredFontSize)
     const fontSizeRef = useRef(fontSize)
@@ -146,12 +155,23 @@ function EbookReader({ ebookId, pairId, initialChapter, initialTextPreview, onCl
     const [unresolvedPosition, setUnresolvedPosition] = useState(false)
     // Latest relocated position, readable from cleanup/lifecycle handlers that
     // would otherwise close over stale state (issue #158).
-    const latestPositionRef = useRef({ cfi: null, percent: 0, spineIndex: initialChapter ?? 0 })
+    const latestPositionRef = useRef({ cfi: null, percent: null, spineIndex: initialChapter ?? 0 })
     // CFI of the last position write actually issued (debounced save, manual
     // save, unmount flush or lifecycle keepalive). Flushes skip when the
     // position hasn't moved since — visibilitychange fires on every tab
     // switch, and a duplicate write buys nothing.
     const lastIssuedSaveRef = useRef(null)
+    // Whether that write carried a percent (issue #733). A page saved while
+    // epub.js was still generating its locations went out without one; the
+    // re-report of the same page once they exist must still be written, or
+    // the stored percent stays stale until the next page turn.
+    const lastIssuedHadPercentRef = useRef(false)
+    const alreadyIssued = (cfi, percent) =>
+        cfi === lastIssuedSaveRef.current && (percent == null || lastIssuedHadPercentRef.current)
+    const markIssued = (cfi, percent) => {
+        lastIssuedSaveRef.current = cfi
+        lastIssuedHadPercentRef.current = percent != null
+    }
     // Re-anchoring on return (issue #683). `baselineAudioRef` is the audio
     // position the reader last knew the record to hold — at open, then as
     // its own sync-map-matched saves move it — so listening elsewhere is told
@@ -272,7 +292,7 @@ function EbookReader({ ebookId, pairId, initialChapter, initialTextPreview, onCl
         // percent; an automatic save must not treat that drift as movement
         // (production wrote the same page twice, 8s apart, at percent
         // 0.0 → 0.1). An unchanged cfi is not a new position.
-        if (!explicit && cfi === lastIssuedSaveRef.current) return true
+        if (!explicit && alreadyIssued(cfi, percent)) return true
         const chapter = spineIndex ?? currentSpineIndexRef.current
         const capturedAt = new Date().toISOString()
         console.log(`[EbookReader] doSave: chapter=${chapter}, pairId=${pairId}, percent=${percent?.toFixed(1)}`)
@@ -309,7 +329,7 @@ function EbookReader({ ebookId, pairId, initialChapter, initialTextPreview, onCl
                 // index from a current one (issue #116).
                 sync_map_version: match ? match.sync_map_version : undefined,
                 epub_text_preview: textPreview || undefined,
-                epub_progress_percent: Math.round(percent * 100) / 100,
+                epub_progress_percent: savedPercent(percent),
                 audio_position_ms: match ? match.audio_position_ms : undefined,
                 hint: { kind: 'epubjs_cfi', value: cfi },
                 // Stamped when the page turn happened, not after the sync-map
@@ -328,7 +348,7 @@ function EbookReader({ ebookId, pairId, initialChapter, initialTextPreview, onCl
             )
             // The write reached the server and was adjudicated; a later flush
             // for the same CFI would be a pure duplicate.
-            lastIssuedSaveRef.current = cfi
+            markIssued(cfi, percent)
             if (match?.audio_position_ms != null) baselineAudioRef.current = match.audio_position_ms
 
             // A genuinely different device wrote something newer. Surface it;
@@ -368,10 +388,11 @@ function EbookReader({ ebookId, pairId, initialChapter, initialTextPreview, onCl
         const textPreview = extractVisibleText()
         return {
             cfi,
+            percent,
             fields: {
                 epub_chapter: spineIndex ?? currentSpineIndexRef.current,
                 epub_text_preview: textPreview || undefined,
-                epub_progress_percent: Math.round(percent * 100) / 100,
+                epub_progress_percent: savedPercent(percent),
                 hint: { kind: 'epubjs_cfi', value: cfi },
             },
             // Same rule as doSave: an automatic flush claims the format only
@@ -393,8 +414,8 @@ function EbookReader({ ebookId, pairId, initialChapter, initialTextPreview, onCl
         if (!maybeOpenGate()) return null
         const built = buildFlushPayload()
         if (!built) return null
-        if (built.cfi === lastIssuedSaveRef.current) return null
-        lastIssuedSaveRef.current = built.cfi
+        if (alreadyIssued(built.cfi, built.percent)) return null
+        markIssued(built.cfi, built.percent)
         return built
     }, [maybeOpenGate, buildFlushPayload])
 
@@ -547,7 +568,7 @@ function EbookReader({ ebookId, pairId, initialChapter, initialTextPreview, onCl
             if (landed?.start) {
                 progress.onRelocated({
                     location: landed, spineIndex: spineIndexOf(book, landed.start.href),
-                    fraction: percentOf(book, landed) / 100, book, rendition,
+                    fraction: (percentOf(landed) ?? 0) / 100, book, rendition,
                 })
             }
         }
@@ -556,7 +577,7 @@ function EbookReader({ ebookId, pairId, initialChapter, initialTextPreview, onCl
         rendition.on('relocated', (location) => {
             if (isDestroyed()) return
             const cfi = location.start.cfi
-            const percent = percentOf(book, location)
+            const percent = percentOf(location)
             setCurrentCfi(cfi)
             setProgressPercent(percent)
 
@@ -569,7 +590,7 @@ function EbookReader({ ebookId, pairId, initialChapter, initialTextPreview, onCl
             const spineIndex = spineIndexOf(book, location.start.href)
             if (spineIndex >= 0) currentSpineIndexRef.current = spineIndex
 
-            progress.onRelocated({ location, spineIndex, fraction: percent / 100, book, rendition })
+            progress.onRelocated({ location, spineIndex, fraction: (percent ?? 0) / 100, book, rendition })
 
             // Keep the latest position readable from the unmount
             // flush and the lifecycle keepalive, which cannot rely on
@@ -882,7 +903,9 @@ function EbookReader({ ebookId, pairId, initialChapter, initialTextPreview, onCl
     )
 
     // What the progress indicator shows; its accessible name carries the same.
-    const progressText = progress.mode === 'percent' ? `${progressPercent.toFixed(1)}%` : progress.text
+    const progressText = progress.mode === 'percent'
+        ? (progressPercent == null ? '…' : `${progressPercent.toFixed(1)}%`)
+        : progress.text
 
     const handleTocClick = (href) => {
         noteUserNavigation()
@@ -1101,7 +1124,7 @@ function EbookReader({ ebookId, pairId, initialChapter, initialTextPreview, onCl
 
             {/* Bottom progress bar */}
             <div className="ebook-progress-bar">
-                <div className="ebook-progress-bar-fill" style={{ width: `${progressPercent}%` }} />
+                <div className="ebook-progress-bar-fill" style={{ width: `${progressPercent ?? 0}%` }} />
             </div>
         </div>
     )
