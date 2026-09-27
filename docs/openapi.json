@@ -6166,6 +6166,18 @@
           "username": {
             "title": "Username",
             "type": "string"
+          },
+          "web_tour_offered_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Web Tour Offered At"
           }
         },
         "required": [
@@ -6220,6 +6232,17 @@
               }
             ],
             "title": "Theme"
+          },
+          "web_tour_offered": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Web Tour Offered"
           }
         },
         "title": "UserUpdateRequest",
