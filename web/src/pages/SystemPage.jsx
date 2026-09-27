@@ -16,7 +16,6 @@ import EbookReader from '../components/EbookReader'
 import Modal from '../components/Modal'
 import UpdateCheckBanner from '../components/UpdateCheckBanner'
 import UpdateCheckSettings from '../components/UpdateCheckSettings'
-import PrintPageFill from '../components/PrintPageFill'
 import GoogleBooksSettings from '../components/GoogleBooksSettings'
 import useIsMobile from '../hooks/useIsMobile'
 import './SystemPage.css'
@@ -1610,13 +1609,6 @@ function SystemPage({ tab }) {
                     <div style={{ marginBottom: 24 }}>
                         <CollapsibleCard title="Google Books">
                             <GoogleBooksSettings />
-                        </CollapsibleCard>
-                    </div>
-
-                    {/* ── Section: Print page counts from Google Books (issue #739) ── */}
-                    <div style={{ marginBottom: 24 }}>
-                        <CollapsibleCard title="Print Page Counts">
-                            <PrintPageFill canEdit={hasMinRole('editor')} />
                         </CollapsibleCard>
                     </div>
 

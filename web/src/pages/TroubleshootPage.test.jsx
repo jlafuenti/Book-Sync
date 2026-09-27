@@ -6,8 +6,9 @@ import TroubleshootPage from './TroubleshootPage'
 const {
     getLibraryIssuesMock, repairChapterEncodingMock, bulkRepairChapterEncodingMock,
     getLibraryScanProgressMock, dismissMultiFileFolderMock, removeMultiFileTracksMock,
-    scanLibraryMock, getSyncMapAuditMock, startLibraryScanMock,
+    scanLibraryMock, getSyncMapAuditMock, startLibraryScanMock, getPrintPageFillStatusMock,
 } = vi.hoisted(() => ({
+    getPrintPageFillStatusMock: vi.fn(),
     getLibraryIssuesMock: vi.fn(),
     repairChapterEncodingMock: vi.fn(),
     bulkRepairChapterEncodingMock: vi.fn(),
@@ -43,6 +44,9 @@ vi.mock('../api', () => ({
     removeMultiFileTracks: removeMultiFileTracksMock,
     scanLibrary: scanLibraryMock,
     getSyncMapAudit: getSyncMapAuditMock,
+    getPrintPageFillStatus: getPrintPageFillStatusMock,
+    startPrintPageFill: vi.fn(),
+    cancelPrintPageFill: vi.fn(),
 }))
 
 vi.mock('../contexts/AuthContext', () => ({ useAuth: () => ({ hasMinRole: () => true }) }))
@@ -479,5 +483,25 @@ describe('TroubleshootPage possible duplicates', () => {
         fireEvent.click(await screen.findByText(/Possible duplicates \(same length or size\)/))
 
         expect(await screen.findAllByText(/Likely redundant/)).toHaveLength(1)
+    })
+})
+
+describe('TroubleshootPage print page counts', () => {
+    it('holds the print page count lookup, collapsed until opened', async () => {
+        getLibraryIssuesMock.mockResolvedValue(issuesWithChapterEncodingBad([]))
+        getPrintPageFillStatusMock.mockReset().mockResolvedValue({
+            running: false, current: 0, total: 0, found: 0, no_match: 0, errors: 0, remaining: 312,
+            started_at: null, finished_at: null, cancel_requested: false,
+            stopped_reason: null, message: null, last_error: null, api_key_configured: true,
+        })
+        renderPage()
+
+        const header = await screen.findByText('Print Page Counts')
+        expect(screen.queryByRole('button', { name: /look up print page counts/i })).toBeNull()
+
+        fireEvent.click(header)
+
+        expect(await screen.findByText(/312 ebooks have no print page count/i)).toBeInTheDocument()
+        expect(screen.getByRole('button', { name: /look up print page counts/i })).toBeInTheDocument()
     })
 })
