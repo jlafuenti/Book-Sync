@@ -16,6 +16,7 @@ import {
 } from '../lib/textSearch'
 import { getReaderPalette, READER_MODES, DEFAULT_THEME } from '../themes'
 import useEpubRendition, { paletteCss } from '../hooks/useEpubRendition'
+import { fontSizeCss } from '../lib/readerRendition'
 import { useTheme } from '../ThemeContext'
 import './EbookReader.css'
 
@@ -795,7 +796,7 @@ function EbookReader({ ebookId, pairId, initialChapter, initialTextPreview, onCl
                         style.id = 'tandem-font-size'
                         c.document.head.appendChild(style)
                     }
-                    style.textContent = `html { font-size: ${fontSize}% !important; }`
+                    style.textContent = fontSizeCss(fontSize)
                 }
             })
         }
