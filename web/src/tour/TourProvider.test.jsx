@@ -54,12 +54,12 @@ function renderProvider(user, { initialEntry = '/continue' } = {}) {
                         <Route path="/continue" element={<Link to="/library">go-library</Link>} />
                         <Route path="/library" element={<>
                             <Link to="/series">go-series</Link>
-                            <Link to="/system">go-system</Link>
+                            <Link to="/system/status">go-system</Link>
                         </>} />
                         <Route path="/series" element={<Link to="/transcription">go-transcription</Link>} />
                         <Route path="/transcription" element={<div>transcription-stub</div>} />
                         <Route path="/system/troubleshoot" element={<div>troubleshoot-stub</div>} />
-                        <Route path="/system" element={<div>system-stub</div>} />
+                        <Route path="/system/status" element={<div>system-stub</div>} />
                         <Route path="/account" element={<div>account-stub</div>} />
                     </Routes>
                 </TourProvider>
