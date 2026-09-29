@@ -142,7 +142,7 @@ class ReportProblemPolicyTest {
     }
 
     @Test
-    fun `the forum the toast names is the community problem forum`() {
-        assertEquals("i-have-a-problem", REPORT_PROBLEM_DISCORD_FORUM)
+    fun `the forum the toast names is the community feedback forum`() {
+        assertEquals("feedback", REPORT_PROBLEM_DISCORD_FORUM)
     }
 }
