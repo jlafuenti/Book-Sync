@@ -42,3 +42,11 @@ export const codeSplitting = {
         { name: 'epubjs', test: EPUBJS_RE },
     ],
 }
+
+// Rolldown's `experimental.chunkOptimization`. Every package above is CommonJS,
+// so the epubjs chunk imports Rolldown's interop helpers. With common-chunk
+// merging on (the default), the first Vite 8 build folded those helpers into a
+// chunk with React and api.js, and epubjs's hash then followed every edit to
+// the API client. A codeSplitting group cannot capture the helpers; turning
+// the merge off is the lever. Experimental in Rolldown 1.2: recheck on upgrade.
+export const chunkOptimization = { mergeCommonChunks: false }

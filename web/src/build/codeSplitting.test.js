@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { codeSplitting } from './codeSplitting'
+import { codeSplitting, chunkOptimization } from './codeSplitting'
 
 /**
  * Vendor chunking (issue #281).
@@ -59,5 +59,12 @@ describe('codeSplitting (issues #281, #516)', () => {
         // A /g or /y flag would make RegExp.test advance lastIndex between calls.
         const { test } = codeSplitting.groups[0]
         expect(test.global || test.sticky).toBe(false)
+    })
+
+    it('keeps Rolldown from merging common chunks', () => {
+        // With merging on, the first Vite 8 build folded Rolldown's CommonJS
+        // helpers into a common chunk with React and api.js. epubjs imports
+        // those helpers, so its hash followed every edit to the API client.
+        expect(chunkOptimization).toEqual({ mergeCommonChunks: false })
     })
 })
