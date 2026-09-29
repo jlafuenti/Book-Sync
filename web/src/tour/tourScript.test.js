@@ -199,6 +199,20 @@ describe('copy parity with the Android TourScript.kt', () => {
         expect(web.body).toBe(android.body)
     })
 
+    it('click_system waits for the route the System link actually opens, /system/status', () => {
+        // Seen live on the demo as admin (2026-09-29): the link lands on
+        // /system/status, routeShown compares routes exactly, and the tour
+        // sat on "Now System" after the click.
+        expect(webStep('click_system').advance).toEqual({
+            kind: 'tapAnchor', event: { kind: 'routeShown', route: '/system/status' },
+        })
+    })
+
+    it('transcription_queue has an emptyBody: Queue All only renders when a pair is waiting', () => {
+        expect(typeof webStep('transcription_queue').emptyBody).toBe('string')
+        expect(webStep('transcription_queue').emptyBody.length).toBeGreaterThan(20)
+    })
+
     it('home_next_up has an emptyBody for a fresh account with no positions', () => {
         expect(typeof webStep('home_next_up').emptyBody).toBe('string')
         expect(webStep('home_next_up').emptyBody.length).toBeGreaterThan(20)

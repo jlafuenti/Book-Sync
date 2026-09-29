@@ -242,6 +242,9 @@ export const TOUR = [
         title: 'Queue',
         body: 'Queue sends a pair to the transcription worker; one job runs at a time. Cancel '
             + 'stops a running job at its next checkpoint.',
+        emptyBody: 'Nothing to queue right now — Queue All appears on the Not Transcribed tab '
+            + 'when a pair is waiting. One job runs at a time, and Cancel stops a running job at '
+            + 'its next checkpoint.',
         advance: ADVANCE.next(),
         minRole: 'admin',
     },
@@ -263,7 +266,9 @@ export const TOUR = [
         anchor: TourAnchors.NavSystem,
         title: 'Now System',
         body: 'Click System.',
-        advance: ADVANCE.tapAnchor(TourEvents.routeShown('/system')),
+        // The sidebar and bottom-bar links open /system/status for an admin;
+        // routeShown compares routes exactly.
+        advance: ADVANCE.tapAnchor(TourEvents.routeShown('/system/status')),
         minRole: 'admin',
     },
     {
