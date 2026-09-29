@@ -2,7 +2,7 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import { VitePWA } from 'vite-plugin-pwa'
-import { manualChunks } from './src/build/manualChunks'
+import { codeSplitting } from './src/build/codeSplitting.js'
 
 export default defineConfig({
     plugins: [
@@ -41,10 +41,10 @@ export default defineConfig({
     ],
     // Route-level splitting lives in App.jsx (issue #281); this only pulls the
     // epub.js dependency tree out of the entry chunk so a deploy that does not
-    // touch it leaves its precache entry alone. See src/build/manualChunks.js.
+    // touch it leaves its precache entry alone. See src/build/codeSplitting.js.
     build: {
-        rollupOptions: {
-            output: { manualChunks },
+        rolldownOptions: {
+            output: { codeSplitting },
         },
     },
     server: {

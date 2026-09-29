@@ -1,5 +1,5 @@
 /**
- * Rollup `output.manualChunks` for the web build (issue #281).
+ * Rolldown `output.codeSplitting` for the web build (issues #281, #516).
  *
  * Build-time only — this module is imported by `vite.config.js`, never by the
  * app. It lives under `src/` so the unit test next to it runs in the normal
@@ -33,7 +33,12 @@ const EPUBJS_RE = new RegExp(
     `[\\\\/]node_modules[\\\\/](${EPUBJS_TREE.map(p => p.replace('/', '[\\\\/]')).join('|')})[\\\\/]`,
 )
 
-export function manualChunks(id) {
-    if (EPUBJS_RE.test(id)) return 'epubjs'
-    return undefined
+// Vite 8 bundles with Rolldown, where this replaces Rollup's `manualChunks`
+// function (still accepted there, but deprecated). A group's `test` claims a
+// module and, by default, the modules it imports; every epub.js dependency is
+// in the list anyway, so the chunk holds the same set either way.
+export const codeSplitting = {
+    groups: [
+        { name: 'epubjs', test: EPUBJS_RE },
+    ],
 }
