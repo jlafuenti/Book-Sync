@@ -190,7 +190,6 @@ describe('copy parity with the Android TourScript.kt', () => {
         'home_continue_reading',
         'home_recently_added',
         'library_filters',
-        'player_paused',
         'reader_trick',
         'account_replay',
     ])('%s matches the Android title and body verbatim', (id) => {
@@ -198,6 +197,23 @@ describe('copy parity with the Android TourScript.kt', () => {
         const web = webStep(id)
         expect(web.title).toBe(android.title)
         expect(web.body).toBe(android.body)
+    })
+
+    it('home_next_up has an emptyBody for a fresh account with no positions', () => {
+        expect(typeof webStep('home_next_up').emptyBody).toBe('string')
+        expect(webStep('home_next_up').emptyBody.length).toBeGreaterThan(20)
+    })
+
+    it('reader_toolbar and player_paused are plain next steps, so their copy can be read', () => {
+        // As waitFor steps they advanced the moment the reader/player reported
+        // ready, within a second of opening, and nobody saw the card.
+        expect(webStep('reader_toolbar').advance).toEqual({ kind: 'next' })
+        expect(webStep('player_paused').advance).toEqual({ kind: 'next' })
+    })
+
+    it('player_paused says the audiobook started playing: the web reader\u2019s Listen autoplays', () => {
+        expect(webStep('player_paused').title).toBe('The audiobook')
+        expect(webStep('player_paused').body).toContain('started playing')
     })
 
     it('home_continue_reading matches the Android emptyBody verbatim', () => {

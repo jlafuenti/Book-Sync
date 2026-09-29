@@ -56,6 +56,13 @@
     width: auto;
 }
 
+/* A step with no anchor (welcome, done) has nothing to sit beside. */
+.tour-card--centered {
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+}
+
 .tour-card-header {
     display: flex;
     align-items: flex-start;
@@ -118,5 +125,10 @@
         width: 100%;
         max-width: 100%;
         border-radius: var(--radius-lg, 12px) var(--radius-lg, 12px) 0 0;
+    }
+    .tour-card--mobile-top {
+        bottom: auto;
+        top: 0;
+        border-radius: 0 0 var(--radius-lg, 12px) var(--radius-lg, 12px);
     }
 }

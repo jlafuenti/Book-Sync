@@ -91,7 +91,7 @@ export const TourEvents = Object.freeze({
 // component rendered outside <TourProvider> (most page unit tests) still
 // works: useTourAnchor/useTourEmit become harmless no-ops instead of
 // crashing. TourProvider supplies its own instances via these contexts.
-const defaultRegistry = new TourAnchorRegistry()
+export const defaultRegistry = new TourAnchorRegistry()
 
 export const TourRegistryContext = createContext(defaultRegistry)
 export const TourControllerContext = createContext(null)
@@ -125,12 +125,33 @@ export function useTourAnchor(name, { enabled = true, pairId } = {}) {
 
     const active = enabled && (pairId === undefined || pairId === registry.wantedPairId)
 
+    // Whether this hook instance currently owns the registry entry. A
+    // disabled or unmounted instance clears the name only if it set it — the
+    // CSS-hidden sidebar and the bottom bar register the same names, and the
+    // disabled side's effect runs after the enabled sibling's.
+    const ownsEntryRef = useRef(false)
     useEffect(() => {
         if (!active || !node) {
-            registry.clear(name)
+            if (ownsEntryRef.current) {
+                registry.clear(name)
+                ownsEntryRef.current = false
+            }
             return undefined
         }
-        const measure = () => registry.set(name, node.getBoundingClientRect())
+        const measure = () => {
+            const rectValue = node.getBoundingClientRect()
+            if (rectValue.width <= 0 || rectValue.height <= 0) {
+                // Hidden (display:none, mid-unmount): give the entry up only
+                // if it is ours, never a visible sibling's.
+                if (ownsEntryRef.current) {
+                    registry.clear(name)
+                    ownsEntryRef.current = false
+                }
+                return
+            }
+            registry.set(name, rectValue)
+            ownsEntryRef.current = true
+        }
         measure()
         const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(measure) : null
         ro?.observe(node)
@@ -146,8 +167,25 @@ export function useTourAnchor(name, { enabled = true, pairId } = {}) {
             window.removeEventListener('resize', measure)
             window.removeEventListener('scroll', measure, true)
             clearInterval(timer)
-            registry.clear(name)
+            if (ownsEntryRef.current) {
+                registry.clear(name)
+                ownsEntryRef.current = false
+            }
         }
+    }, [active, name, node, registry])
+
+    // Bring the control on screen once when a step starts wanting it (a
+    // Home section under the fold at phone width, say); LibraryPage does
+    // the same for its pair card. Fixed nav bars are unaffected.
+    useEffect(() => {
+        if (!active || !node) return undefined
+        let wantedBefore = registry.wanted === name
+        if (wantedBefore) node.scrollIntoView?.({ block: 'center' })
+        return registry.subscribe(() => {
+            const wantedNow = registry.wanted === name
+            if (wantedNow && !wantedBefore) node.scrollIntoView?.({ block: 'center' })
+            wantedBefore = wantedNow
+        })
     }, [active, name, node, registry])
 
     return useCallback((el) => {

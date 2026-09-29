@@ -407,7 +407,14 @@ function LibraryPage({ tab }) {
     // author/series/sort group, or the mobile search box — never both at
     // once, `enabled` follows the same `isMobile` breakpoint the CSS uses to
     // show one and hide the other.
-    const filterPillsAnchorRef = useTourAnchor(TourAnchors.LibraryFilterPills)
+    // LibraryFilterPills likewise: the pills row on desktop, the filter
+    // button that opens the same choices on mobile.
+    const filterPillsAnchorRef = useTourAnchor(TourAnchors.LibraryFilterPills, { enabled: !isMobile })
+    const filterPillsMobileAnchorRef = useTourAnchor(TourAnchors.LibraryFilterPills, { enabled: isMobile })
+    const setMobileFilterRef = useCallback((el) => {
+        mobileFilterRef.current = el
+        filterPillsMobileAnchorRef(el)
+    }, [filterPillsMobileAnchorRef])
     const sortSearchDesktopAnchorRef = useTourAnchor(TourAnchors.LibrarySortSearch, { enabled: !isMobile })
     const sortSearchMobileAnchorRef = useTourAnchor(TourAnchors.LibrarySortSearch, { enabled: isMobile })
     const maintenanceAnchorRef = useTourAnchor(TourAnchors.LibraryMaintenance, { enabled: canEdit })
@@ -860,33 +867,19 @@ function LibraryPage({ tab }) {
                         ))}
                     </div>
 
-                    {/* Author / Series filter pills + sort — the walkthrough's
-                        "Group and search" step (issue #598 Track B); on mobile
-                        this whole toolbar is CSS-hidden and the equivalent
-                        anchor lives on the search box below instead. */}
-                    <div className="library-sort-search-group" ref={sortSearchDesktopAnchorRef}>
-                        <FilterPill
-                            label="Author"
-                            value={authorFilter}
-                            options={allAuthors}
-                            onChange={setAuthorFilter}
-                        />
-                        <FilterPill
-                            label="Series"
-                            value={seriesFilter}
-                            options={allSeriesNames}
-                            onChange={setSeriesFilter}
-                        />
-                        <LibrarySortPill
-                            sortField={sortField}
-                            setSortField={setSortField}
-                            sortDir={sortDir}
-                            setSortDir={setSortDir}
-                            sortOpen={sortOpen}
-                            setSortOpen={setSortOpen}
-                            sortRef={sortRef}
-                        />
-                    </div>
+                    {/* Author / Series filter pills */}
+                    <FilterPill
+                        label="Author"
+                        value={authorFilter}
+                        options={allAuthors}
+                        onChange={setAuthorFilter}
+                    />
+                    <FilterPill
+                        label="Series"
+                        value={seriesFilter}
+                        options={allSeriesNames}
+                        onChange={setSeriesFilter}
+                    />
 
                     {/* Active search chip (cleared via global search bar or ✕) */}
                     {searchTerm && (
@@ -898,6 +891,22 @@ function LibraryPage({ tab }) {
                 </div>
 
                 <div className="library-toolbar-right">
+                    {/* Sort pill — carries the walkthrough's "Group and search"
+                        anchor on desktop (issue #598 Track B); a wrapper around
+                        Author/Series/Sort broke the toolbar row, so the pill's
+                        own root is the anchor. On mobile this toolbar is
+                        CSS-hidden and the anchor lives on the search box. */}
+                    <LibrarySortPill
+                        sortField={sortField}
+                        setSortField={setSortField}
+                        sortDir={sortDir}
+                        setSortDir={setSortDir}
+                        sortOpen={sortOpen}
+                        setSortOpen={setSortOpen}
+                        sortRef={sortRef}
+                        anchorRef={sortSearchDesktopAnchorRef}
+                    />
+
                     {/* View Toggle */}
                     <div className="library-view-toggle">
                         <button
@@ -1005,7 +1014,7 @@ function LibraryPage({ tab }) {
 
             {/* Mobile filter dropdown — replaces desktop filter pills toolbar */}
             {isMobile && (
-                <div className="library-mobile-filter-wrap" ref={mobileFilterRef}>
+                <div className="library-mobile-filter-wrap" ref={setMobileFilterRef}>
                     <button
                         className={`library-mobile-filter-btn${mobileFilterOpen ? ' open' : ''}`}
                         onClick={() => setMobileFilterOpen(o => !o)}
@@ -1553,9 +1562,15 @@ function LibraryPage({ tab }) {
 
 const LIBRARY_SORT_LABELS = { title: 'Title', author: 'Author', series: 'Series', date: 'Date Added', size: 'Size' }
 
-function LibrarySortPill({ sortField, setSortField, sortDir, setSortDir, sortOpen, setSortOpen, sortRef }) {
+function LibrarySortPill({ sortField, setSortField, sortDir, setSortDir, sortOpen, setSortOpen, sortRef, anchorRef }) {
+    // sortRef stays a real ref object (its .current drives outside-click
+    // closing); the optional tour anchor callback is merged in beside it.
+    const setRoot = useCallback((el) => {
+        sortRef.current = el
+        anchorRef?.(el)
+    }, [sortRef, anchorRef])
     return (
-        <div className="series-sort-wrap" ref={sortRef}>
+        <div className="series-sort-wrap" ref={setRoot}>
             <button
                 className={`series-sort-btn${sortOpen ? ' open' : ''}`}
                 onClick={() => setSortOpen(o => !o)}

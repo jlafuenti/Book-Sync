@@ -130,7 +130,35 @@ describe('LibraryPage tour anchors (issue #598 Track B)', () => {
         await screen.findByText('No books yet')
 
         expect(document.querySelector('.library-filter-pills')).toHaveAttribute('data-tour', TourAnchors.LibraryFilterPills)
-        expect(document.querySelector('.library-sort-search-group')).toHaveAttribute('data-tour', TourAnchors.LibrarySortSearch)
+        // The sort pill carries the desktop anchor itself: a wrapper around
+        // Author/Series/Sort stacked them vertically (seen live 2026-09-28).
+        expect(document.querySelector('.library-sort-search-group')).toBeNull()
+        expect(document.querySelector('.series-sort-wrap')).toHaveAttribute('data-tour', TourAnchors.LibrarySortSearch)
+    })
+
+    it('keeps the toolbar row shape main had: Author/Series pills in the left group, sort in the right group', async () => {
+        getLibraryItemsPageMock.mockResolvedValue(pageOf([], 0))
+        renderPage({ role: 'admin' })
+        await screen.findByText('No books yet')
+
+        const left = document.querySelector('.library-toolbar-left')
+        const right = document.querySelector('.library-toolbar-right')
+        const pills = [...document.querySelectorAll('.filter-pill-wrap')]
+        expect(pills.length).toBe(2)
+        for (const pill of pills) expect(pill.parentElement).toBe(left)
+        expect(document.querySelector('.series-sort-wrap').parentElement).toBe(right)
+        expect(document.querySelector('.library-maintenance-group').parentElement).toBe(right)
+    })
+
+    it('tags the mobile filter button with the LibraryFilterPills anchor when on mobile', async () => {
+        // The pills toolbar is CSS-hidden under 768px; the filter step had
+        // no spotlight at phone width (seen live 2026-09-28).
+        isMobileMock.mockReturnValue(true)
+        getLibraryItemsPageMock.mockResolvedValue(pageOf([], 0))
+        renderPage()
+        await screen.findByText('No books yet')
+
+        expect(document.querySelector('.library-mobile-filter-wrap')).toHaveAttribute('data-tour', TourAnchors.LibraryFilterPills)
     })
 
     it('tags the mobile search box with the same LibrarySortSearch anchor when on mobile', async () => {

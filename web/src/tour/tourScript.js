@@ -7,11 +7,17 @@
  * verbatim from the Android script are called out below; `tourScript.test.js`
  * reads `TourScript.kt` at test time and pins that they still match.
  *
- * `reader_progress`'s body is the one deliberate exception: everything up to
+ * `reader_progress`'s body is one deliberate exception: everything up to
  * the last sentence is Android's body verbatim, but the last sentence is
  * swapped for the web-specific setting location (there is no "Display
  * settings" screen on the web; the same choice lives on the reader's
- * Ebook pages / Print pages menu).
+ * Ebook pages / Print pages menu). `player_paused` is the other: the web
+ * reader's Listen starts playback, so its copy says so rather than "paused".
+ *
+ * No step waits on readerReady/playerReady any more: as `waitFor` steps,
+ * reader_toolbar and player_paused advanced the moment the screen reported
+ * ready, before anyone could read them. Anchor resolution already holds
+ * "One moment…" until the toolbar or transport exists.
  *
  * `done`'s body optionally grows a second sentence — the "put back" promise
  * from the welcome card — when the tour is about to clean up the pair it
@@ -60,6 +66,8 @@ export const TOUR = [
         anchor: TourAnchors.HomeNextUp,
         title: 'Next up',
         body: 'The book you would naturally open next: the newest position you have, in either format.',
+        emptyBody: 'Nothing here yet — Next up appears once you have a position in a book, showing '
+            + 'the one you would naturally open next.',
         advance: ADVANCE.next(),
     },
     {
@@ -75,7 +83,7 @@ export const TOUR = [
         screen: TourScreens.Home,
         anchor: TourAnchors.NavLibrary,
         title: 'Now the Library',
-        body: 'Click Library in the sidebar.',
+        body: 'Click Library.',
         advance: ADVANCE.tapAnchor(TourEvents.routeShown('/library')),
     },
     {
@@ -141,7 +149,7 @@ export const TOUR = [
         title: 'The reader',
         body: 'Contents, theme and font size live in the toolbar, with your place in the book '
             + 'and the Listen button.',
-        advance: ADVANCE.waitFor(TourEvents.readerReady(), false),
+        advance: ADVANCE.next(),
         needsPair: true,
     },
     {
@@ -168,9 +176,11 @@ export const TOUR = [
         id: 'player_paused',
         screen: TourScreens.Player,
         anchor: TourAnchors.PlayerTransport,
-        title: 'The audiobook, paused',
-        body: 'Opened paused, at that sentence. The transport row below works like any player.',
-        advance: ADVANCE.waitFor(TourEvents.playerReady(), false),
+        // Web-native copy: the web reader's Listen starts playback at once,
+        // where Android opens the player paused.
+        title: 'The audiobook',
+        body: 'It started playing at roughly that sentence. The transport row below works like any player.',
+        advance: ADVANCE.next(),
         needsPair: true,
     },
     {

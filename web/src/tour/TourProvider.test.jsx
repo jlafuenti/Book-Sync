@@ -133,10 +133,10 @@ describe('TourProvider — routing', () => {
             'emit-details-opened',
             'next-step',
             'emit-reader-opened',
-            'emit-reader-ready',
+            'next-step', // reader_toolbar
             'emit-reader-progress',
             'emit-player-opened',
-            'emit-player-ready',
+            'next-step', // player_paused
             'emit-reader-opened',
             'next-step',
             'go-series',

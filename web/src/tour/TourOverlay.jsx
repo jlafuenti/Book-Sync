@@ -119,11 +119,17 @@ export default function TourOverlay() {
         }
     }
 
-    const cardStyle = hasHole ? cardPositionStyle(rect) : undefined
+    // On mobile the bottom dock is the layout: a card placed beside a
+    // section under the fold would itself land off-screen.
+    const cardStyle = hasHole && !isMobile ? cardPositionStyle(rect) : undefined
     const cardClassName = [
         'tour-card',
         resolution === 'pending' ? 'tour-card--pending' : '',
         isMobile ? 'tour-card--mobile' : '',
+        // The dock must not cover the hole: a control in the lower half
+        // (the bottom nav bar) puts the card at the top instead.
+        isMobile && hasHole && (rect.top + rect.bottom) / 2 > viewportHeight() / 2 ? 'tour-card--mobile-top' : '',
+        !hasHole && !isMobile ? 'tour-card--centered' : '',
     ].filter(Boolean).join(' ')
 
     return (
@@ -182,6 +188,10 @@ export default function TourOverlay() {
 // Centers the card near the spotlighted control without covering it: below
 // when there's room, above otherwise, and clamped so it never runs off the
 // viewport edges (a fixed 320px-wide card, see tour.css).
+function viewportHeight() {
+    return typeof window !== 'undefined' ? window.innerHeight : 768
+}
+
 function cardPositionStyle(rect) {
     const cardWidth = 320
     const margin = 12
@@ -189,8 +199,11 @@ function cardPositionStyle(rect) {
     const viewportH = typeof window !== 'undefined' ? window.innerHeight : 768
     let left = rect.left
     left = Math.max(margin, Math.min(left, viewportW - cardWidth - margin))
+    // Below the hole when there is room, else above it, else — the hole
+    // fills the viewport, as the reader page does — docked inside the
+    // viewport at its bottom edge rather than pushed off the top.
     const spaceBelow = viewportH - rect.bottom
-    const top = spaceBelow > 160 ? rect.bottom + margin : undefined
-    const bottom = top === undefined ? viewportH - rect.top + margin : undefined
-    return { left, top, bottom }
+    if (spaceBelow >= 160) return { left, top: rect.bottom + margin, bottom: undefined }
+    if (rect.top >= 160 + margin) return { left, top: undefined, bottom: viewportH - rect.top + margin }
+    return { left, top: undefined, bottom: margin }
 }

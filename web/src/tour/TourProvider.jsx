@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
 import { updateMe } from '../api/auth'
@@ -6,7 +6,7 @@ import { getPairs } from '../api/library'
 import { getPosition, resetPairProgress } from '../api/sync'
 import { TourController } from './TourController'
 import { TourAnchorRegistry } from './TourAnchorRegistry'
-import { TourEvents, TourRegistryContext, TourControllerContext } from './anchors'
+import { TourEvents, TourRegistryContext, TourControllerContext, defaultRegistry } from './anchors'
 import { TourStateContext } from './TourContext'
 import TourOffer from './TourOffer'
 
@@ -38,8 +38,13 @@ export function TourProvider({ children }) {
     const navigate = useNavigate()
     const location = useLocation()
 
+    // An enclosing <TourRegistryContext.Provider> (tests hand one in to read
+    // what the pages register) wins over a fresh registry of our own.
+    const outerRegistry = useContext(TourRegistryContext)
     const registryRef = useRef(null)
-    if (!registryRef.current) registryRef.current = new TourAnchorRegistry()
+    if (!registryRef.current) {
+        registryRef.current = outerRegistry !== defaultRegistry ? outerRegistry : new TourAnchorRegistry()
+    }
     const registry = registryRef.current
 
     // Caches the last listSyncedPairs() result so nav handlers (openReader,

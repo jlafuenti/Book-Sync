@@ -223,11 +223,15 @@ export function AppShell({ user, setUser }) {
     // itself (every other anchor is tagged by Track B, page by page) — this
     // is what makes a "click Library/Series/Transcription/System/Account"
     // tapAnchor step work end to end today.
-    const libraryAnchorRef = useTourAnchor(TourAnchors.NavLibrary)
-    const seriesAnchorRef = useTourAnchor(TourAnchors.NavSeries)
-    const transcriptionAnchorRef = useTourAnchor(TourAnchors.NavTranscription)
-    const systemAnchorRef = useTourAnchor(TourAnchors.NavSystem, { enabled: hasMinRole('editor') })
-    const accountAnchorRef = useTourAnchor(TourAnchors.NavAccount)
+    // Desktop only: under 768px the sidebar is display:none and the bottom
+    // bar / drawer register the same names. Two registrations for one name
+    // fight each other on every re-measure (the hidden one's zero rect
+    // clears the visible one's), so exactly one side is enabled at a time.
+    const libraryAnchorRef = useTourAnchor(TourAnchors.NavLibrary, { enabled: !isMobile })
+    const seriesAnchorRef = useTourAnchor(TourAnchors.NavSeries, { enabled: !isMobile })
+    const transcriptionAnchorRef = useTourAnchor(TourAnchors.NavTranscription, { enabled: !isMobile })
+    const systemAnchorRef = useTourAnchor(TourAnchors.NavSystem, { enabled: !isMobile && hasMinRole('editor') })
+    const accountAnchorRef = useTourAnchor(TourAnchors.NavAccount, { enabled: !isMobile })
 
     return (
         <div className="app-layout">
