@@ -67,7 +67,7 @@ fun planReportProblemIntent(report: ProblemReport, mailAppAvailable: Boolean): R
     )
 
 /** The community Discord forum a Discord report is pasted into (issue #715). */
-const val REPORT_PROBLEM_DISCORD_FORUM = "i-have-a-problem"
+const val REPORT_PROBLEM_DISCORD_FORUM = "feedback"
 
 /**
  * "Report a problem" as text for Discord (issue #715).
