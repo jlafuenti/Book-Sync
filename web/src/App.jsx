@@ -27,6 +27,9 @@ import MobileTopBar from './components/MobileTopBar'
 import MobileDrawer from './components/MobileDrawer'
 import SignOutEverywhere from './components/SignOutEverywhere'
 import { switchToEbook } from './lib/handoff'
+import { TourProvider } from './tour/TourProvider'
+import TourOverlay from './tour/TourOverlay'
+import { useTourAnchor, TourAnchors } from './tour/anchors'
 
 // Route-level code splitting (issue #281).
 //
@@ -216,6 +219,16 @@ export function AppShell({ user, setUser }) {
 
     const mobileTitle = getMobilePageTitle(location.pathname)
 
+    // Issue #598: the sidebar/nav links are the one anchor set Track A owns
+    // itself (every other anchor is tagged by Track B, page by page) — this
+    // is what makes a "click Library/Series/Transcription/System/Account"
+    // tapAnchor step work end to end today.
+    const libraryAnchorRef = useTourAnchor(TourAnchors.NavLibrary)
+    const seriesAnchorRef = useTourAnchor(TourAnchors.NavSeries)
+    const transcriptionAnchorRef = useTourAnchor(TourAnchors.NavTranscription)
+    const systemAnchorRef = useTourAnchor(TourAnchors.NavSystem, { enabled: hasMinRole('editor') })
+    const accountAnchorRef = useTourAnchor(TourAnchors.NavAccount)
+
     return (
         <div className="app-layout">
             {/* Mobile Navigation */}
@@ -288,19 +301,19 @@ export function AppShell({ user, setUser }) {
                     </Link>
 
                     {/* Library */}
-                    <Link to="/library" className={navClass('/library')} title="Library">
+                    <Link to="/library" ref={libraryAnchorRef} className={navClass('/library')} title="Library">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" /><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" /></svg>
                         <span>Library</span>
                     </Link>
 
                     {/* Series */}
-                    <Link to="/series" className={navClass('/series')} title="Series">
+                    <Link to="/series" ref={seriesAnchorRef} className={navClass('/series')} title="Series">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" /><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" /><path d="M12 2v20" /></svg>
                         <span>Series</span>
                     </Link>
 
                     {/* Transcription */}
-                    <Link to="/transcription" className={navClass('/transcription')} title="Transcription">
+                    <Link to="/transcription" ref={transcriptionAnchorRef} className={navClass('/transcription')} title="Transcription">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" /><path d="M19 10v2a7 7 0 0 1-14 0v-2" /><line x1="12" y1="19" x2="12" y2="23" /><line x1="8" y1="23" x2="16" y2="23" /></svg>
                         <span>Transcription</span>
                     </Link>
@@ -311,7 +324,7 @@ export function AppShell({ user, setUser }) {
                         redirect, which reads as a broken app rather than as a
                         permission boundary (issue #283). */}
                     {hasMinRole('editor') && (
-                    <Link to={hasMinRole('admin') ? '/system/status' : '/system/troubleshoot'} className={navClass('/system')} title="System">
+                    <Link to={hasMinRole('admin') ? '/system/status' : '/system/troubleshoot'} ref={systemAnchorRef} className={navClass('/system')} title="System">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="2" y="3" width="20" height="14" rx="2" ry="2" /><line x1="8" y1="21" x2="16" y2="21" /><line x1="12" y1="17" x2="12" y2="21" /></svg>
                         <span>System</span>
                         {pendingUsers > 0 && (
@@ -336,7 +349,7 @@ export function AppShell({ user, setUser }) {
                         <Link to="/account" className="avatar" title="Account">
                             {user.username[0].toUpperCase()}
                         </Link>
-                        <Link to="/account" className="info" title="Account">
+                        <Link to="/account" ref={accountAnchorRef} className="info" title="Account">
                             <div className="name">{user.username}</div>
                             <div className="role">{roleLabel}</div>
                         </Link>
@@ -422,6 +435,7 @@ export function AppShell({ user, setUser }) {
                 </Suspense>
             </main>
             <AppMiniPlayer />
+            <TourOverlay />
         </div>
     )
 }
@@ -542,7 +556,9 @@ function App() {
     return (
         <AuthProvider user={user}>
             <AudioPlayerProvider>
-                <AppShell user={user} setUser={setUser} />
+                <TourProvider>
+                    <AppShell user={user} setUser={setUser} />
+                </TourProvider>
             </AudioPlayerProvider>
         </AuthProvider>
     )

@@ -364,3 +364,35 @@ describe('App — boot and the auth guard', () => {
         expect(api.getMe).toHaveBeenCalledTimes(2)
     })
 })
+
+// Issue #598: the sidebar/bottom-bar nav links are the one anchor set Track A
+// owns directly (every other anchor is tagged page-by-page by Track B), and
+// the overlay itself has to be mounted somewhere in the shell for a tour to
+// ever show. AppShell renders both without a <TourProvider> above it in these
+// tests — useTourAnchor/useTour fall back to harmless no-ops outside one, the
+// same way every other page test in this suite renders without one.
+describe('AppShell — guided walkthrough wiring (issue #598)', () => {
+    it('mounts the tour overlay in the shell', () => {
+        renderShell({ username: 'x', role: 'admin' })
+        // Idle (no tour running outside a TourProvider): the overlay renders
+        // nothing visible, but it must not throw and nothing else in the
+        // shell should be affected.
+        expect(screen.getByText('home-stub')).toBeInTheDocument()
+    })
+
+    it('tags the Library, Series, Transcription and Account nav links with their tour anchors', () => {
+        renderShell({ username: 'x', role: 'admin' })
+        expect(screen.getByTitle('Library')).toHaveAttribute('data-tour', 'NavLibrary')
+        expect(screen.getByTitle('Series')).toHaveAttribute('data-tour', 'NavSeries')
+        expect(screen.getByTitle('Transcription')).toHaveAttribute('data-tour', 'NavTranscription')
+        expect(screen.getByTitle('System')).toHaveAttribute('data-tour', 'NavSystem')
+        // Two elements share the "Account" title (the avatar and the name/role
+        // block); only the second carries the anchor.
+        expect(document.querySelector('a.info[title="Account"]')).toHaveAttribute('data-tour', 'NavAccount')
+    })
+
+    it('does not tag the System nav link for a role that cannot see it', () => {
+        renderShell({ username: 'x', role: 'user' })
+        expect(screen.queryByTitle('System')).toBeNull()
+    })
+})

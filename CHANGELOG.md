@@ -18,6 +18,10 @@ operator must do by hand rather than read about afterwards.
 
 ### Added
 
+- A guided walkthrough of the web app (#598): a short, dismissible tour of Home, Library, a book's
+  own reader/player round trip, Series, Transcription and (for admins) System, built from whatever
+  is actually in your library. It is offered once per account and can be replayed any time from
+  Account → Help → Replay the walkthrough.
 - Ebooks have a **Print pages** field (#730), set on the edit form or taken from a Google Books
   match, for the reader's print-page numbers.
 - The web reader's progress indicator changes when you tap it (#730): percent, then the page in the
