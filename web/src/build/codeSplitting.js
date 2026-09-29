@@ -33,12 +33,21 @@ const EPUBJS_RE = new RegExp(
     `[\\\\/]node_modules[\\\\/](${EPUBJS_TREE.map(p => p.replace('/', '[\\\\/]')).join('|')})[\\\\/]`,
 )
 
+// Rolldown's CommonJS interop helpers (its RUNTIME_MODULE_ID). Every package
+// above is CommonJS, so the epubjs chunk imports them. Unplaced, Rolldown puts
+// them in a common chunk with app code shared by the entry and lazy routes
+// (api.js on the first Vite 8 build), and epubjs's hash would then follow every
+// edit to that code. In a chunk of their own they change only with Rolldown.
+const ROLLDOWN_RUNTIME_RE = /^\0rolldown\/runtime\.js$/
+
 // Vite 8 bundles with Rolldown, where this replaces Rollup's `manualChunks`
 // function (still accepted there, but deprecated). A group's `test` claims a
 // module and, by default, the modules it imports; every epub.js dependency is
-// in the list anyway, so the chunk holds the same set either way.
+// in the list anyway, so the chunk holds the same set either way. Groups are
+// tried in order.
 export const codeSplitting = {
     groups: [
+        { name: 'rolldown-runtime', test: ROLLDOWN_RUNTIME_RE },
         { name: 'epubjs', test: EPUBJS_RE },
     ],
 }
