@@ -231,6 +231,17 @@ describe('TourController', () => {
         expect(navEvents).toEqual([])
     })
 
+    it('emits a goTo nav request for Home on start, so a replay from Account lands where step 2 lives', async () => {
+        const registry = new TourAnchorRegistry()
+        const controller = new TourController({ registry, api: makeApi() })
+        const navEvents = []
+        controller.subscribeNav((req) => navEvents.push(req))
+        controller.start('user')
+        await flush()
+        expect(controller.state.step.id).toBe('welcome')
+        expect(navEvents).toContainEqual({ type: 'goTo', route: '/continue' })
+    })
+
     it('emits a goTo nav request for troubleshoot_page (editor role)', async () => {
         const registry = new TourAnchorRegistry()
         const controller = new TourController({ registry, api: makeApi() })
@@ -318,6 +329,24 @@ describe('TourController', () => {
         await flush()
         controller.next() // -> home_continue_reading, anchor absent, screen unreported
         expect(setTimeoutFn).toHaveBeenCalledWith(expect.any(Function), 30000)
+    })
+
+    it('adoptPair drops willCleanUp when the new pair’s position lookup fails (never delete on uncertainty)', async () => {
+        const registry = new TourAnchorRegistry()
+        const api = makeApi({ pair: { id: 7 }, untouched: true })
+        api.getPosition = vi.fn()
+            .mockResolvedValueOnce(null) // start()'s own pick: untouched
+            .mockRejectedValueOnce(new Error('503')) // adoptPair's re-check fails
+        const controller = new TourController({ registry, api })
+        controller.start('user')
+        await flush()
+        expect(controller.state.willCleanUp).toBe(true)
+
+        controller.adoptPair({ id: 42 })
+        await flush()
+        expect(controller.state.willCleanUp).toBe(false)
+        controller.quit()
+        expect(api.resetPairProgress).not.toHaveBeenCalled()
     })
 
     it('adoptPair re-evaluates willCleanUp for the newly adopted pair', async () => {

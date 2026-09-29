@@ -346,10 +346,13 @@ export function AppShell({ user, setUser }) {
                         {/* The whole block is the way into Account — there is no
                             room for a nav entry of its own, and the user card is
                             where people look for their own settings. */}
-                        <Link to="/account" className="avatar" title="Account">
+                        {/* The walkthrough's NavAccount anchor sits on the avatar,
+                            the one part of this block that is visible while the
+                            sidebar is collapsed (.info is display:none until hover). */}
+                        <Link to="/account" ref={accountAnchorRef} className="avatar" title="Account">
                             {user.username[0].toUpperCase()}
                         </Link>
-                        <Link to="/account" ref={accountAnchorRef} className="info" title="Account">
+                        <Link to="/account" className="info" title="Account">
                             <div className="name">{user.username}</div>
                             <div className="role">{roleLabel}</div>
                         </Link>

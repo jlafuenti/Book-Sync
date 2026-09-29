@@ -1,7 +1,7 @@
 import { useState, useMemo } from 'react'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
-import { MemoryRouter, Routes, Route } from 'react-router-dom'
+import { MemoryRouter, Routes, Route, useLocation } from 'react-router-dom'
 import LibraryPage from './LibraryPage'
 import { AuthProvider } from '../contexts/AuthContext'
 import { TourAnchors, TourScreens, TourEvents, TourRegistryContext, TourControllerContext } from '../tour/anchors'
@@ -81,6 +81,11 @@ function FakeTour({ running = true, registry, children }) {
         },
     }), [running, pairId, registry])
     return <TourStateContext.Provider value={value}>{children}</TourStateContext.Provider>
+}
+
+function LocationProbe({ onLocation }) {
+    onLocation(useLocation())
+    return <div>book-detail-stub</div>
 }
 
 function renderPage({ role = 'admin', registry, tourController, tourRunning = true } = {}) {
@@ -183,6 +188,40 @@ describe('LibraryPage tour anchors (issue #598 Track B)', () => {
         // the synced pair's card still carries the debug attribute.
         expect(Element.prototype.scrollIntoView).not.toHaveBeenCalled()
         expect(registry.wantedPairId).toBeNull()
+    })
+
+    it('routes the tour’s own pair card to the ebook page even when the audiobook was used last', async () => {
+        // The next step says "Click Read to open the ebook": the audiobook
+        // page has no Read button (seen live on 2026-09-28, where a pair
+        // last used as audio opened /book/audiobook/… and the tour stalled).
+        getLibraryItemsPageMock.mockResolvedValue(pageOf([pairItem(9, 90, 91, 'synced')], 1))
+        getAllProgressMock.mockResolvedValue([{ book_pair_id: 9, source: 'audiobook', audio_position_ms: 40000 }])
+        const registry = new TourAnchorRegistry()
+        const controller = { onEvent: vi.fn() }
+        let location
+        render(
+            <TourRegistryContext.Provider value={registry}>
+                <TourControllerContext.Provider value={controller}>
+                    <FakeTour registry={registry}>
+                        <AuthProvider user={{ role: 'user' }}>
+                            <MemoryRouter initialEntries={['/library']}>
+                                <Routes>
+                                    <Route path="/library" element={<LibraryPage />} />
+                                    <Route path="/book/:type/:id" element={<LocationProbe onLocation={(l) => { location = l }} />} />
+                                </Routes>
+                            </MemoryRouter>
+                        </AuthProvider>
+                    </FakeTour>
+                </TourControllerContext.Provider>
+            </TourRegistryContext.Provider>,
+        )
+
+        await screen.findByText('Ebook 90')
+        await waitFor(() => expect(registry.wantedPairId).toBe(9))
+        fireEvent.click(screen.getByText('Ebook 90'))
+
+        await waitFor(() => expect(location?.pathname).toBe('/book/ebook/90'))
+        expect(controller.onEvent).toHaveBeenCalledWith(expect.objectContaining({ kind: 'detailsOpened' }))
     })
 
     it('emits detailsOpened when a card navigates to the book page', async () => {

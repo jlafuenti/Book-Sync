@@ -98,8 +98,9 @@ export const TourControllerContext = createContext(null)
 
 /**
  * Puts a ref on an element to register it as a named tour anchor. Re-measures
- * on ResizeObserver, window resize and scroll (capture phase, passive), and
- * unregisters on unmount or whenever `enabled` is false.
+ * on ResizeObserver, window resize and scroll (capture phase, passive) and on
+ * a 250 ms timer for moves none of those report, and unregisters on unmount
+ * or whenever `enabled` is false.
  *
  * `pairId`, when given, additionally gates registration on
  * `registry.wantedPairId` — this is how `LibraryPairCard` registers only for
@@ -135,10 +136,16 @@ export function useTourAnchor(name, { enabled = true, pairId } = {}) {
         ro?.observe(node)
         window.addEventListener('resize', measure)
         window.addEventListener('scroll', measure, { capture: true, passive: true })
+        // A control can move without any of those firing — the sidebar
+        // avatar shifts when the sidebar expands on hover, a card slides as
+        // a sibling appears — so re-measure on a timer too. The registry
+        // ignores an unchanged rect, so this costs nothing when still.
+        const timer = setInterval(measure, 250)
         return () => {
             ro?.disconnect()
             window.removeEventListener('resize', measure)
             window.removeEventListener('scroll', measure, true)
+            clearInterval(timer)
             registry.clear(name)
         }
     }, [active, name, node, registry])

@@ -142,8 +142,7 @@ describe('TourProvider — routing', () => {
             'go-series',
             'next-step',
             'go-transcription',
-            'next-step',
-            'next-step',
+            'next-step', // transcription_status → troubleshoot_page (the queue step is admin-only)
         ]
         for (const action of actions) {
             fireEvent.click(screen.getByText(action))
@@ -172,6 +171,32 @@ describe('TourProvider — closeOverlays consumption (issue #598 Track B)', () =
         fireEvent.click(screen.getByText('quit-tour'))
 
         expect(screen.getByTestId('pathname')).toHaveTextContent('/library')
+        expect(JSON.parse(screen.getByTestId('pathname').dataset.state)).toEqual({ closeOverlays: true })
+    })
+
+    it('popToMain keeps closeOverlays in the router state, so the book page it lands on still closes its overlay', async () => {
+        // The controller emits closeOverlays and then popToMain back to back.
+        // Both navigate synchronously, so only the last location survives
+        // the render: if popToMain drops the state, the reader stays open
+        // (seen live on 2026-09-28 at the "Back in the reader" step).
+        getPairsMock.mockResolvedValue([{ id: 42, status: 'synced', ebook: { id: 6 } }])
+        renderProvider({ username: 'alice', role: 'user' }, { initialEntry: '/continue' })
+        fireEvent.click(screen.getByText('start-tour'))
+        await waitFor(() => expect(screen.getByTestId('tour-status')).toHaveTextContent('running'))
+        await waitFor(() => expect(screen.getByTestId('tour-pair-id')).toHaveTextContent('42'))
+
+        for (let i = 0; i < 4; i++) fireEvent.click(screen.getByText('next-step'))
+        fireEvent.click(screen.getByText('go-library'))
+        fireEvent.click(screen.getByText('next-step'))
+        fireEvent.click(screen.getByText('next-step'))
+        fireEvent.click(screen.getByText('emit-details-opened'))
+        fireEvent.click(screen.getByText('next-step'))
+        fireEvent.click(screen.getByText('emit-reader-opened'))
+        expect(screen.getByTestId('tour-step')).toHaveTextContent('reader_toolbar')
+
+        fireEvent.click(screen.getByText('quit-tour'))
+
+        expect(screen.getByTestId('pathname')).toHaveTextContent('/book/ebook/6')
         expect(JSON.parse(screen.getByTestId('pathname').dataset.state)).toEqual({ closeOverlays: true })
     })
 })

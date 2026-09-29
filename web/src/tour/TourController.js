@@ -190,6 +190,10 @@ export class TourController {
             this._setState({ willCleanUp: false })
             return
         }
+        // Until the new pair's position is known, assume it has one: a
+        // cleanup that runs on a guess deletes real reading progress.
+        this._willCleanUp = false
+        this._setState({ willCleanUp: false })
         Promise.resolve(this.api.getPosition('pair', pairId))
             .then((position) => {
                 if (this._pairId !== pairId) return

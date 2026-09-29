@@ -388,7 +388,9 @@ describe('AppShell — guided walkthrough wiring (issue #598)', () => {
         expect(screen.getByTitle('System')).toHaveAttribute('data-tour', 'NavSystem')
         // Two elements share the "Account" title (the avatar and the name/role
         // block); only the second carries the anchor.
-        expect(document.querySelector('a.info[title="Account"]')).toHaveAttribute('data-tour', 'NavAccount')
+        // The avatar, not .info: .info is display:none while the sidebar is
+        // collapsed, which is its resting state on desktop.
+        expect(document.querySelector('a.avatar[title="Account"]')).toHaveAttribute('data-tour', 'NavAccount')
     })
 
     it('does not tag the System nav link for a role that cannot see it', () => {

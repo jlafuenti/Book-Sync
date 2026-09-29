@@ -534,9 +534,16 @@ function LibraryPage({ tab }) {
     // `library_open_book` tapAnchor step advances regardless of which pair
     // (or unpaired book) the click actually landed on — `TourEvents.matchesKind`
     // only compares the event's kind for this one, not the pair id.
+    // The tour's own pair always opens on its ebook page: the next step says
+    // "Click Read", and the audiobook page has no Read button. Every other
+    // click keeps the last-used-format rule.
     const navigateToBook = (book) => {
         emitTourEvent(TourEvents.detailsOpened(book.mediaType === 'pair' ? book.pair_id : null))
-        navigate(book.mediaType === 'pair' ? pairTargetPath(book, book.lastFormat) : `/book/${book.mediaType}/${book.id}`)
+        const isTourPair = book.mediaType === 'pair'
+            && tour.state.status === 'running'
+            && book.pair_id === tour.state.pairId
+        const format = isTourPair && book.ebook_id ? 'ebook' : book.lastFormat
+        navigate(book.mediaType === 'pair' ? pairTargetPath(book, format) : `/book/${book.mediaType}/${book.id}`)
     }
 
     const handleSelect = useCallback((book, idx, shiftKey) => {

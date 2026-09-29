@@ -38,6 +38,9 @@ export const TOUR = [
             + 'Quit any time with the × in the corner. The book we open along the way is put '
             + 'back the way it was when you finish.',
         advance: ADVANCE.next(),
+        // A replay starts from the Account page; the next four steps live
+        // on Home, so the tour goes there first.
+        goTo: '/continue',
     },
     {
         id: 'home_continue_reading',

@@ -88,8 +88,12 @@ export function TourProvider({ children }) {
                     break
                 }
                 case 'popToMain': {
+                    // Always follows closeOverlays, and both navigate before
+                    // React renders, so only this location survives: it has
+                    // to carry the closeOverlays state itself or the book
+                    // page never sees it and the reader stays open.
                     const ebookId = findEbookId(state.pairId)
-                    if (ebookId != null) navigate(`/book/ebook/${ebookId}`)
+                    if (ebookId != null) navigate(`/book/ebook/${ebookId}`, { state: { closeOverlays: true } })
                     break
                 }
                 case 'closeOverlays':

@@ -32,6 +32,13 @@ export class TourAnchorRegistry {
             this.clear(name)
             return
         }
+        // The hook re-measures on a timer as well as on events, so most
+        // calls carry the rect already stored: only a real change notifies.
+        const prev = this._rects.get(name)
+        if (prev && prev.top === rectValue.top && prev.left === rectValue.left
+            && prev.width === rectValue.width && prev.height === rectValue.height) {
+            return
+        }
         this._rects.set(name, rectValue)
         this._notify()
     }

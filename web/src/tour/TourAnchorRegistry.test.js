@@ -50,6 +50,17 @@ describe('TourAnchorRegistry', () => {
         expect(listener).toHaveBeenCalledTimes(2)
     })
 
+    it('does not notify when the same rect is set again (the hook re-measures on a timer)', () => {
+        const registry = new TourAnchorRegistry()
+        const listener = vi.fn()
+        registry.set('Foo', rect())
+        registry.subscribe(listener)
+        registry.set('Foo', rect())
+        expect(listener).not.toHaveBeenCalled()
+        registry.set('Foo', { ...rect(), left: 5, x: 5, right: 15 })
+        expect(listener).toHaveBeenCalledTimes(1)
+    })
+
     it('does not notify when setting a zero-sized rect (nothing changed)', () => {
         const registry = new TourAnchorRegistry()
         const listener = vi.fn()
