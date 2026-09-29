@@ -223,11 +223,15 @@ export function AppShell({ user, setUser }) {
     // itself (every other anchor is tagged by Track B, page by page) — this
     // is what makes a "click Library/Series/Transcription/System/Account"
     // tapAnchor step work end to end today.
-    const libraryAnchorRef = useTourAnchor(TourAnchors.NavLibrary)
-    const seriesAnchorRef = useTourAnchor(TourAnchors.NavSeries)
-    const transcriptionAnchorRef = useTourAnchor(TourAnchors.NavTranscription)
-    const systemAnchorRef = useTourAnchor(TourAnchors.NavSystem, { enabled: hasMinRole('editor') })
-    const accountAnchorRef = useTourAnchor(TourAnchors.NavAccount)
+    // Desktop only: under 768px the sidebar is display:none and the bottom
+    // bar / drawer register the same names. Two registrations for one name
+    // fight each other on every re-measure (the hidden one's zero rect
+    // clears the visible one's), so exactly one side is enabled at a time.
+    const libraryAnchorRef = useTourAnchor(TourAnchors.NavLibrary, { enabled: !isMobile })
+    const seriesAnchorRef = useTourAnchor(TourAnchors.NavSeries, { enabled: !isMobile })
+    const transcriptionAnchorRef = useTourAnchor(TourAnchors.NavTranscription, { enabled: !isMobile })
+    const systemAnchorRef = useTourAnchor(TourAnchors.NavSystem, { enabled: !isMobile && hasMinRole('editor') })
+    const accountAnchorRef = useTourAnchor(TourAnchors.NavAccount, { enabled: !isMobile })
 
     return (
         <div className="app-layout">
@@ -346,10 +350,13 @@ export function AppShell({ user, setUser }) {
                         {/* The whole block is the way into Account — there is no
                             room for a nav entry of its own, and the user card is
                             where people look for their own settings. */}
-                        <Link to="/account" className="avatar" title="Account">
+                        {/* The walkthrough's NavAccount anchor sits on the avatar,
+                            the one part of this block that is visible while the
+                            sidebar is collapsed (.info is display:none until hover). */}
+                        <Link to="/account" ref={accountAnchorRef} className="avatar" title="Account">
                             {user.username[0].toUpperCase()}
                         </Link>
-                        <Link to="/account" ref={accountAnchorRef} className="info" title="Account">
+                        <Link to="/account" className="info" title="Account">
                             <div className="name">{user.username}</div>
                             <div className="role">{roleLabel}</div>
                         </Link>

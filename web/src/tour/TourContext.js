@@ -25,6 +25,7 @@ const FALLBACK = Object.freeze({
     quit: noop,
     skip: noop,
     replay: noop,
+    adoptPair: noop,
 })
 
 export const TourStateContext = createContext(null)

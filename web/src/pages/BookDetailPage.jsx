@@ -13,6 +13,7 @@ import { useAudioPlayer } from '../contexts/AudioPlayerContext'
 import { formatDateTime } from '../lib/datetime'
 import { switchToEbook } from '../lib/handoff'
 import { handoffPositionMs } from '../lib/playbackOffsets'
+import { TourAnchors, TourScreens, TourEvents, useTourAnchor, useTourScreen, useTourEmit } from '../tour/anchors'
 
 function formatBytes(bytes) {
     if (!bytes) return '—'
@@ -65,6 +66,9 @@ function BookDetailPage() {
     // Listen handoff can issue the ebook write BEFORE the player's first
     // `source: 'audiobook'` write.
     const readerSaveFlushRef = useRef(null)
+    const emitTourEvent = useTourEmit()
+    const pairedCardAnchorRef = useTourAnchor(TourAnchors.DetailsPairedCard)
+    const primaryActionAnchorRef = useTourAnchor(TourAnchors.DetailsPrimaryAction)
 
     useEffect(() => {
         setLoading(true)
@@ -74,6 +78,11 @@ function BookDetailPage() {
             .then(data => {
                 setBook(data)
                 setLoading(false)
+                // Reported once the book has actually loaded (issue #598 Track
+                // B), whether the page was reached by a tapAnchor click or by
+                // a direct URL visit — either way the `library_open_book`
+                // tapAnchor step is waiting on this event to advance.
+                emitTourEvent(TourEvents.detailsOpened(data?.pair_id ?? null))
             })
             .catch(err => {
                 setError(err.message || 'Failed to load book')
@@ -84,6 +93,7 @@ function BookDetailPage() {
         }
         // Fetch reading/listening progress
         getProgress(type, id).then(setProgress).catch(() => setProgress(null))
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [type, id])
 
     // Arriving from the app-wide mini-player's "switch to ebook" (issue #267).
@@ -97,6 +107,54 @@ function BookDetailPage() {
         setReaderOpen(true)
         navigate(location.pathname, { replace: true, state: null })
     }, [location.state?.openReader]) // eslint-disable-line react-hooks/exhaustive-deps
+
+    // Same pattern, for the walkthrough's `reader_switch_to_audio` step
+    // (issue #598 Track B): TourProvider's `openPlayer` nav request lands
+    // here the same way `openReader` above does. Split into two effects
+    // (unlike openReader) because opening the player needs `book`, which is
+    // not necessarily loaded yet when this route is first reached — clearing
+    // the history state has to happen right away regardless, or a later
+    // remount would reopen the player a second time.
+    const pendingOpenPlayerRef = useRef(false)
+    useEffect(() => {
+        if (!location.state?.openPlayer) return
+        pendingOpenPlayerRef.current = true
+        navigate(location.pathname, { replace: true, state: null })
+    }, [location.state?.openPlayer]) // eslint-disable-line react-hooks/exhaustive-deps
+    useEffect(() => {
+        if (!pendingOpenPlayerRef.current || !book) return
+        pendingOpenPlayerRef.current = false
+        audioPlayer.play(Number(id), book, progress?.audio_position_ms || 0, book.paired_with?.id || null)
+        setPlayerOpen(true)
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [book])
+
+    // The walkthrough's `closeOverlays` nav request (issue #598 Track B):
+    // TourProvider replaces location state with `{ closeOverlays: true }`
+    // rather than acting on the overlay directly, so any page currently
+    // showing one closes it the same way it consumes openReader/openPlayer.
+    useEffect(() => {
+        if (!location.state?.closeOverlays) return
+        setReaderOpen(false)
+        setReaderInitialChapter(null)
+        setPlayerOpen(false)
+        navigate(location.pathname, { replace: true, state: null })
+    }, [location.state?.closeOverlays]) // eslint-disable-line react-hooks/exhaustive-deps
+
+    // Screen readiness (issue #652's rule): loading until the book has
+    // arrived, and back to loading — not settled — while an overlay covers
+    // the page, so a step spotlighting a Details anchor never resolves
+    // against a card that the reader/player is currently covering.
+    useTourScreen(TourScreens.Details, !loading && !error && !!book && !readerOpen && !playerOpen)
+
+    useEffect(() => {
+        if (readerOpen) emitTourEvent(TourEvents.readerOpened(book?.pair_id ?? null))
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [readerOpen])
+    useEffect(() => {
+        if (playerOpen) emitTourEvent(TourEvents.playerOpened(book?.pair_id ?? null))
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [playerOpen])
 
     const handleSaveMetadata = async (bookId, data) => {
         const updateFunc = type === 'ebook' ? updateEbookMetadata : updateAudiobookMetadata;
@@ -293,14 +351,14 @@ function BookDetailPage() {
                     <div className="book-detail-actions">
                         {/* Read / Listen buttons */}
                         {!isAudiobook && book.format === 'epub' && (
-                            <button className="btn btn-primary" onClick={() => setReaderOpen(true)}>
+                            <button className="btn btn-primary" ref={primaryActionAnchorRef} onClick={() => setReaderOpen(true)}>
                                 {progress && !progress.is_completed && progress.epub_progress_percent > 0
                                     ? `Continue Reading (${Math.round(progress.epub_progress_percent)}%)`
                                     : 'Read'}
                             </button>
                         )}
                         {isAudiobook && (
-                            <button className="btn btn-primary" onClick={() => {
+                            <button className="btn btn-primary" ref={primaryActionAnchorRef} onClick={() => {
                                 audioPlayer.play(Number(id), book, progress?.audio_position_ms || 0, book.paired_with?.id || null)
                                 setPlayerOpen(true)
                             }}>
@@ -379,7 +437,7 @@ function BookDetailPage() {
             {book.pair_id && (
                 <div className="book-detail-section">
                     <h3 className="book-detail-section-title">🔗 Paired With</h3>
-                    <div className="book-detail-paired-card">
+                    <div className="book-detail-paired-card" ref={pairedCardAnchorRef}>
                         <div className="book-detail-paired-icon">
                             {isAudiobook ? '📚' : '🎧'}
                         </div>

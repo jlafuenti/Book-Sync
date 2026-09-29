@@ -61,3 +61,26 @@ describe('BottomNavBar — the Admin tab follows the route gate', () => {
             .toBe('/system/status')
     })
 })
+
+// Issue #598 Track B: these are the mobile mirror of App.jsx's sidebar
+// anchors — what makes a "click Library/Series/Transcription/System"
+// tapAnchor step work under 768px, where the sidebar itself is hidden.
+describe('BottomNavBar tour anchors (issue #598 Track B)', () => {
+    it('tags Library, Series, Transcription and Admin(System) with their nav anchors', () => {
+        renderAt('/continue', 'admin')
+        expect(screen.getByText('Library').closest('a')).toHaveAttribute('data-tour', 'NavLibrary')
+        expect(screen.getByText('Series').closest('a')).toHaveAttribute('data-tour', 'NavSeries')
+        expect(screen.getByText('Transcription').closest('a')).toHaveAttribute('data-tour', 'NavTranscription')
+        expect(screen.getByText('Admin').closest('a')).toHaveAttribute('data-tour', 'NavSystem')
+    })
+
+    it('leaves Home untagged — there is no NavHome anchor', () => {
+        renderAt('/continue', 'admin')
+        expect(screen.getByText('Home').closest('a')).not.toHaveAttribute('data-tour')
+    })
+
+    it('never registers NavSystem for a plain user, who has no Admin tab', () => {
+        renderAt('/continue', 'user')
+        expect(screen.queryByText('Admin')).toBeNull()
+    })
+})

@@ -1,7 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
-import { MemoryRouter, Routes, Route } from 'react-router-dom'
+import { MemoryRouter, Routes, Route, useLocation, useNavigate } from 'react-router-dom'
 import HomePage, { BookCard } from './HomePage'
+import { TourAnchors, TourScreens, TourRegistryContext, TourControllerContext } from '../tour/anchors'
+import { TourAnchorRegistry } from '../tour/TourAnchorRegistry'
 
 const {
     getAllProgressMock, getEbooksMock, getAudiobooksMock, getPairsMock, getTranscriptionQueueMock,
@@ -677,5 +679,110 @@ describe('HomePage Next up (issue #716)', () => {
         await waitFor(() => expect(getAllProgressMock).toHaveBeenCalled())
         await screen.findAllByText(/Recently Added|Axis One/)
         expect(screen.queryByText('Next up')).toBeNull()
+    })
+})
+
+// Issue #598 Track B: the walkthrough's Home step needs a real element per
+// anchor, and needs to know when Home is actually ready to be spotlighted.
+describe('HomePage tour anchors and screen readiness (issue #598 Track B)', () => {
+    function CloseOverlaysTrigger() {
+        const navigate = useNavigate()
+        const location = useLocation()
+        return (
+            <button onClick={() => navigate(location.pathname, { replace: true, state: { closeOverlays: true } })}>
+                trigger-close-overlays
+            </button>
+        )
+    }
+
+    function renderHome({ registry } = {}) {
+        const tree = (
+            <MemoryRouter>
+                <HomePage />
+                <CloseOverlaysTrigger />
+            </MemoryRouter>
+        )
+        return render(registry ? <TourRegistryContext.Provider value={registry}>{tree}</TourRegistryContext.Provider> : tree)
+    }
+
+    function setupPair({ source = 'ebook' } = {}) {
+        const sameInstant = '2024-01-02T00:00:00Z'
+        getEbooksMock.mockResolvedValue([{ id: 10, title: 'Pair Ebook', cover_path: null }])
+        getAudiobooksMock.mockResolvedValue([
+            { id: 20, title: 'Pair Audiobook', cover_path: null, duration_seconds: 3600 },
+        ])
+        getPairsMock.mockResolvedValue([{ id: 100, ebook: { id: 10 }, audiobook: { id: 20 } }])
+        getAllProgressMock.mockResolvedValue([
+            { id: 1, media_type: 'ebook', ebook_id: 10, epub_progress_percent: 20,
+              epub_chapter: 7, book_pair_id: 100, is_completed: false,
+              source, updated_at: sameInstant },
+            { id: 2, media_type: 'audiobook', audiobook_id: 20, audio_position_ms: 500,
+              book_pair_id: 100, is_completed: false,
+              source, updated_at: sameInstant },
+        ])
+    }
+
+    async function clickTheContinueCard(title) {
+        const matches = await screen.findAllByText(title)
+        const card = matches.map((el) => el.closest('.continue-size')).find(Boolean)
+        fireEvent.click(card)
+    }
+
+    it('tags the three home sections with their tour anchors, and only the ones actually rendered', async () => {
+        getEbooksMock.mockResolvedValue([{ id: 1, title: 'Axis One', author: 'A', series: 'Axis', series_index: 1, cover_path: null, uploaded_at: '2026-01-01T00:00:00' }])
+        getAllProgressMock.mockResolvedValue([{
+            id: 9, media_type: 'ebook', ebook_id: 1, epub_progress_percent: 20, epub_chapter: 1,
+            is_completed: false, updated_at: '2026-01-01T00:00:00Z', captured_at: '2026-01-01T00:00:00Z',
+        }])
+        renderHome()
+
+        const continueSection = (await screen.findByText('Continue Reading')).closest('section')
+        expect(continueSection).toHaveAttribute('data-tour', TourAnchors.HomeContinueReading)
+
+        const recentSection = screen.getByText('Recently Added').closest('section')
+        expect(recentSection).toHaveAttribute('data-tour', TourAnchors.HomeRecentlyAdded)
+
+        // No series activity in the last 90 days above -- "Next up" never renders.
+        expect(screen.queryByText('Next up')).toBeNull()
+    })
+
+    it('reports Home settled only once loaded, and back to loading while an overlay is open', async () => {
+        setupPair()
+        const registry = new TourAnchorRegistry()
+        renderHome({ registry })
+
+        await waitFor(() => expect(screen.getAllByText('Pair Ebook').length).toBeGreaterThan(0))
+        await waitFor(() => expect(registry.screenState(TourScreens.Home)).toBe('settled'))
+
+        await clickTheContinueCard('Pair Ebook')
+        await screen.findByTestId('reader')
+        expect(registry.screenState(TourScreens.Home)).toBe('loading')
+    })
+
+    it('emits readerOpened/playerOpened when its own overlays open', async () => {
+        setupPair({ source: 'audiobook' })
+        const controller = { onEvent: vi.fn() }
+        render(
+            <TourControllerContext.Provider value={controller}>
+                <MemoryRouter><HomePage /></MemoryRouter>
+            </TourControllerContext.Provider>,
+        )
+
+        await clickTheContinueCard('Pair Audiobook')
+
+        await waitFor(() => expect(controller.onEvent).toHaveBeenCalledWith(
+            expect.objectContaining({ kind: 'playerOpened' })))
+    })
+
+    it('consumes location.state.closeOverlays by closing its own reader overlay', async () => {
+        setupPair()
+        renderHome()
+
+        await clickTheContinueCard('Pair Ebook')
+        await screen.findByTestId('reader')
+
+        fireEvent.click(screen.getByText('trigger-close-overlays'))
+
+        await waitFor(() => expect(screen.queryByTestId('reader')).not.toBeInTheDocument())
     })
 })

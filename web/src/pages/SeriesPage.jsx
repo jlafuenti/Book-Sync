@@ -10,6 +10,7 @@ import useIsMobile from '../hooks/useIsMobile'
 import FilterPill from '../components/FilterPill'
 import CoverImg from '../components/CoverImg'
 import BulkMetadataEditModal from '../components/BulkMetadataEditModal'
+import { TourAnchors, TourScreens, useTourAnchor, useTourScreen } from '../tour/anchors'
 import './SeriesPage.css'
 
 const SORT_LABELS = { name: 'Name', count: 'Book Count', recent: 'Recently Added' }
@@ -177,6 +178,16 @@ export default function SeriesPage() {
 
         return { seriesGroups: Object.values(groups), unseriedItems: unsorted }
     }, [ebooks, audiobooks, pairs])
+
+    // The walkthrough's `series_groups` step (issue #598 Track B): present
+    // even when the current search/filter narrows the list to nothing (that
+    // degrades to the "No series found" card, which is still worth
+    // spotlighting), but never registered when the library truly has no
+    // series at all — `seriesGroups` (pre-filter) rather than `filteredSeries`
+    // is what tells those two "empty" cases apart, and only the latter has
+    // its own `emptyBody` in the script.
+    const seriesGridAnchorRef = useTourAnchor(TourAnchors.SeriesGrid, { enabled: seriesGroups.length > 0 })
+    useTourScreen(TourScreens.Series, !loading)
 
     // Options scoped to current activeFilter (before author/series pill filters)
     const baseSeriesForOptions = useMemo(() =>
@@ -587,7 +598,7 @@ export default function SeriesPage() {
             {/* Card Grid / List */}
             {filteredSeries.length > 0 ? (
                 (viewMode === 'grid' || isMobile) ? (
-                    <div className="series-grid">
+                    <div className="series-grid" ref={seriesGridAnchorRef}>
                         {filteredSeries.map(group => (
                             <SeriesCard
                                 key={group.name}
@@ -602,7 +613,7 @@ export default function SeriesPage() {
                         ))}
                     </div>
                 ) : (
-                    <div className="series-list">
+                    <div className="series-list" ref={seriesGridAnchorRef}>
                         {filteredSeries.map(group => (
                             <SeriesListRow
                                 key={group.name}
@@ -619,7 +630,7 @@ export default function SeriesPage() {
                     </div>
                 )
             ) : (
-                <div className="series-empty">
+                <div className="series-empty" ref={seriesGridAnchorRef}>
                     <div className="series-empty-icon">📚</div>
                     <h3>No series found{searchTerm ? ` matching "${searchTerm}"` : ''}</h3>
                     <p>Try adjusting your search or filters.</p>

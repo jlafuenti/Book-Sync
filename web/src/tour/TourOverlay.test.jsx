@@ -211,6 +211,90 @@ describe('TourOverlay', () => {
         expect(screen.getByText('That\'s Tandem. Enjoy your books.')).toBeInTheDocument()
     })
 
+    it('keeps the card inside the viewport when the hole fills it (the reader page)', () => {
+        setViewport(1200)
+        const reg = new TourAnchorRegistry()
+        const vh = window.innerHeight
+        reg.set('ReaderPage', rect({ top: 53, bottom: vh, height: vh - 53, y: 53, left: 60, right: 1100, width: 1040 }))
+        renderOverlay({
+            step: {
+                id: 'reader_trick', screen: 'Reader', anchor: 'ReaderPage',
+                title: 'Back in the reader', body: 'And it opened the page.', advance: { kind: 'next' },
+            },
+            resolution: 'found',
+        }, { registry: reg })
+        const dialog = screen.getByRole('dialog')
+        expect(dialog.style.top).toBe('')
+        expect(dialog.style.bottom).toBe('12px')
+    })
+
+    it('centers an anchorless card on desktop', () => {
+        setViewport(1200)
+        renderOverlay()
+        expect(screen.getByRole('dialog').className).toContain('tour-card--centered')
+    })
+
+    it('does not center a card that has a hole, nor on mobile', () => {
+        setViewport(1200)
+        const reg = new TourAnchorRegistry()
+        reg.set('LibraryFilterPills', rect())
+        const { unmount } = renderOverlay({
+            step: {
+                id: 'library_filters', screen: 'Library', anchor: 'LibraryFilterPills',
+                title: 'Filters', body: 'x', advance: { kind: 'next' },
+            },
+        }, { registry: reg })
+        expect(screen.getByRole('dialog').className).not.toContain('tour-card--centered')
+        unmount()
+        setViewport(500)
+        renderOverlay()
+        expect(screen.getByRole('dialog').className).not.toContain('tour-card--centered')
+        setViewport(1200)
+    })
+
+    it('gives a mobile card no inline position even with a hole: the dock is the layout', () => {
+        // Seen live at phone width: the card was placed below a section that
+        // sat under the fold, so the card itself ended up off-screen.
+        setViewport(500)
+        const reg = new TourAnchorRegistry()
+        reg.set('HomeRecentlyAdded', rect({ top: 738, bottom: 870, y: 738 }))
+        renderOverlay({
+            step: {
+                id: 'home_recently_added', screen: 'Home', anchor: 'HomeRecentlyAdded',
+                title: 'Recently Added', body: 'x', advance: { kind: 'next' },
+            },
+        }, { registry: reg })
+        const dialog = screen.getByRole('dialog')
+        expect(dialog.className).toContain('tour-card--mobile')
+        expect(dialog.style.top).toBe('')
+        expect(dialog.style.bottom).toBe('')
+        setViewport(1200)
+    })
+
+    it('docks a mobile card to the top when the hole is in the lower half (the bottom nav bar)', () => {
+        setViewport(500)
+        const reg = new TourAnchorRegistry()
+        const vh = window.innerHeight
+        reg.set('NavLibrary', rect({ top: vh - 60, bottom: vh - 6, height: 54, y: vh - 60 }))
+        const { unmount } = renderOverlay({
+            step: {
+                id: 'home_click_library', screen: 'Home', anchor: 'NavLibrary',
+                title: 'Now the Library', body: 'x', advance: { kind: 'tapAnchor', event: { kind: 'routeShown' } },
+            },
+        }, { registry: reg })
+        expect(screen.getByRole('dialog').className).toContain('tour-card--mobile-top')
+        unmount()
+        reg.set('NavLibrary', rect({ top: 10, bottom: 64, height: 54, y: 10 }))
+        renderOverlay({
+            step: {
+                id: 'home_click_library', screen: 'Home', anchor: 'NavLibrary',
+                title: 'Now the Library', body: 'x', advance: { kind: 'tapAnchor', event: { kind: 'routeShown' } },
+            },
+        }, { registry: reg })
+        expect(screen.getByRole('dialog').className).not.toContain('tour-card--mobile-top')
+        setViewport(1200)
+    })
+
     it('docks the card to the bottom under the 768px breakpoint', () => {
         setViewport(500)
         renderOverlay()

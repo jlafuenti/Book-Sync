@@ -116,6 +116,24 @@ describe('TourController', () => {
         expect(controller.state.resolution).toBe('missing')
     })
 
+    it('registry chatter while pending does not postpone Missing (the timer is armed once)', async () => {
+        // Seen live on 2026-09-28 at 375px: two same-named nav anchors (the
+        // CSS-hidden sidebar and the bottom bar) re-measured every 250 ms and
+        // each notification restarted the 600 ms timer, so the step showed
+        // "One moment…" forever instead of its emptyBody card.
+        const registry = new TourAnchorRegistry()
+        const controller = new TourController({ registry, api: makeApi() })
+        controller.start('user')
+        await flush()
+        controller.next() // -> home_continue_reading (anchor absent)
+        registry.setSettled(TourScreens.Home, true)
+        for (let i = 0; i < 4; i++) {
+            vi.advanceTimersByTime(200)
+            registry.set('SomethingElse', { top: 0, left: i, right: 10 + i, bottom: 10, width: 10, height: 10 })
+        }
+        expect(controller.state.resolution).toBe('missing')
+    })
+
     it('resolution stays Pending indefinitely while the screen reports loading', async () => {
         const registry = new TourAnchorRegistry()
         const controller = new TourController({ registry, api: makeApi() })
@@ -175,14 +193,18 @@ describe('TourController', () => {
         const controller = new TourController({ registry, api: makeApi() })
         controller.start('user')
         await flush()
-        // Drive to reader_toolbar (index 10 for the 'user' role script).
-        while (controller.state.step.id !== 'reader_toolbar') advanceStep(controller)
+        // The shipped script has no waitFor step any more (reader_toolbar and
+        // player_paused became plain next steps so their copy can be read),
+        // so give home_next_up a synthetic one before entering it.
+        const idx = controller.steps.findIndex((s) => s.id === 'home_next_up')
+        controller.steps[idx] = { ...controller.steps[idx], advance: { kind: 'waitFor', event: TourEvents.readerReady(), skippable: false } }
+        while (controller.state.step.id !== 'home_next_up') advanceStep(controller)
 
         controller.onEvent(TourEvents.playerReady()) // unrelated event
-        expect(controller.state.step.id).toBe('reader_toolbar')
+        expect(controller.state.step.id).toBe('home_next_up')
 
         controller.onEvent(TourEvents.readerReady())
-        expect(controller.state.step.id).toBe('reader_progress')
+        expect(controller.state.step.id).toBe('home_recently_added')
     })
 
     it('back() moves to the previous step only within the same screen', async () => {
@@ -229,6 +251,17 @@ describe('TourController', () => {
         advanceStep(controller) // reader_switch_to_audio (Reader) -> player_paused (Player): still the block
         expect(controller.state.step.id).toBe('player_paused')
         expect(navEvents).toEqual([])
+    })
+
+    it('emits a goTo nav request for Home on start, so a replay from Account lands where step 2 lives', async () => {
+        const registry = new TourAnchorRegistry()
+        const controller = new TourController({ registry, api: makeApi() })
+        const navEvents = []
+        controller.subscribeNav((req) => navEvents.push(req))
+        controller.start('user')
+        await flush()
+        expect(controller.state.step.id).toBe('welcome')
+        expect(navEvents).toContainEqual({ type: 'goTo', route: '/continue' })
     })
 
     it('emits a goTo nav request for troubleshoot_page (editor role)', async () => {
@@ -318,6 +351,24 @@ describe('TourController', () => {
         await flush()
         controller.next() // -> home_continue_reading, anchor absent, screen unreported
         expect(setTimeoutFn).toHaveBeenCalledWith(expect.any(Function), 30000)
+    })
+
+    it('adoptPair drops willCleanUp when the new pair’s position lookup fails (never delete on uncertainty)', async () => {
+        const registry = new TourAnchorRegistry()
+        const api = makeApi({ pair: { id: 7 }, untouched: true })
+        api.getPosition = vi.fn()
+            .mockResolvedValueOnce(null) // start()'s own pick: untouched
+            .mockRejectedValueOnce(new Error('503')) // adoptPair's re-check fails
+        const controller = new TourController({ registry, api })
+        controller.start('user')
+        await flush()
+        expect(controller.state.willCleanUp).toBe(true)
+
+        controller.adoptPair({ id: 42 })
+        await flush()
+        expect(controller.state.willCleanUp).toBe(false)
+        controller.quit()
+        expect(api.resetPairProgress).not.toHaveBeenCalled()
     })
 
     it('adoptPair re-evaluates willCleanUp for the newly adopted pair', async () => {

@@ -190,6 +190,10 @@ export class TourController {
             this._setState({ willCleanUp: false })
             return
         }
+        // Until the new pair's position is known, assume it has one: a
+        // cleanup that runs on a guess deletes real reading progress.
+        this._willCleanUp = false
+        this._setState({ willCleanUp: false })
         Promise.resolve(this.api.getPosition('pair', pairId))
             .then((position) => {
                 if (this._pairId !== pairId) return
@@ -256,9 +260,9 @@ export class TourController {
                 this._stopWatching()
                 return
             }
-            this._clearPendingTimer()
             const rect = this.registry.get(step.anchor)
             if (rect) {
+                this._clearPendingTimer()
                 this._everFoundForStep = true
                 if (this.state.resolution !== 'found') {
                     this._logTransition(step, this.state.resolution, 'found')
@@ -270,19 +274,34 @@ export class TourController {
                 // Past the first Found, a vanished anchor almost always means
                 // the tap landed and the next screen is on its way in — wait
                 // indefinitely rather than reapplying the hard cap.
+                this._clearPendingTimer()
                 if (this.state.resolution !== 'pending') {
                     this._logTransition(step, this.state.resolution, 'pending')
                     this._setState({ resolution: 'pending' })
                 }
                 return
             }
+            // A Missing verdict stands until the anchor actually appears (the
+            // `rect` branch above flips it back to Found); registry chatter
+            // must not bounce it through Pending and re-arm the timer.
+            if (this.state.resolution === 'missing') return
             if (this.state.resolution !== 'pending') {
                 this._logTransition(step, this.state.resolution, 'pending')
                 this._setState({ resolution: 'pending' })
             }
             const screenState = this.registry.screenState(step.screen)
-            if (screenState === 'loading') return // waited for however long that takes
+            if (screenState === 'loading') {
+                this._clearPendingTimer()
+                return // waited for however long that takes
+            }
             const delay = screenState === 'settled' ? this.settleMs : this.hardCapMs
+            // Registry notifications arrive constantly (every anchor
+            // re-measure), and each one runs this check: the timer is armed
+            // once and only re-armed when the delay it needs has changed,
+            // or a Missing verdict would be postponed indefinitely.
+            if (this._pendingTimer && this._pendingTimerDelay === delay) return
+            this._clearPendingTimer()
+            this._pendingTimerDelay = delay
             this._pendingTimer = this._setTimeout(() => {
                 this._pendingTimer = null
                 if (this.state.index !== index || this._everFoundForStep) return
@@ -305,6 +324,7 @@ export class TourController {
             this._clearTimeout(this._pendingTimer)
             this._pendingTimer = null
         }
+        this._pendingTimerDelay = null
     }
 
     _stopWatching() {

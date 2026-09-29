@@ -75,15 +75,17 @@ describe('stepsForRole', () => {
         expect(steps.length).toBe(23)
     })
 
-    it('gives an editor the maintenance, queue and troubleshoot steps, but not System', () => {
+    it('gives an editor the maintenance and troubleshoot steps, but not the queue or System', () => {
+        // Queue All is admin-gated on the Transcription page (canManageQueue),
+        // so the step that spotlights it is too; editors only get Cancel.
         const steps = stepsForRole('editor')
         const ids = steps.map((s) => s.id)
         expect(ids).toContain('library_upload_and_maintenance')
-        expect(ids).toContain('transcription_queue')
+        expect(ids).not.toContain('transcription_queue')
         expect(ids).toContain('troubleshoot_page')
         expect(ids).not.toContain('click_system')
         expect(ids).not.toContain('system_status')
-        expect(steps.length).toBe(26)
+        expect(steps.length).toBe(25)
     })
 
     it('gives an admin the System block instead of troubleshoot_page', () => {
@@ -188,7 +190,6 @@ describe('copy parity with the Android TourScript.kt', () => {
         'home_continue_reading',
         'home_recently_added',
         'library_filters',
-        'player_paused',
         'reader_trick',
         'account_replay',
     ])('%s matches the Android title and body verbatim', (id) => {
@@ -196,6 +197,23 @@ describe('copy parity with the Android TourScript.kt', () => {
         const web = webStep(id)
         expect(web.title).toBe(android.title)
         expect(web.body).toBe(android.body)
+    })
+
+    it('home_next_up has an emptyBody for a fresh account with no positions', () => {
+        expect(typeof webStep('home_next_up').emptyBody).toBe('string')
+        expect(webStep('home_next_up').emptyBody.length).toBeGreaterThan(20)
+    })
+
+    it('reader_toolbar and player_paused are plain next steps, so their copy can be read', () => {
+        // As waitFor steps they advanced the moment the reader/player reported
+        // ready, within a second of opening, and nobody saw the card.
+        expect(webStep('reader_toolbar').advance).toEqual({ kind: 'next' })
+        expect(webStep('player_paused').advance).toEqual({ kind: 'next' })
+    })
+
+    it('player_paused says the audiobook started playing: the web reader\u2019s Listen autoplays', () => {
+        expect(webStep('player_paused').title).toBe('The audiobook')
+        expect(webStep('player_paused').body).toContain('started playing')
     })
 
     it('home_continue_reading matches the Android emptyBody verbatim', () => {

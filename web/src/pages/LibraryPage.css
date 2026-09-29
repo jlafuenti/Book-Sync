@@ -30,6 +30,15 @@
     margin-left: auto;
 }
 
+/* The walkthrough's Upload / Maintenance / Select anchor wraps the three
+   editor controls so one hole frames them; it lays out like the row it
+   sits in. */
+.library-maintenance-group {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
 /* ---- Filter Pills ---- */
 
 .library-filter-pills {

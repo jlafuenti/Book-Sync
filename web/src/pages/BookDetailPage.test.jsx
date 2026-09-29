@@ -1,8 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
-import { MemoryRouter, Routes, Route } from 'react-router-dom'
+import { MemoryRouter, Routes, Route, useNavigate, useLocation } from 'react-router-dom'
 import BookDetailPage from './BookDetailPage'
 import { formatDateTime } from '../lib/datetime'
+import { TourAnchors, TourScreens, TourRegistryContext, TourControllerContext } from '../tour/anchors'
+import { TourAnchorRegistry } from '../tour/TourAnchorRegistry'
 
 // Isolate BookDetailPage from its heavier children/deps so this test only
 // exercises the enrich-from-ABS toast logic.
@@ -497,5 +499,102 @@ describe('BookDetailPage print page count (issue #730)', () => {
 
         await screen.findAllByText('Axis Test')
         expect(screen.queryByText('Print pages')).toBeNull()
+    })
+})
+
+// Issue #598 Track B: the walkthrough's Details step needs a real element per
+// anchor, needs to know when the page is actually ready to be spotlighted,
+// and needs the reader/player handoff (both directions) reported as events.
+describe('BookDetailPage tour anchors, screen readiness and events (issue #598 Track B)', () => {
+    function renderWithTour(entry, { registry, controller } = {}) {
+        let tree = (
+            <MemoryRouter initialEntries={[entry]}>
+                <Routes>
+                    <Route path="/book/:type/:id" element={<BookDetailPage />} />
+                </Routes>
+            </MemoryRouter>
+        )
+        if (controller) tree = <TourControllerContext.Provider value={controller}>{tree}</TourControllerContext.Provider>
+        if (registry) tree = <TourRegistryContext.Provider value={registry}>{tree}</TourRegistryContext.Provider>
+        return render(tree)
+    }
+
+    it('tags the paired-with card and the primary action button', async () => {
+        getEbookMock.mockResolvedValue({
+            id: 900, title: 'Antiagon Fire', author: 'L. E. Modesitt Jr', cover_path: null,
+            format: 'epub', pair_id: 77, pair_status: 'synced',
+            paired_with: { id: 1538, title: 'Antiagon Fire (audio)' },
+        })
+        renderWithTour('/book/ebook/900')
+
+        expect(await screen.findByRole('button', { name: /^Read$/ })).toHaveAttribute('data-tour', TourAnchors.DetailsPrimaryAction)
+        expect(document.querySelector('.book-detail-paired-card')).toHaveAttribute('data-tour', TourAnchors.DetailsPairedCard)
+    })
+
+    it('reports Details settled only once the book has loaded, and back to loading while the reader is open', async () => {
+        getAudiobookMock.mockResolvedValue({ id: 1538, title: 'Axis Test', author: 'An Author', cover_path: null })
+        const registry = new TourAnchorRegistry()
+        renderWithTour('/book/audiobook/1538', { registry })
+
+        await waitFor(() => expect(registry.screenState(TourScreens.Details)).toBe('settled'))
+
+        fireEvent.click(await screen.findByRole('button', { name: /Listen/ }))
+        expect(registry.screenState(TourScreens.Details)).toBe('loading')
+    })
+
+    it('emits detailsOpened on load, and readerOpened/playerOpened when the overlays open', async () => {
+        getAudiobookMock.mockResolvedValue({
+            id: 1538, title: 'Axis Test', author: 'An Author', cover_path: null, pair_id: 42,
+        })
+        const controller = { onEvent: vi.fn() }
+        renderWithTour('/book/audiobook/1538', { controller })
+
+        await waitFor(() => expect(controller.onEvent).toHaveBeenCalledWith(
+            expect.objectContaining({ kind: 'detailsOpened', pairId: 42 })))
+
+        fireEvent.click(await screen.findByRole('button', { name: /Listen/ }))
+        await waitFor(() => expect(controller.onEvent).toHaveBeenCalledWith(
+            expect.objectContaining({ kind: 'playerOpened', pairId: 42 })))
+    })
+
+    it('opens the player from location.state.openPlayer, the same way openReader does', async () => {
+        getAudiobookMock.mockResolvedValue({ id: 1538, title: 'Axis Test', author: 'An Author', cover_path: null })
+        // The overlay only renders once the player context reports a current
+        // audiobook (BookDetailPage's own render gate) — real usage sets this
+        // via audioPlayer.play(), which the mock below stands in for.
+        player.currentAudiobook = { id: 1538, title: 'Axis Test' }
+        renderWithTour({ pathname: '/book/audiobook/1538', state: { openPlayer: true } })
+
+        expect(await screen.findByTestId('player')).toBeInTheDocument()
+        expect(player.play).toHaveBeenCalledWith(1538, expect.anything(), 0, null)
+    })
+
+    it('closes an open reader on location.state.closeOverlays, the same way TourProvider signals it', async () => {
+        getEbookMock.mockResolvedValue({
+            id: 900, title: 'Axis Test', author: 'An Author', cover_path: null, format: 'epub',
+        })
+
+        function CloseOverlaysTrigger() {
+            const navigate = useNavigate()
+            const location = useLocation()
+            return (
+                <button onClick={() => navigate(location.pathname, { replace: true, state: { closeOverlays: true } })}>
+                    trigger-close-overlays
+                </button>
+            )
+        }
+        render(
+            <MemoryRouter initialEntries={['/book/ebook/900']}>
+                <Routes>
+                    <Route path="/book/:type/:id" element={<><BookDetailPage /><CloseOverlaysTrigger /></>} />
+                </Routes>
+            </MemoryRouter>,
+        )
+        fireEvent.click(await screen.findByRole('button', { name: /^Read$/ }))
+        await screen.findByTestId('reader')
+
+        fireEvent.click(screen.getByText('trigger-close-overlays'))
+
+        await waitFor(() => expect(screen.queryByTestId('reader')).not.toBeInTheDocument())
     })
 })

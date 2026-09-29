@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
 import { updateMe } from '../api/auth'
@@ -6,7 +6,7 @@ import { getPairs } from '../api/library'
 import { getPosition, resetPairProgress } from '../api/sync'
 import { TourController } from './TourController'
 import { TourAnchorRegistry } from './TourAnchorRegistry'
-import { TourEvents, TourRegistryContext, TourControllerContext } from './anchors'
+import { TourEvents, TourRegistryContext, TourControllerContext, defaultRegistry } from './anchors'
 import { TourStateContext } from './TourContext'
 import TourOffer from './TourOffer'
 
@@ -38,8 +38,13 @@ export function TourProvider({ children }) {
     const navigate = useNavigate()
     const location = useLocation()
 
+    // An enclosing <TourRegistryContext.Provider> (tests hand one in to read
+    // what the pages register) wins over a fresh registry of our own.
+    const outerRegistry = useContext(TourRegistryContext)
     const registryRef = useRef(null)
-    if (!registryRef.current) registryRef.current = new TourAnchorRegistry()
+    if (!registryRef.current) {
+        registryRef.current = outerRegistry !== defaultRegistry ? outerRegistry : new TourAnchorRegistry()
+    }
     const registry = registryRef.current
 
     // Caches the last listSyncedPairs() result so nav handlers (openReader,
@@ -88,13 +93,19 @@ export function TourProvider({ children }) {
                     break
                 }
                 case 'popToMain': {
+                    // Always follows closeOverlays, and both navigate before
+                    // React renders, so only this location survives: it has
+                    // to carry the closeOverlays state itself or the book
+                    // page never sees it and the reader stays open.
                     const ebookId = findEbookId(state.pairId)
-                    if (ebookId != null) navigate(`/book/ebook/${ebookId}`)
+                    if (ebookId != null) navigate(`/book/ebook/${ebookId}`, { state: { closeOverlays: true } })
                     break
                 }
                 case 'closeOverlays':
-                    // Nothing to do at this layer — the reader/player surface
-                    // itself (Track B) listens for this to tear itself down.
+                    // The reader/player surface (Track B) consumes this the
+                    // same way it consumes openReader/openPlayer: a bit of
+                    // router state it clears once it has closed its overlay.
+                    navigate(location.pathname, { replace: true, state: { closeOverlays: true } })
                     break
                 case 'cleanUp':
                     // The server-side reset already happened inside the
@@ -107,7 +118,7 @@ export function TourProvider({ children }) {
             }
             // eslint-disable-next-line react-hooks/exhaustive-deps
         })
-    }, [controller, navigate, state.pairId])
+    }, [controller, navigate, state.pairId, location.pathname])
 
     // Every route change is a tour event, whether the tour drove it (a
     // tapAnchor step's own click) or the user navigated some other way.
@@ -131,6 +142,7 @@ export function TourProvider({ children }) {
         quit: () => controller.quit(),
         skip: () => controller.skip(),
         replay: () => controller.start(user?.role),
+        adoptPair: (pair) => controller.adoptPair(pair),
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }), [state, controller, user?.role])
 

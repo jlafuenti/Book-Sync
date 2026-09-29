@@ -66,4 +66,14 @@ describe('MobileDrawer', () => {
         renderDrawer({ username: 'alice' }, vi.fn())
         expect(screen.getByText('Logout')).toBeInTheDocument()
     })
+
+    // Issue #598 Track B: below 768px the sidebar's own NavAccount anchor
+    // (App.jsx) is display:none, so the tour's "click Account" step has
+    // nothing to spotlight unless the drawer's own user block carries the
+    // same anchor.
+    it('tags the user block with the NavAccount tour anchor', () => {
+        renderDrawer()
+        const links = screen.getAllByRole('link').filter(a => a.getAttribute('href') === '/account')
+        expect(links[0]).toHaveAttribute('data-tour', 'NavAccount')
+    })
 })

@@ -3,6 +3,8 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import SeriesPage, { SeriesCard, SeriesListRow, SeriesBookRow } from './SeriesPage'
 import { roleMeets } from '../roles'
+import { TourAnchors, TourScreens, TourRegistryContext } from '../tour/anchors'
+import { TourAnchorRegistry } from '../tour/TourAnchorRegistry'
 
 const {
     coverSrcMock, getEbooksMock, getAudiobooksMock, getPairsMock,
@@ -280,5 +282,52 @@ describe('SeriesPage — series-level progress actions (issue #270)', () => {
 
         expect(screen.queryByRole('dialog')).toBeNull()
         expect(updateEbookMetadataMock).not.toHaveBeenCalled()
+    })
+})
+
+// Issue #598 Track B: the walkthrough's Series step needs a real element to
+// spotlight — present even for a search/filter that empties the list, but
+// never registered when the library genuinely has no series — and needs to
+// know once the page has actually loaded.
+describe('SeriesPage tour anchor and screen readiness (issue #598 Track B)', () => {
+    // jsdom's getBoundingClientRect() returns an all-zero rect, which the
+    // registry drops as "not really on screen" (TourAnchorRegistry.set) —
+    // stub a real size so the two tests below can tell "registered" apart
+    // from "never measured".
+    beforeEach(() => {
+        Element.prototype.getBoundingClientRect = () => ({
+            x: 0, y: 0, width: 100, height: 40, top: 0, left: 0, right: 100, bottom: 40, toJSON() {},
+        })
+    })
+
+    function renderWithRegistry(registry) {
+        return render(
+            <TourRegistryContext.Provider value={registry}>
+                <MemoryRouter><SeriesPage /></MemoryRouter>
+            </TourRegistryContext.Provider>,
+        )
+    }
+
+    it('tags the grid and reports settled once loaded, when series exist', async () => {
+        getEbooksMock.mockResolvedValue([{
+            id: 1, title: 'Book 1', author: 'An Author', series: 'A Series', series_index: 1,
+            cover_path: null, uploaded_at: '2026-01-01',
+        }])
+        const registry = new TourAnchorRegistry()
+        renderWithRegistry(registry)
+
+        await screen.findByText('A Series')
+        expect(document.querySelector('.series-grid')).toHaveAttribute('data-tour', TourAnchors.SeriesGrid)
+        await waitFor(() => expect(registry.screenState(TourScreens.Series)).toBe('settled'))
+        expect(registry.get(TourAnchors.SeriesGrid)).toBeTruthy()
+    })
+
+    it('does not register the anchor when the library has no series at all', async () => {
+        // No ebooks/audiobooks/pairs at all -- genuinely nothing to group.
+        const registry = new TourAnchorRegistry()
+        renderWithRegistry(registry)
+
+        await waitFor(() => expect(registry.screenState(TourScreens.Series)).toBe('settled'))
+        expect(registry.get(TourAnchors.SeriesGrid)).toBeNull()
     })
 })

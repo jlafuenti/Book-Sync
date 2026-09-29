@@ -4,6 +4,9 @@ import { readFileSync } from 'node:fs'
 import { resolve, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { MemoryRouter, useLocation } from 'react-router-dom'
+import { TourAnchorRegistry } from './tour/TourAnchorRegistry'
+import { TourRegistryContext } from './tour/anchors'
+import { setViewport } from './test/setup'
 import { AppShell } from './App'
 import { ThemeProvider } from './ThemeContext'
 import { AudioPlayerProvider } from './contexts/AudioPlayerContext'
@@ -380,6 +383,60 @@ describe('AppShell — guided walkthrough wiring (issue #598)', () => {
         expect(screen.getByText('home-stub')).toBeInTheDocument()
     })
 
+    it('registers the nav anchors from the bottom bar on mobile and from the sidebar on desktop, never both', async () => {
+        // Both are mounted under 768px (the sidebar is only CSS-hidden), and
+        // two same-named registrations fought each other every re-measure:
+        // the hidden one's zero rect cleared the visible one's, which then
+        // re-registered, and the notifications kept the walkthrough's
+        // pending timer from ever firing (seen live on 2026-09-28).
+        const original = Element.prototype.getBoundingClientRect
+        Element.prototype.getBoundingClientRect = function () {
+            const left = this.closest('.mobile-bottom-nav') ? 1000 : 0
+            return { top: 0, left, right: left + 40, bottom: 40, width: 40, height: 40, x: left, y: 0 }
+        }
+        try {
+            setViewport(500)
+            const mobileRegistry = new TourAnchorRegistry()
+            const { unmount } = render(
+                <TourRegistryContext.Provider value={mobileRegistry}>
+                    <MemoryRouter initialEntries={['/continue']}>
+                        <ThemeProvider>
+                            <AuthProvider user={{ username: 'x', role: 'admin' }}>
+                                <AudioPlayerProvider>
+                                    <AppShell user={{ username: 'x', role: 'admin' }} setUser={vi.fn()} />
+                                </AudioPlayerProvider>
+                            </AuthProvider>
+                        </ThemeProvider>
+                    </MemoryRouter>
+                </TourRegistryContext.Provider>,
+            )
+            expect(mobileRegistry.get('NavLibrary').left).toBe(1000)
+            await new Promise((r) => setTimeout(r, 320))
+            expect(mobileRegistry.get('NavLibrary').left).toBe(1000)
+            unmount()
+
+            setViewport(1200)
+            const desktopRegistry = new TourAnchorRegistry()
+            render(
+                <TourRegistryContext.Provider value={desktopRegistry}>
+                    <MemoryRouter initialEntries={['/continue']}>
+                        <ThemeProvider>
+                            <AuthProvider user={{ username: 'x', role: 'admin' }}>
+                                <AudioPlayerProvider>
+                                    <AppShell user={{ username: 'x', role: 'admin' }} setUser={vi.fn()} />
+                                </AudioPlayerProvider>
+                            </AuthProvider>
+                        </ThemeProvider>
+                    </MemoryRouter>
+                </TourRegistryContext.Provider>,
+            )
+            expect(desktopRegistry.get('NavLibrary').left).toBe(0)
+        } finally {
+            Element.prototype.getBoundingClientRect = original
+            setViewport(1200)
+        }
+    })
+
     it('tags the Library, Series, Transcription and Account nav links with their tour anchors', () => {
         renderShell({ username: 'x', role: 'admin' })
         expect(screen.getByTitle('Library')).toHaveAttribute('data-tour', 'NavLibrary')
@@ -388,7 +445,9 @@ describe('AppShell — guided walkthrough wiring (issue #598)', () => {
         expect(screen.getByTitle('System')).toHaveAttribute('data-tour', 'NavSystem')
         // Two elements share the "Account" title (the avatar and the name/role
         // block); only the second carries the anchor.
-        expect(document.querySelector('a.info[title="Account"]')).toHaveAttribute('data-tour', 'NavAccount')
+        // The avatar, not .info: .info is display:none while the sidebar is
+        // collapsed, which is its resting state on desktop.
+        expect(document.querySelector('a.avatar[title="Account"]')).toHaveAttribute('data-tour', 'NavAccount')
     })
 
     it('does not tag the System nav link for a role that cannot see it', () => {

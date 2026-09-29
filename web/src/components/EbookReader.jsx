@@ -20,6 +20,7 @@ import useReaderProgress from '../hooks/useReaderProgress'
 import useIsMobile from '../hooks/useIsMobile'
 import { fontSizeCss } from '../lib/readerRendition'
 import { useTheme } from '../ThemeContext'
+import { TourAnchors, TourScreens, TourEvents, useTourAnchor, useTourScreen, useTourEmit } from '../tour/anchors'
 import './EbookReader.css'
 
 // Reader display prefs persist across sessions (issue #57) — device-local,
@@ -117,6 +118,34 @@ function EbookReader({ ebookId, pairId, initialChapter, initialTextPreview, onCl
     const progress = useReaderProgress({
         ebookId, fontSize, ready: !loading && !error, viewerRef, bufferRef,
     })
+
+    // ---- Tour anchors, screen readiness and events (issue #598 Track B) ----
+    const emitTourEvent = useTourEmit()
+    const toolbarAnchorRef = useTourAnchor(TourAnchors.ReaderToolbar)
+    const progressAnchorRef = useTourAnchor(TourAnchors.ReaderProgress)
+    const switchToAudioAnchorRef = useTourAnchor(TourAnchors.ReaderSwitchToAudio, { enabled: !!(onSwitchToAudio && pairId) })
+    const pageAnchorRef = useTourAnchor(TourAnchors.ReaderPage)
+    // The rendition container already carries `viewerRef` (useEpubRendition
+    // measures and mounts epub.js into it) — the anchor needs the same node,
+    // so this merges the two rather than fighting over the one `ref` slot.
+    const setViewerRef = useCallback((el) => {
+        viewerRef.current = el
+        pageAnchorRef(el)
+    }, [pageAnchorRef])
+
+    // `ready` mirrors the existing !loading && !error gate below; reported
+    // from mount (loading starts true, so this starts false — "loading" per
+    // issue #652's rule) and readerReady() fires exactly once, the first time
+    // it flips true.
+    const ready = !loading && !error
+    useTourScreen(TourScreens.Reader, ready)
+    const emittedReaderReadyRef = useRef(false)
+    useEffect(() => {
+        if (ready && !emittedReaderReadyRef.current) {
+            emittedReaderReadyRef.current = true
+            emitTourEvent(TourEvents.readerReady())
+        }
+    }, [ready]) // eslint-disable-line react-hooks/exhaustive-deps
     // Save-button feedback: 'saved' shows the ✓, 'error' shows "Not saved".
     // The ✓ only ever means a write actually landed (issue #159) — it used to
     // flash success even while the gate silently swallowed every save.
@@ -916,7 +945,7 @@ function EbookReader({ ebookId, pairId, initialChapter, initialTextPreview, onCl
     return (
         <div className="ebook-reader-overlay">
             {/* Toolbar */}
-            <div className="ebook-toolbar">
+            <div className="ebook-toolbar" ref={toolbarAnchorRef}>
                 <div className="ebook-toolbar-left">
                     <button className="btn-icon" onClick={onClose} title="Close reader">
                         <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2">
@@ -939,6 +968,7 @@ function EbookReader({ ebookId, pairId, initialChapter, initialTextPreview, onCl
                     {onSwitchToAudio && pairId && (
                         <button
                             className="btn-icon switch-format-btn"
+                            ref={switchToAudioAnchorRef}
                             onClick={onSwitchToAudio}
                             title="Switch to Audiobook"
                         >
@@ -986,7 +1016,8 @@ function EbookReader({ ebookId, pairId, initialChapter, initialTextPreview, onCl
                     <button
                         type="button"
                         className="ebook-progress-text"
-                        onClick={progress.cycle}
+                        ref={progressAnchorRef}
+                        onClick={() => { progress.cycle(); emitTourEvent(TourEvents.readerProgressModeChanged()) }}
                         aria-label={`Reading progress: ${progressText}${progress.fallback ? ' (ebook pages)' : ''}, tap to change`}
                         title={progress.notice ?? undefined}
                     >
@@ -1086,7 +1117,7 @@ function EbookReader({ ebookId, pairId, initialChapter, initialTextPreview, onCl
                     </svg>
                 </button>
 
-                <div ref={viewerRef} className="ebook-viewer" />
+                <div ref={setViewerRef} className="ebook-viewer" />
 
                 <button className="ebook-nav-btn next" onClick={() => { noteUserNavigation(); renditionRef.current?.next() }} title="Next page">
                     <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" strokeWidth="2">

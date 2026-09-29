@@ -51,8 +51,15 @@ export default defineConfig({
         port: 3000,
         proxy: {
             '/api': {
-                target: 'http://localhost:8000',
+                // TANDEM_DEV_API points the dev server at another API, such as
+                // the public demo, for checking a branch against real data
+                // without a local server. A browser-ish User-Agent goes with
+                // it: a CDN in front of a remote server may refuse an empty one.
+                target: process.env.TANDEM_DEV_API || 'http://localhost:8000',
                 changeOrigin: true,
+                headers: process.env.TANDEM_DEV_API
+                    ? { 'User-Agent': 'Mozilla/5.0 (Tandem dev server)' }
+                    : undefined,
             },
         },
     },

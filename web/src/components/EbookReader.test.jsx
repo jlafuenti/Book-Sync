@@ -1,6 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
 import EbookReader, { executeRestore } from './EbookReader'
+import { TourAnchors, TourScreens, TourRegistryContext, TourControllerContext } from '../tour/anchors'
+import { TourAnchorRegistry } from '../tour/TourAnchorRegistry'
 
 const {
     fetchEbookBlobMock, getPositionMock, updatePositionMock, matchTextToAudioMock,
@@ -1085,5 +1087,72 @@ describe('EbookReader — initial text-nav pass', () => {
         fireEvent.click(screen.getByTitle('Save position'))
 
         await waitFor(() => expect(updatePositionMock).toHaveBeenCalled())
+    })
+})
+
+// Issue #598 Track B: the walkthrough's Reader step needs a real element per
+// anchor, published for the whole toolbar/button/container regardless of
+// what text they show, plus readerReady()/readerProgressModeChanged() events
+// and a settled report that starts loading and flips once, on ready.
+describe('EbookReader tour anchors, screen readiness and events (issue #598 Track B)', () => {
+    function renderWithTour(props = {}, { registry, controller } = {}) {
+        const { book, rendition, handlers, doc } = makeFakeBook(LONG_TEXT)
+        ePubMock.mockReturnValue(book)
+        let tree = (
+            <EbookReader
+                ebookId={7} pairId={42} initialChapter={null} initialTextPreview={null}
+                bookTitle="Test Book" onClose={vi.fn()} onSwitchToAudio={vi.fn()}
+                {...props}
+            />
+        )
+        if (controller) tree = <TourControllerContext.Provider value={controller}>{tree}</TourControllerContext.Provider>
+        if (registry) tree = <TourRegistryContext.Provider value={registry}>{tree}</TourRegistryContext.Provider>
+        const view = render(tree)
+        return { book, rendition, handlers, doc, ...view }
+    }
+
+    it('tags the toolbar, progress button, switch-to-audio button and rendition container', async () => {
+        const { rendition } = renderWithTour()
+        await waitFor(() => expect(rendition.display).toHaveBeenCalled())
+
+        expect(document.querySelector('.ebook-toolbar')).toHaveAttribute('data-tour', TourAnchors.ReaderToolbar)
+        expect(document.querySelector('button.ebook-progress-text')).toHaveAttribute('data-tour', TourAnchors.ReaderProgress)
+        expect(screen.getByTitle('Switch to Audiobook')).toHaveAttribute('data-tour', TourAnchors.ReaderSwitchToAudio)
+        expect(document.querySelector('.ebook-viewer')).toHaveAttribute('data-tour', TourAnchors.ReaderPage)
+    })
+
+    it('does not render (or tag) ReaderSwitchToAudio when there is no pair to switch to', async () => {
+        renderWithTour({ pairId: null, onSwitchToAudio: null })
+        await screen.findByTitle('Save position')
+
+        expect(screen.queryByTitle('Switch to Audiobook')).toBeNull()
+        expect(document.querySelector(`[data-tour="${TourAnchors.ReaderSwitchToAudio}"]`)).toBeNull()
+    })
+
+    it('reports Reader loading from mount and settled once ready, emitting readerReady() exactly once', async () => {
+        const registry = new TourAnchorRegistry()
+        const controller = { onEvent: vi.fn() }
+        expect(registry.screenState(TourScreens.Reader)).toBe('unreported')
+        renderWithTour({}, { registry, controller })
+        // loading starts true synchronously (useEpubRendition's initial
+        // state), before the book has even opened — settled must not report
+        // true until it actually is.
+        expect(registry.screenState(TourScreens.Reader)).toBe('loading')
+
+        await waitFor(() => expect(registry.screenState(TourScreens.Reader)).toBe('settled'))
+        expect(controller.onEvent).toHaveBeenCalledTimes(1)
+        expect(controller.onEvent).toHaveBeenCalledWith(expect.objectContaining({ kind: 'readerReady' }))
+    })
+
+    it('emits readerProgressModeChanged() after cycling the progress button', async () => {
+        const controller = { onEvent: vi.fn() }
+        renderWithTour({}, { controller })
+        await waitFor(() => expect(controller.onEvent).toHaveBeenCalledWith(
+            expect.objectContaining({ kind: 'readerReady' })))
+        controller.onEvent.mockClear()
+
+        fireEvent.click(document.querySelector('button.ebook-progress-text'))
+
+        expect(controller.onEvent).toHaveBeenCalledWith(expect.objectContaining({ kind: 'readerProgressModeChanged' }))
     })
 })
