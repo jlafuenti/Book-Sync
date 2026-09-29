@@ -16,6 +16,8 @@ operator must do by hand rather than read about afterwards.
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-09-29
+
 ### Added
 
 - A guided walkthrough of the web app (#598): a short, dismissible tour of Home, Library, a book's
@@ -84,6 +86,12 @@ operator must do by hand rather than read about afterwards.
 
 ### Upgrade notes
 
+- Migration `0030_web_tour_offered_at` adds a nullable `web_tour_offered_at` column to `users` and
+  fills nothing, so every existing account is offered the web walkthrough once. Its downgrade drops
+  the column; once it has run, do not deploy a build older than 0.8.0 without downgrading first.
+- `PUT /api/transcription/{pair_id}/text` is removed (#713). A script that edited transcripts
+  through it now gets an error (404 or 405); there is no replacement, since those edits never
+  reached the alignment.
 - After deploying #712, run a library scan: every scan retries the unpaired books, so audiobooks
   the old rule left unpaired get paired then (and queued for transcription if auto-transcribe is on).
   Their stored series still holds the folder name until the book is re-scanned or edited.
