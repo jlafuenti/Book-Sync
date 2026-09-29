@@ -25,25 +25,9 @@ const nm = (pkg) => `/repo/web/node_modules/${pkg}/dist/index.js`
 
 const groupFor = (id) => codeSplitting.groups.find(g => g.test.test(id))?.name
 
-// Rolldown's RUNTIME_MODULE_ID: the CommonJS interop helpers every CJS package
-// (epub.js's whole tree) is wrapped with.
-const RUNTIME = '\0rolldown/runtime.js'
-
 describe('codeSplitting (issues #281, #516)', () => {
-    it('declares the runtime and epubjs groups, runtime first', () => {
-        // Groups are tried in order; the runtime must be claimed before
-        // anything broader could match it.
-        expect(codeSplitting.groups.map(g => g.name)).toEqual(['rolldown-runtime', 'epubjs'])
-    })
-
-    it('gives the Rolldown runtime a chunk of its own', () => {
-        // Left alone, Rolldown puts the helpers in a common chunk alongside
-        // app code shared by the entry and lazy routes (api.js, measured on the
-        // first Vite 8 build). epubjs imports the helpers, so its hash would
-        // then follow every edit to that app code.
-        expect(groupFor(RUNTIME)).toBe('rolldown-runtime')
-        expect(groupFor('/repo/web/node_modules/rolldown/dist/index.mjs')).toBeUndefined()
-        expect(groupFor('/repo/web/src/rolldown/runtime.js')).toBeUndefined()
+    it('declares exactly one group, named epubjs', () => {
+        expect(codeSplitting.groups.map(g => g.name)).toEqual(['epubjs'])
     })
 
     it('puts epub.js and its dependency tree in one long-lived chunk', () => {
@@ -71,10 +55,9 @@ describe('codeSplitting (issues #281, #516)', () => {
         expect(groupFor('C:\\repo\\web\\node_modules\\epubjs\\lib\\epub.js')).toBe('epubjs')
     })
 
-    it('uses stateless regexes, so repeated tests give the same answer', () => {
+    it('is a stateless regex, so repeated tests give the same answer', () => {
         // A /g or /y flag would make RegExp.test advance lastIndex between calls.
-        for (const { test } of codeSplitting.groups) {
-            expect(test.global || test.sticky).toBe(false)
-        }
+        const { test } = codeSplitting.groups[0]
+        expect(test.global || test.sticky).toBe(false)
     })
 })

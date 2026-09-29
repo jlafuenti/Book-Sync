@@ -44,9 +44,7 @@ operator must do by hand rather than read about afterwards.
 
 - The web app now builds with Vite 8 (#516), which bundles with Rolldown instead of Rollup and
   esbuild. The epub.js vendor chunk (#281) moves from Rollup's `manualChunks` to Rolldown's
-  `codeSplitting` groups and holds the same packages. Rolldown's CommonJS helpers, which that chunk
-  imports, get a small chunk of their own: left to Rolldown they landed next to the API client,
-  and every edit to it would have re-downloaded epub.js. Chunk file names and hashes change, so
+  `codeSplitting` groups and holds the same packages, but chunk file names and hashes change, so
   every installed PWA downloads the whole app once after this deploy. `@vitejs/plugin-react` goes
   to 5.2, not 6: version 6's optional Babel 8 chain still collides with `vite-plugin-pwa`'s
   Babel 7 one in npm's resolver, so that step stays open on #516.
