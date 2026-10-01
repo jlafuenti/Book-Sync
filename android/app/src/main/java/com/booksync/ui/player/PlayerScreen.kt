@@ -1460,10 +1460,14 @@ fun PlayerScreen(
                             fontSize = 13.sp,
                         )
                     }
-                    if (downloadProgress != null) {
+                    // Captured, not read through the delegate (issue #765): Compose
+                    // re-runs the `progress` lambda outside this composition, and by
+                    // then a finished download has set the state back to null.
+                    val progressPct = downloadProgress
+                    if (progressPct != null) {
                         Spacer(Modifier.height(8.dp))
                         LinearProgressIndicator(
-                            progress = { downloadProgress!! / 100f },
+                            progress = { progressPct / 100f },
                             modifier = Modifier.fillMaxWidth(),
                             color = colors.accent,
                             trackColor = colors.border,
