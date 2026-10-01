@@ -64,7 +64,7 @@ class SyncMap(Base):
     )
 
     # Relationships
-    book_pair =relationship("BookPair", back_populates="sync_map")
+    book_pair = relationship("BookPair", back_populates="sync_map")
     sync_points = relationship(
         "SyncPoint", back_populates="sync_map",
         cascade="all, delete-orphan",
