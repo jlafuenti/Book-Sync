@@ -162,4 +162,22 @@ class ReadAlongWiringTest {
             assertTrue("ReaderActivity must declare $signature", activity.contains(signature))
         }
     }
+
+    @Test
+    fun `the current sentence is decorated in its own group and cleared on stop`() {
+        val apply = activity.substringAfter("private fun applyReadAlongDecoration(").substringBefore("\n    }")
+        assertTrue(apply.contains("Decoration("))
+        assertTrue(apply.contains("applyDecorations(listOf(decoration), READ_ALONG_DECORATION_GROUP)"))
+        assertTrue(apply.contains("ReadAlongStyle.UNDERLINE -> Decoration.Style.Underline("))
+        assertTrue(apply.contains("ReadAlongStyle.HIGHLIGHT -> Decoration.Style.Highlight("))
+        val clear = activity.substringAfter("private fun clearReadAlongDecoration()").substringBefore("\n    }")
+        assertTrue(clear.contains("applyDecorations(emptyList(), READ_ALONG_DECORATION_GROUP)"))
+    }
+
+    @Test
+    fun `a style change re-decorates the sentence being followed`() {
+        assertTrue(activity.contains("readAlongSettings.setListener {"))
+        val listener = activity.substringAfter("readAlongSettings.setListener {").substringBefore("\n        }")
+        assertTrue(listener.contains("readAlong.currentPoint?.let { applyReadAlongDecoration(it) }"))
+    }
 }
