@@ -16,11 +16,29 @@ operator must do by hand rather than read about afterwards.
 
 ## [Unreleased]
 
+### Added
+
+- Every sync map now records which version of the EPUB sentence splitter built it (#774), and an
+  admin-only background job rebuilds the maps that are outdated. `GET`/`POST
+  /api/troubleshoot/sync-map-rebuild` (and `.../cancel`) report the count, start a run, or stop it;
+  a dry run does the full work, bookmark re-mapping included, reports what it would change and
+  discards it. The job reuses each pair's cached transcript, carries saved positions over, skips
+  pairs that are queued for transcription, and never starts on its own. While it runs, the
+  per-pair realign endpoint answers 409.
+
 ### Fixed
 
 - The sentence splitter no longer joins a paragraph to the next one, and a fragment under three
   words now stays with its neighbour instead of being dropped. Existing sync maps keep the old
   split until they are rebuilt (#774).
+
+### Upgrade notes
+
+- Migration `0031_sync_map_splitter_version` adds a `splitter_version` column to `sync_maps`,
+  defaulting to 1. After upgrading, every existing sync map is reported as outdated; nothing is
+  rebuilt automatically. An admin starts the rebuild from the System page (or the endpoints above):
+  roughly ten seconds per pair, no re-transcription, saved positions are carried over. Run the dry
+  run first. A restart in the middle only leaves the remaining maps outdated for the next run.
 
 ## [0.8.0] - 2026-09-29
 

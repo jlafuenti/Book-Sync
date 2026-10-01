@@ -1151,6 +1151,47 @@ class SyncMapAuditResponse(StrictResponse):
     pairs: List[SyncMapAuditRow]
 
 
+class SyncMapRebuildStart(BaseModel):
+    """Body of `POST /api/troubleshoot/sync-map-rebuild` (issue #774)."""
+
+    dry_run: bool = False
+    #: Exactly these pairs, whatever their splitter version. Omit for every
+    #: outdated map on a synced pair.
+    pair_ids: Optional[List[int]] = None
+    #: Cap on the outdated-map selection (ignored when `pair_ids` is given).
+    limit: Optional[int] = Field(None, ge=1)
+
+
+class SyncMapRebuildPairResult(StrictResponse):
+    pair_id: int
+    #: "rebuilt", "dry_run", "failed" or "skipped".
+    outcome: str
+    detail: Optional[str]
+    old_points: Optional[int]
+    new_points: Optional[int]
+    matched: Optional[int]
+    old_multiline_points: Optional[int]
+    bookmarks: Optional[int]
+    bookmarks_remapped: Optional[int]
+
+
+class SyncMapRebuildStatus(StrictResponse):
+    current_version: int
+    outdated: int
+    total: int
+    running: bool
+    dry_run: bool
+    started_at: Optional[datetime]
+    finished_at: Optional[datetime]
+    to_process: int
+    processed: int
+    succeeded: int
+    failed: int
+    skipped: int
+    cancelled: bool
+    results: List[SyncMapRebuildPairResult]
+
+
 # --- library ------------------------------------------------------------------
 
 class VerifyRow(StrictResponse):

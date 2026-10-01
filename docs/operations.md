@@ -1004,6 +1004,38 @@ delete that line from `docker-compose.yml`, and `docker compose up -d`.
 it is still there). Never run `git clean -xfd` in the checkout during an upgrade — it deletes the
 covers, working files and logs along with the untracked build junk you meant to remove.
 
+## Rebuilding sync maps after a splitter change
+
+A sync map's `sentence_index` values only mean something relative to the sentence splitter that
+produced them. Each map records that in `sync_maps.splitter_version`; the splitter's current
+version is `SENTENCE_SPLITTER_VERSION` in `server/services/epub_parser.py`. When a release changes
+how EPUB text is split, maps stamped with a lower number are *outdated*: they keep working, but they
+name the old coordinates until they are rebuilt from the pair's cached transcript. Migration 0031
+stamped every pre-existing map as version 1. **Nothing rebuilds on deploy or at startup.**
+
+Three admin-only endpoints drive the rebuild (the System page uses the same ones):
+
+| Endpoint | What it does |
+|---|---|
+| `GET /api/troubleshoot/sync-map-rebuild` | The current version, how many synced pairs' maps are outdated, and the state and per-pair results of the latest run |
+| `POST /api/troubleshoot/sync-map-rebuild` | Starts a run (`202`; `409` if one is active). Body: `dry_run`, optional `pair_ids` (exactly those pairs, outdated or not), optional `limit` |
+| `POST /api/troubleshoot/sync-map-rebuild/cancel` | Stops before the next pair; the one in flight finishes |
+
+**Run `dry_run` first.** It does the whole job for each pair, including re-mapping bookmarks, and
+then discards it, so the counts it reports (old and new points, bookmarks remapped) are what a real
+run would produce. A real run takes roughly ten seconds per pair, needs no re-transcription, and
+carries saved reading positions over (`docs/position-sync-contract.md`, "Re-transcription").
+
+Pairs that are not synced, are in the transcription queue (`pending` or `in_progress`), have no
+cached transcript, or whose ebook is not an EPUB are skipped and reported as such; they stay
+outdated. A pair that fails is reported with a short reason (never a file path) and left
+untouched, and the run goes on. While a run is active the per-pair `POST /api/transcription/{id}/realign`
+answers 409, so two writers never share one map.
+
+The job is in-process and single-process like the transcription queue. A restart in the middle
+loses the run's report but not its work: each finished pair is already committed and stamped, so
+the remainder is simply still outdated, and starting again picks up where it stopped.
+
 ## Users
 
 The first account is the superadmin created on first boot. How anyone else gets one is the
