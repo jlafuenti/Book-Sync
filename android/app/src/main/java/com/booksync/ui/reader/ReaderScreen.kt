@@ -191,6 +191,8 @@ fun ReaderScreen(
     onSwitchToAudio: () -> Unit,
     /** Non-zero only when the player handed over — see Routes.READER. */
     handoffAudioMs: Long = 0L,
+    /** True when the player's Read along entry opened the reader — see Routes.READER. */
+    readAlong: Boolean = false,
     viewModel: ReaderViewModel = hiltViewModel(),
 ) {
     val pair by viewModel.pair.collectAsState()
@@ -237,6 +239,7 @@ fun ReaderScreen(
                 if (handoffAudioMs > 0) {
                     putExtra(ReaderActivity.EXTRA_HANDOFF_AUDIO_MS, handoffAudioMs)
                 }
+                if (readAlong) putExtra(ReaderActivity.EXTRA_READ_ALONG, true)
             }
             launcher.launch(intent)
         }

@@ -1,5 +1,6 @@
 package com.booksync.ui.reader
 
+import android.content.ComponentName
 import android.os.Bundle
 import android.os.Handler
 import android.os.SystemClock
@@ -21,10 +22,17 @@ import androidx.core.net.toUri
 import androidx.core.view.ViewCompat
 import androidx.core.view.doOnNextLayout
 import androidx.core.view.WindowInsetsCompat
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
+import androidx.media3.common.Player
+import androidx.media3.session.MediaController
+import androidx.media3.session.SessionCommand
+import androidx.media3.session.SessionToken
 import com.booksync.R
 import com.booksync.data.auth.hasMinRole
 import com.booksync.data.local.entity.BookPairEntity
+import com.booksync.data.local.entity.SyncPointEntity
 import com.booksync.data.remote.TokenManager
 import com.booksync.data.remote.dto.TranscriptionStatus
 import com.booksync.data.repository.BookSyncRepository
@@ -37,6 +45,9 @@ import com.booksync.data.sync.planRestore
 import com.booksync.data.util.NetworkMonitor
 import com.booksync.diagnostics.DiagnosticLogger
 import com.booksync.diagnostics.LogChannel
+import com.booksync.player.AudioPlayerService
+import com.booksync.player.MediaId
+import com.booksync.player.PairMediaItems
 import com.booksync.ui.components.TranscriptionStatusDialog
 import com.booksync.ui.tour.TourAnchor
 import com.booksync.ui.tour.TourAnchorRegistry
@@ -108,6 +119,8 @@ class ReaderActivity : AppCompatActivity() {
          * restores from the shared ladder alone. See [withHandoffAnchor].
          */
         const val EXTRA_HANDOFF_AUDIO_MS = "handoffAudioMs"
+        /** The player's Read along entry: the reader follows the audio that keeps playing (issue #762). */
+        const val EXTRA_READ_ALONG = "readAlong"
 
         /**
          * A standalone (unpaired) ebook — issue #169. Mutually exclusive with
@@ -141,12 +154,23 @@ class ReaderActivity : AppCompatActivity() {
         private const val PAGE_COUNT_MAX_RETRIES = 2
         // Waits before each live page probe attempt (issue #730); a newer locator cancels them.
         private val PROBE_RETRY_DELAYS_MS = longArrayOf(0L, 250L, 500L, 1000L, 2000L, 4000L)
+        // Read-along (issue #762): how often the audio position is sampled
+        // (the cadence PlayerViewModel and MiniPlayerBar poll at) and the
+        // toolbar icon's alpha while following is off (255 while on).
+        private const val READ_ALONG_POLL_MS = 500L
+        private const val READ_ALONG_ICON_OFF_ALPHA = 140
+        // How long after a suspect locator emission to wait before asking the
+        // page whether the sentence is still on screen (Readium's snap-back
+        // and settle emissions arrive well inside this).
+        private const val READ_ALONG_SETTLE_MS = 700L
     }
 
     @Inject lateinit var repository: BookSyncRepository
     @Inject lateinit var dictionaryRepository: com.booksync.data.repository.DictionaryRepository
     @Inject lateinit var tokenManager: TokenManager
     @Inject lateinit var networkMonitor: NetworkMonitor
+    /** The configured server, for the stream URL read-along loads when the book is not downloaded (issue #762). */
+    @Inject lateinit var serverUrlManager: com.booksync.data.remote.ServerUrlManager
     /** The shareable app log; the progress indicator's page-count drift goes here (issue #730). */
     @Inject lateinit var diagnosticLogger: DiagnosticLogger
 
@@ -310,12 +334,28 @@ class ReaderActivity : AppCompatActivity() {
     private var relayoutRestoreTarget: Locator? = null
     private var relayoutRestoreJob: kotlinx.coroutines.Job? = null
 
+    // ============ Read-along state (issue #762) ============
+
+    /** Replaced with the pair's sync points each time following starts; see [startFollowing]. */
+    private var readAlong: ReadAlongController = ReadAlongController(emptyList())
+    private var readAlongMediaController: MediaController? = null
+    private var readAlongPollJob: Job? = null
+    /** The pending settle-then-probe for a suspect locator emission; see [verifySuspectedTurn]. */
+    private var suspectVerifyJob: Job? = null
+
+    /** One-shot: the [EXTRA_READ_ALONG] request is honoured on the first locator only. */
+    private var readAlongRequested = false
+
     // UI views
     private lateinit var topBar: View
     private lateinit var bottomBar: View
     private lateinit var toolbar: MaterialToolbar
     private lateinit var progressText: TextView
     private lateinit var progressSlider: SeekBar
+    private lateinit var readAlongBar: View
+    private lateinit var readAlongPlay: android.widget.ImageButton
+    private lateinit var readAlongTime: TextView
+    private lateinit var backToAudio: com.google.android.material.button.MaterialButton
 
     // ============ Progress indicator state (issue #730) ============
 
@@ -445,6 +485,12 @@ class ReaderActivity : AppCompatActivity() {
         toolbar = findViewById(R.id.toolbar)
         progressText = findViewById(R.id.progress_text)
         progressSlider = findViewById(R.id.progress_slider)
+        readAlongBar = findViewById(R.id.read_along_bar)
+        readAlongPlay = findViewById(R.id.btn_read_along_play)
+        readAlongTime = findViewById(R.id.read_along_time)
+        backToAudio = findViewById(R.id.btn_back_to_audio)
+        readAlongPlay.setOnClickListener { toggleReadAlongPlayback() }
+        backToAudio.setOnClickListener { onBackToAudioTapped() }
 
         // Tap to cycle percent / pages / chapter / time (issue #730); the mode persists.
         // Reported to the tour (issue #743, TourEvent.ReaderProgressModeChanged) on every
@@ -472,9 +518,13 @@ class ReaderActivity : AppCompatActivity() {
         // about, just one screen further in.
         if (isStandalone) {
             toolbar.menu.findItem(R.id.action_switch_audio)?.isVisible = false
+            // Likewise nothing to follow without audio (issue #762).
+            toolbar.menu.findItem(R.id.action_read_along)?.isVisible = false
         }
+        toolbar.menu.findItem(R.id.action_read_along)?.icon?.alpha = READ_ALONG_ICON_OFF_ALPHA
         toolbar.setOnMenuItemClickListener { item ->
             when (item.itemId) {
+                R.id.action_read_along -> { toggleReadAlong(); true }
                 R.id.action_switch_audio -> { checkReadinessThenSyncAudioToPage(); true }
                 R.id.action_font_settings -> { showDisplaySettings(); true }
                 else -> false
@@ -1073,6 +1123,17 @@ class ReaderActivity : AppCompatActivity() {
                 pageCountStarted = true
                 if (!pageLayoutCaptured && pageCountTriggerJob?.isActive != true) requestPageCount()
 
+                // The player's Read along entry (issue #762): start following
+                // once the first locator has settled, so the restore is not
+                // mistaken for a manual turn. The request is asynchronous, so
+                // this emission itself is still handled as before.
+                if (!readAlongRequested && !isStandalone &&
+                    intent.getBooleanExtra(EXTRA_READ_ALONG, false)
+                ) {
+                    readAlongRequested = true
+                    requestFollowing(seekToPage = false)
+                }
+
                 // A configuration change (rotation, dark-mode toggle, split
                 // screen — handled in place since issue #163) re-lays out the
                 // WebView, which re-emits a recomputed locator with NO user
@@ -1096,6 +1157,25 @@ class ReaderActivity : AppCompatActivity() {
                 // (goToProgress) call onUserNavigation() themselves so a
                 // user-initiated jump isn't swallowed just because its own
                 // echo matches.
+                // Following audio (issue #762): Readium echoes our own
+                // text-anchored jump as a locator with a progression nobody
+                // knows in advance, so the controller tells our echo from the
+                // user turning the page by hand.
+                when (readAlong.onLocatorEmitted(System.currentTimeMillis())) {
+                    ReadAlongController.LocatorVerdict.Echo -> {
+                        probeLivePage(shownAtMs, userTurn = false)
+                        return@collect
+                    }
+                    ReadAlongController.LocatorVerdict.Suspect -> {
+                        // Readium also emits late settle locators with nobody
+                        // touching the page, so ask the page before pausing.
+                        // Fall through meanwhile: while following, the save
+                        // below is dropped anyway; once confirmed, saves resume.
+                        verifySuspectedTurn()
+                    }
+                    ReadAlongController.LocatorVerdict.Ignored -> Unit
+                }
+
                 val target = programmaticTarget
                 val isEcho = isProgrammaticEcho(
                     targetHref = target?.href?.toString(),
@@ -1652,6 +1732,13 @@ class ReaderActivity : AppCompatActivity() {
             Log.d(TAG, "savePosition: dropped, re-anchoring after resume")
             return
         }
+        // Following the audiobook (issue #762): the player service's heartbeat
+        // is the only writer, so the record stays audiobook-sourced. A reader
+        // save here would flip it to ebook-sourced every few seconds.
+        if (readAlong.isFollowing) {
+            Log.d(TAG, "savePosition: dropped, following audio — the service owns the position")
+            return
+        }
         // A standalone ebook has no pair row; everything below keys off
         // isStandalone instead (issue #169).
         if (!isStandalone && pair == null) return
@@ -2168,6 +2255,312 @@ class ReaderActivity : AppCompatActivity() {
         return "%d:%02d:%02d".format(h, m, s)
     }
 
+    // ============ Read-along (issue #762) ============
+    //
+    // While the audiobook plays, the reader follows the current sentence and
+    // turns the page by itself. The decisions live in [ReadAlongController];
+    // this section owns the MediaController, the poll and the Readium calls.
+    // While following, [savePosition] writes nothing, so the player service's
+    // heartbeat stays the only position writer (docs/position-sync-contract.md).
+
+    private fun toggleReadAlong() {
+        if (readAlong.state != ReadAlongController.State.Off) {
+            stopFollowing()
+        } else {
+            requestFollowing(seekToPage = true)
+        }
+    }
+
+    /** Readiness gate shared with Switch to Audio (issue #536): no sync map, no following. */
+    private fun requestFollowing(seekToPage: Boolean) {
+        if (isStandalone) return
+        lifecycleScope.launch {
+            val status = repository.readiness(pairId)
+            if (status != null) {
+                canTranscribeSwitch.value = hasMinRole(tokenManager.getRole().first(), "editor")
+                pendingSwitchStatus.value = status
+                return@launch
+            }
+            startFollowing(seekToPage)
+        }
+    }
+
+    private fun startFollowing(seekToPage: Boolean) {
+        lifecycleScope.launch {
+            val p = pair ?: return@launch
+            val points = repository.getSyncPoints(pairId)
+            val ctrl = readAlongMediaController ?: connectReadAlongController()
+            if (ctrl == null) {
+                android.widget.Toast.makeText(
+                    this@ReaderActivity, "Audio player unavailable", android.widget.Toast.LENGTH_SHORT,
+                ).show()
+                return@launch
+            }
+            val wantedId = MediaId.Pair(pairId).value
+            if (ctrl.currentMediaItem?.mediaId != wantedId) {
+                val item = PairMediaItems.build(
+                    p, repository.localAudioFile(p.audiobookFilename), serverUrlManager.currentUrl,
+                )
+                if (item == null) {
+                    Log.w(TAG, "read-along: no audio source for pair $pairId")
+                    return@launch
+                }
+                ctrl.setMediaItem(item)
+                ctrl.prepare()
+            }
+            if (seekToPage) {
+                // Start where the eye is, not where the audio was: the same
+                // page-to-audio match Switch to Audio performs (issue #114 / #131).
+                val visible = extractVisibleTextFromWebView()
+                val chapterIndex = navigator?.currentLocator?.value
+                    ?.let { publication?.spineIndexOf(it) }?.coerceAtLeast(0) ?: 0
+                val audioMs = if (visible.isPrecise) {
+                    repository.epubToAudioText(pairId, chapterIndex, visible.text)
+                } else 0
+                if (audioMs > 0) ctrl.seekTo(audioMs.toLong())
+            }
+            // playWhenReady, not isPlaying: a player that is buffering after the
+            // seek above is already set to play, and a second play() is a
+            // COMMAND_PLAY_PAUSE the service would log as a deliberate pause.
+            if (!ctrl.playWhenReady) ctrl.play()
+            readAlong = ReadAlongController(points)
+            readAlong.start(System.currentTimeMillis())
+            setFollowToolbar(active = true)
+            readAlongBar.visibility = View.VISIBLE
+            updateReadAlongPlayButton(ctrl.playWhenReady)
+            showBackToAudio(false)
+            startReadAlongPoll(ctrl)
+        }
+    }
+
+    private fun stopFollowing() {
+        readAlongPollJob?.cancel()
+        readAlongPollJob = null
+        suspectVerifyJob?.cancel()
+        suspectVerifyJob = null
+        readAlong.stop()
+        clearReadAlongDecoration()
+        setFollowToolbar(active = false)
+        readAlongBar.visibility = View.GONE
+        showBackToAudio(false)
+        // Playback and the position are left exactly as they are (issue #762).
+    }
+
+    private fun setFollowToolbar(active: Boolean) {
+        toolbar.menu.findItem(R.id.action_read_along)?.apply {
+            title = if (active) "Stop following" else "Follow audio"
+            icon?.alpha = if (active) 255 else READ_ALONG_ICON_OFF_ALPHA
+        }
+    }
+
+    /**
+     * Attaches to the already-running [AudioPlayerService], as
+     * `PlayerViewModel.connectToService` does. Null when the session cannot
+     * be reached (a broken install; the JVM) — read-along then says so and
+     * the reader carries on as an ordinary reader.
+     */
+    private suspend fun connectReadAlongController(): MediaController? {
+        val token = try {
+            SessionToken(applicationContext, ComponentName(applicationContext, AudioPlayerService::class.java))
+        } catch (e: Exception) {
+            Log.w(TAG, "read-along: session token failed", e)
+            return null
+        }
+        val future = MediaController.Builder(applicationContext, token).buildAsync()
+        val ctrl = try {
+            suspendCancellableCoroutine<MediaController> { cont ->
+                future.addListener(
+                    { cont.resumeWith(runCatching { future.get() }) },
+                    androidx.core.content.ContextCompat.getMainExecutor(this),
+                )
+                cont.invokeOnCancellation { MediaController.releaseFuture(future) }
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.w(TAG, "read-along: controller connect failed", e)
+            return null
+        }
+        ctrl.addListener(object : Player.Listener {
+            override fun onPlaybackStateChanged(playbackState: Int) {
+                when (playbackState) {
+                    Player.STATE_ENDED -> stopFollowing()
+                }
+            }
+
+            // playWhenReady rather than isPlaying, so a rebuffer does not flip
+            // the button to "play" while the audio is still meant to run.
+            override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
+                updateReadAlongPlayButton(playWhenReady)
+            }
+        })
+        readAlongMediaController = ctrl
+        return ctrl
+    }
+
+    private fun updateReadAlongPlayButton(isPlaying: Boolean) {
+        readAlongPlay.setImageResource(
+            if (isPlaying) android.R.drawable.ic_media_pause else android.R.drawable.ic_media_play,
+        )
+        readAlongPlay.contentDescription = if (isPlaying) "Pause audio" else "Play audio"
+    }
+
+    /** Samples the audio position while the reader is on screen; stops with the activity's STARTED state. */
+    private fun startReadAlongPoll(ctrl: MediaController) {
+        readAlongPollJob?.cancel()
+        readAlongPollJob = lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                while (true) {
+                    val audioMs = ctrl.currentPosition.toInt()
+                    readAlongTime.text = formatAudioTime(audioMs.toLong())
+                    readAlong.onAudioPosition(audioMs, System.currentTimeMillis())
+                        ?.let { onReadAlongDecorate(it.point) }
+                    delay(READ_ALONG_POLL_MS)
+                }
+            }
+        }
+    }
+
+    /** The audio reached a new sentence: mark it, then turn the page if it is not on screen. */
+    private fun onReadAlongDecorate(point: SyncPointEntity) {
+        applyReadAlongDecoration(point)
+        lifecycleScope.launch {
+            val preview = ReadAlongController.quoteFor(point.epubTextPreview) ?: return@launch
+            val visible = isSentenceVisible(
+                preview, "chapter ${point.epubChapter} sentence ${point.epubSentenceIndex}",
+            )
+            readAlong.onSentenceVisibility(point, visible, System.currentTimeMillis())
+                ?.let { jumpToSentence(it.point) }
+        }
+    }
+
+    /** PR 2 fills this in: mark [point]'s sentence in the page. */
+    private fun applyReadAlongDecoration(point: SyncPointEntity) {
+    }
+
+    /** PR 2 fills this in: remove the sentence mark. */
+    private fun clearReadAlongDecoration() {
+    }
+
+    private fun sentenceLocator(point: SyncPointEntity): Locator? {
+        val pub = publication ?: return null
+        val link = pub.readingOrder.getOrNull(point.epubChapter) ?: return null
+        val preview = ReadAlongController.quoteFor(point.epubTextPreview) ?: return null
+        return pub.locatorFromLink(link)?.copy(text = Locator.Text(highlight = preview))
+    }
+
+    private fun jumpToSentence(point: SyncPointEntity) {
+        val locator = sentenceLocator(point) ?: return
+        val nav = navigator ?: return
+        // Not a user navigation: the collector consults readAlong first and
+        // treats the echo as ours (ReadAlongController.onLocatorEmitted).
+        programmaticTarget = locator
+        if (!nav.go(locator, animated = false)) {
+            Log.w(TAG, "read-along: go() declined for chapter ${point.epubChapter}")
+        }
+    }
+
+    /**
+     * Whether the sentence's opening words are on the page now. Runs in the
+     * current chapter's document, like [extractVisibleTextFromWebView]. Only a
+     * text run found inside the current column counts as visible; "hidden"
+     * (found on another page) and "missing" (not in this chapter at all) both
+     * answer false so the caller jumps — a miss makes Readium decline the
+     * jump harmlessly. [where] names the sentence for the log; the text itself
+     * is never logged.
+     */
+    private suspend fun isSentenceVisible(preview: String, where: String = ""): Boolean {
+        val nav = navigator ?: return true
+        val js = """
+                (function(quote) {
+                    var want = quote.replace(/\s+/g, ' ').trim().substring(0, 60);
+                    if (!want) return 'missing';
+                    var walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null);
+                    var chars = [], owners = [], offsets = [], lastSpace = true, node;
+                    while ((node = walker.nextNode())) {
+                        var v = node.nodeValue;
+                        for (var i = 0; i < v.length; i++) {
+                            var ch = v.charAt(i);
+                            if (/\s/.test(ch)) {
+                                if (lastSpace) continue;
+                                ch = ' ';
+                                lastSpace = true;
+                            } else {
+                                lastSpace = false;
+                            }
+                            chars.push(ch);
+                            owners.push(node);
+                            offsets.push(i);
+                        }
+                    }
+                    var at = chars.join('').indexOf(want);
+                    if (at < 0) return 'missing';
+                    var last = at + want.length - 1;
+                    var range = document.createRange();
+                    range.setStart(owners[at], offsets[at]);
+                    range.setEnd(owners[last], offsets[last] + 1);
+                    var rects = range.getClientRects();
+                    var vpW = window.innerWidth;
+                    for (var r = 0; r < rects.length; r++) {
+                        // The current column's fragments sit in [0, vpW).
+                        if (rects[r].width > 0 && rects[r].left >= -1 && rects[r].left < vpW) return 'visible';
+                    }
+                    return 'hidden';
+                })(${org.json.JSONObject.quote(preview)})
+            """.trimIndent()
+        val answer = nav.evaluateJavascript(js).orEmpty()
+        if (answer.contains("missing")) Log.w(TAG, "read-along: sentence not found in page ($where)")
+        return answer.contains("visible")
+    }
+
+    /**
+     * A locator emission while following that was not our own jump's echo
+     * (issue #762). Only the page knows whether the user actually left the
+     * sentence being read: a settle emission leaves it on screen, a page turn
+     * does not. Nothing to compare against before the first audio tick.
+     */
+    private fun verifySuspectedTurn() {
+        // One probe per burst, after the page has settled: a drag that snaps
+        // back emits mid-gesture with the columns shifted, and a probe taken
+        // then reads the sentence as gone (seen on the emulator).
+        suspectVerifyJob?.cancel()
+        suspectVerifyJob = lifecycleScope.launch {
+            delay(READ_ALONG_SETTLE_MS)
+            val point = readAlong.currentPoint ?: return@launch
+            val quote = ReadAlongController.quoteFor(point.epubTextPreview) ?: return@launch
+            val visible = isSentenceVisible(
+                quote, "chapter ${point.epubChapter} sentence ${point.epubSentenceIndex}",
+            )
+            if (readAlong.onSuspectVerified(visible)) showBackToAudio(readAlong.isPaused)
+        }
+    }
+
+    private fun onBackToAudioTapped() {
+        val actions = readAlong.onBackToAudio(System.currentTimeMillis())
+        showBackToAudio(false)
+        actions.forEach { action ->
+            when (action) {
+                is ReadAlongController.Action.Decorate -> applyReadAlongDecoration(action.point)
+                is ReadAlongController.Action.Jump -> jumpToSentence(action.point)
+            }
+        }
+    }
+
+    private fun showBackToAudio(visible: Boolean) {
+        backToAudio.visibility = if (visible) View.VISIBLE else View.GONE
+    }
+
+    /** The reader's own play/pause: announces a deliberate pause like the player screen does. */
+    private fun toggleReadAlongPlayback() {
+        val ctrl = readAlongMediaController ?: return
+        if (ctrl.playWhenReady) {
+            ctrl.sendCustomCommand(SessionCommand(AudioPlayerService.CMD_USER_PAUSE, Bundle()), Bundle())
+            ctrl.pause()
+        } else {
+            ctrl.play()
+        }
+    }
+
     // ============ Lifecycle ============
 
     override fun onOptionsItemSelected(item: MenuItem): Boolean {
@@ -2265,6 +2658,9 @@ class ReaderActivity : AppCompatActivity() {
      * saves out from under the decision while it's being made.
      */
     private suspend fun reanchorAfterResume() {
+        // The poll resumes with STARTED and jumps to the audio's sentence on
+        // its own (issue #762); re-running the ladder would fight it.
+        if (readAlong.isFollowing) return
         val pub = publication ?: return
         val nav = navigator ?: return
 
@@ -2313,6 +2709,9 @@ class ReaderActivity : AppCompatActivity() {
         if (!isStandalone && pairId != 0) SyncMapInUse.unregister(pairId)
         positionSaveJob?.cancel()
         tourNavJob?.cancel()
+        readAlongPollJob?.cancel()
+        readAlongMediaController?.release()
+        readAlongMediaController = null
         // The page counter (issue #730): cancelling the count loads about:blank
         // on the main thread, so the WebView is destroyed after that has run.
         probeJob?.cancel()

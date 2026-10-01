@@ -63,6 +63,33 @@
         android:paddingTop="8dp"
         android:visibility="gone">
 
+        <!-- Read-along transport (issue #762): shown only while following the audio -->
+        <LinearLayout
+            android:id="@+id/read_along_bar"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:padding="8dp"
+            android:visibility="gone">
+
+            <ImageButton
+                android:id="@+id/btn_read_along_play"
+                android:layout_width="48dp"
+                android:layout_height="48dp"
+                android:background="@android:color/transparent"
+                android:src="@android:drawable/ic_media_pause"
+                android:contentDescription="Pause audio" />
+
+            <TextView
+                android:id="@+id/read_along_time"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="8dp"
+                android:textColor="@android:color/white"
+                android:textSize="14sp" />
+        </LinearLayout>
+
         <!-- Progress text -->
         <!-- Tap to cycle percent / pages / chapter / time (issue #730) -->
         <TextView
@@ -93,6 +120,17 @@
             android:layout_width="match_parent"
             android:layout_height="0dp" />
     </LinearLayout>
+
+    <!-- Shown when a manual page turn pauses read-along following (issue #762) -->
+    <com.google.android.material.button.MaterialButton
+        android:id="@+id/btn_back_to_audio"
+        style="@style/Widget.Material3.Button.TonalButton"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom|center_horizontal"
+        android:layout_marginBottom="96dp"
+        android:text="Back to audio"
+        android:visibility="gone" />
 
     <!-- Hosts ReaderOverlays (issue #597 Track C): TranscriptionStatusDialog
          (issue #536) and, while the walkthrough is running a Reader/Player
