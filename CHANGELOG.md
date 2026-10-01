@@ -32,6 +32,9 @@ operator must do by hand rather than read about afterwards.
 - The sentence splitter no longer joins a paragraph to the next one, and a fragment under three
   words now stays with its neighbour instead of being dropped. Existing sync maps keep the old
   split until they are rebuilt (#774).
+- Rebuilding or realigning a sync map no longer moves a never-read book's placeholder position
+  onto the first aligned sentence, which created reading progress for a book the reader had only
+  opened (#774).
 
 ### Upgrade notes
 

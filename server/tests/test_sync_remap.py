@@ -722,3 +722,85 @@ async def test_audiobook_bookmark_exactly_at_the_first_point_resolves_to_it(db):
     assert (bookmark.epub_chapter, bookmark.epub_sentence_index) == (0, 0)
     assert bookmark.sync_map_version == sm.version == 2
     assert bookmark.audio_position_ms == 9_000, "the audio file did not change"
+
+
+# ---------------------------------------------------------------------------
+# A row that holds no position (issue #774)
+#
+# Opening a book once leaves a bookmark at the origin: chapter 0, sentence 0,
+# audio 0, no attested map version, and the book's opening text as its preview.
+# The re-map used to text-match that preview, move the row onto the first
+# aligned sentence (a different chapter when front matter is unaligned), bump
+# `anchor_revision`, and project the result onto `user_progress` — creating
+# progress for a book the reader never started. A bulk rebuild would do that to
+# every such row in the library at once.
+# ---------------------------------------------------------------------------
+
+async def _seed_unread(db, *, source=BookmarkSource.EBOOK):
+    pair, bookmark = await _seed(
+        db, source=source,
+        epub_chapter=0, epub_sentence_index=0,
+        epub_text_preview="how vexingly quick daft zebras jump",
+        audio_position_ms=0,
+    )
+    bookmark.sync_map_version = None
+    bookmark.epub_progress_percent = 0.0
+    await db.commit()
+    return pair, bookmark
+
+
+async def test_unread_origin_row_is_left_untouched(db):
+    pair, bookmark = await _seed_unread(db)
+    before = bookmark.updated_at
+
+    await _retranscribe(db, pair.id)
+
+    await db.refresh(bookmark)
+    # Its preview matches chapter 1 on the new map; it must not be moved there.
+    assert (bookmark.epub_chapter, bookmark.epub_sentence_index) == (0, 0)
+    assert bookmark.audio_position_ms == 0
+    assert bookmark.sync_map_version is None
+    assert bookmark.anchor_revision == 7
+    assert bookmark.updated_at == before
+
+
+async def test_unread_origin_row_creates_no_progress(db):
+    pair, _bookmark = await _seed_unread(db)
+
+    await _retranscribe(db, pair.id)
+
+    rows = (await db.execute(
+        select(UserProgress).where(UserProgress.user_id == 1)
+    )).scalars().all()
+    assert rows == []
+
+
+async def test_unread_origin_row_with_null_fields_is_left_untouched(db):
+    pair, bookmark = await _seed_unread(db, source=BookmarkSource.AUDIOBOOK)
+    bookmark.epub_chapter = None
+    bookmark.epub_sentence_index = None
+    bookmark.audio_position_ms = None
+    await db.commit()
+
+    await _retranscribe(db, pair.id)
+
+    await db.refresh(bookmark)
+    assert bookmark.epub_chapter is None
+    assert bookmark.sync_map_version is None
+
+
+async def test_origin_row_that_attested_a_map_is_still_remapped(db):
+    """Only a row that never attested a map counts as unread: one stamped with
+    a version was resolved against real points and follows its text as usual."""
+    pair, bookmark = await _seed(
+        db, source=BookmarkSource.EBOOK,
+        epub_chapter=0, epub_sentence_index=0,
+        epub_text_preview="the quick brown fox jumps over the lazy dog",
+        audio_position_ms=0,
+    )
+
+    sm = await _retranscribe(db, pair.id)
+
+    await db.refresh(bookmark)
+    assert bookmark.epub_sentence_index == 2
+    assert bookmark.sync_map_version == sm.version

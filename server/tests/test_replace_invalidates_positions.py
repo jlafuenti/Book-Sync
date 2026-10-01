@@ -458,7 +458,7 @@ class TestRemapAfterInvalidationIsAnUpgrade:
 
         bookmark = Bookmark(
             user_id=1, book_pair_id=pair.id, source=BookmarkSource.EBOOK,
-            epub_chapter=0, epub_sentence_index=1, epub_text_preview=None,
+            epub_chapter=1, epub_sentence_index=0, epub_text_preview=None,
             anchor_revision=3, sync_map_version=1, captured_at=utcnow(),
         )
         db.add(bookmark)
@@ -471,8 +471,10 @@ class TestRemapAfterInvalidationIsAnUpgrade:
         await db.commit()
         await db.refresh(bookmark)
 
-        assert bookmark.epub_chapter == 0
-        assert bookmark.epub_sentence_index == 2  # chapter 0's first sentence
+        # Chapter 1, not 0: a cleared row in chapter 0 with nothing else is
+        # indistinguishable from a never-read one and is left alone (issue #774).
+        assert bookmark.epub_chapter == 1
+        assert bookmark.epub_sentence_index == 0  # chapter 1's first sentence
         assert bookmark.sync_map_version == 2
 
 
