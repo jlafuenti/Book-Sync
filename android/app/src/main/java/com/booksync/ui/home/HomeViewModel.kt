@@ -237,13 +237,16 @@ class HomeViewModel @Inject constructor(
                 repository.getRecentlyReadEbooksFlow(),
             ) { pairs, audiobooks, ebooks ->
                 val items = mutableListOf<HomeItem>()
-                // Issue #618: syncAllBookmarksAndProgress writes a
-                // user_progress audiobook row for every pair, so an
-                // in-progress paired book otherwise contributes both a
-                // pair_N row below and an audiobook_M row from `audiobooks`
-                // — despite that flow's name, it is not filtered to books
-                // without a pair. Android Auto's Continue Listening merges
-                // the same two sources and drops the duplicate the same way.
+                // Issue #618: a paired audiobook can still carry a
+                // user_progress row — from listening before it was paired,
+                // from Mark Complete, or from the pair's completion pulled at
+                // startup (issue #771), which keeps the row and its position
+                // when the pair is un-finished. So an in-progress paired book
+                // can contribute both a pair_N row below and an audiobook_M
+                // row from `audiobooks` — despite that flow's name, it is not
+                // filtered to books without a pair. Android Auto's Continue
+                // Listening merges the same two sources and drops the
+                // duplicate the same way.
                 val pairedAudiobookIds = pairs.map { it.audiobookId }.toSet()
                 // The ebook side of the same duplicate: `getRecentlyReadEbooksFlow`
                 // is not filtered to unpaired books either, so a downloaded paired

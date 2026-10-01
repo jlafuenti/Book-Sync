@@ -532,6 +532,21 @@ write that **moves the position and lands outside it** un-finishes the book
   PUTs (`ebook` + `audiobook`), which left the pair's own record un-finished
   while web wrote the pair scope; both now write `PUT /position/pair/{id}`.
   Standalone media keep their own scope.
+- **Android pulls a pair's flag from the pair row** (issue #771). Android's
+  Continue lists (Home and Android Auto) hide a finished pair by its local
+  `user_progress` rows, but a pair's completion lives only on the pair
+  bookmark, which the local bookmark table has no column for. The startup
+  reconcile (`PositionRepository.syncAllBookmarksAndProgress`, both the bulk
+  and the per-pair path) therefore projects each pair row's `is_completed`
+  onto the pair's own ebook and audiobook rows, setting and clearing alike, so
+  a fresh install hides what another device finished and a device that
+  finished a pair shows it again once another client un-finishes it. It runs
+  whenever the local bookmark is synced — on a tie as well as a pull — and
+  skips a row that is unsynced (an offline Mark Complete waiting for the
+  sweep) or newer than the pair row. A missing row is created only to carry
+  `true`, and is written synced so it is never pushed back as a
+  standalone-scope write. Before this, only the device that marked the pair
+  finished ever had the flag locally.
 
 > Why 98 %: EPUB back-matter (acknowledgements, previews, ads) means the reader
 > rarely reaches 100 % of the spine while actually reading. The audio tail

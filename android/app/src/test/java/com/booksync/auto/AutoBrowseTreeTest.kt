@@ -139,9 +139,9 @@ class AutoBrowseTreeTest {
 
     @Test
     fun `continue listening does not list a paired book twice`() {
-        // Issue #618: syncAllBookmarksAndProgress writes a user_progress
-        // audiobook row for every pair, so an in-progress paired book
-        // contributes both a pair_N row (from the pairs source) and an
+        // Issue #618: a paired audiobook can carry its own user_progress row
+        // (see continueListeningBooks), so an in-progress paired book can
+        // contribute both a pair_N row (from the pairs source) and an
         // audiobook_M row (from the standalone source). Drop the standalone
         // row the same way mergedLibrary does for the Library tab.
         val books = continueListeningBooks(
