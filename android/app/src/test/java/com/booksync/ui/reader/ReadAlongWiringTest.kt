@@ -117,6 +117,14 @@ class ReadAlongWiringTest {
         val pause = activity.substringAfter("private fun toggleReadAlongPlayback()").substringBefore("\n    }")
         assertTrue(pause.contains("AudioPlayerService.CMD_USER_PAUSE"))
         assertTrue(pause.contains("ctrl.pause()"))
+        assertTrue("decide on playWhenReady, not the momentary isPlaying", pause.contains("if (ctrl.playWhenReady)"))
+    }
+
+    @Test
+    fun `starting to follow plays only when the player is not already set to play`() {
+        val start = activity.substringAfter("private fun startFollowing(").substringBefore("\n    }")
+        assertTrue(start.contains("if (!ctrl.playWhenReady) ctrl.play()"))
+        assertTrue(!start.contains("if (!ctrl.isPlaying) ctrl.play()"))
     }
 
     @Test

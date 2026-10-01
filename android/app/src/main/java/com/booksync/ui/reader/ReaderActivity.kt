@@ -2319,12 +2319,15 @@ class ReaderActivity : AppCompatActivity() {
                 } else 0
                 if (audioMs > 0) ctrl.seekTo(audioMs.toLong())
             }
-            if (!ctrl.isPlaying) ctrl.play()
+            // playWhenReady, not isPlaying: a player that is buffering after the
+            // seek above is already set to play, and a second play() is a
+            // COMMAND_PLAY_PAUSE the service would log as a deliberate pause.
+            if (!ctrl.playWhenReady) ctrl.play()
             readAlong = ReadAlongController(points)
             readAlong.start(System.currentTimeMillis())
             setFollowToolbar(active = true)
             readAlongBar.visibility = View.VISIBLE
-            updateReadAlongPlayButton(ctrl.isPlaying)
+            updateReadAlongPlayButton(ctrl.playWhenReady)
             showBackToAudio(false)
             startReadAlongPoll(ctrl)
         }
@@ -2385,8 +2388,10 @@ class ReaderActivity : AppCompatActivity() {
                 }
             }
 
-            override fun onIsPlayingChanged(isPlaying: Boolean) {
-                updateReadAlongPlayButton(isPlaying)
+            // playWhenReady rather than isPlaying, so a rebuffer does not flip
+            // the button to "play" while the audio is still meant to run.
+            override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
+                updateReadAlongPlayButton(playWhenReady)
             }
         })
         readAlongMediaController = ctrl
@@ -2548,7 +2553,7 @@ class ReaderActivity : AppCompatActivity() {
     /** The reader's own play/pause: announces a deliberate pause like the player screen does. */
     private fun toggleReadAlongPlayback() {
         val ctrl = readAlongMediaController ?: return
-        if (ctrl.isPlaying) {
+        if (ctrl.playWhenReady) {
             ctrl.sendCustomCommand(SessionCommand(AudioPlayerService.CMD_USER_PAUSE, Bundle()), Bundle())
             ctrl.pause()
         } else {
