@@ -75,6 +75,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.launch
 import androidx.compose.ui.geometry.Rect as ComposeRect
+import org.readium.r2.navigator.Decoration
 import org.readium.r2.navigator.epub.EpubNavigatorFactory
 import org.readium.r2.navigator.epub.EpubNavigatorFragment
 import org.readium.r2.navigator.input.InputListener
@@ -163,6 +164,9 @@ class ReaderActivity : AppCompatActivity() {
         // page whether the sentence is still on screen (Readium's snap-back
         // and settle emissions arrive well inside this).
         private const val READ_ALONG_SETTLE_MS = 700L
+        // Readium decoration group for the sentence being followed; applying an
+        // empty list to it removes the mark without touching other decorations.
+        private const val READ_ALONG_DECORATION_GROUP = "read-along"
     }
 
     @Inject lateinit var repository: BookSyncRepository
@@ -476,6 +480,10 @@ class ReaderActivity : AppCompatActivity() {
         // Install before the navigator exists — the wrapper sits at the content
         // root and intercepts selection ActionModes from any future WebView.
         installSelectionInterceptor()
+        // A style change from Display Settings re-marks the sentence being followed.
+        readAlongSettings.setListener {
+            readAlong.currentPoint?.let { applyReadAlongDecoration(it) }
+        }
         loadPublication()
     }
 
@@ -1164,6 +1172,7 @@ class ReaderActivity : AppCompatActivity() {
                 when (readAlong.onLocatorEmitted(System.currentTimeMillis())) {
                     ReadAlongController.LocatorVerdict.Echo -> {
                         probeLivePage(shownAtMs, userTurn = false)
+                        requestReadAlongDecorationLayout()
                         return@collect
                     }
                     ReadAlongController.LocatorVerdict.Suspect -> {
@@ -2099,9 +2108,12 @@ class ReaderActivity : AppCompatActivity() {
     /** The "turn pages by tapping the edges" preference — see [handleReaderTap]. */
     private val edgeTapSettings: ReaderEdgeTapSettings by lazy { ReaderEdgeTapSettings(this) }
 
+    /** Read-along's highlight-or-underline preference (issue #762). */
+    private val readAlongSettings: ReadAlongSettings by lazy { ReadAlongSettings(this) }
+
     private fun showDisplaySettings() {
         val nav = navigator ?: return
-        displaySettings.showDialog(this, nav, edgeTapSettings, progressState) { renderProgress() }
+        displaySettings.showDialog(this, nav, edgeTapSettings, readAlongSettings, progressState) { renderProgress() }
     }
 
     // ============ Text Selection Sync ============
@@ -2434,12 +2446,49 @@ class ReaderActivity : AppCompatActivity() {
         }
     }
 
-    /** PR 2 fills this in: mark [point]'s sentence in the page. */
+    /**
+     * Marks [point]'s sentence with one Readium decoration in its own group;
+     * re-applying replaces the previous mark. Readium anchors it on the
+     * locator's text quote ([sentenceLocator]). While following is paused for
+     * a manual page turn nothing calls this, so the mark stays on the sentence
+     * that was current until [onBackToAudioTapped] applies the next one.
+     */
     private fun applyReadAlongDecoration(point: SyncPointEntity) {
+        val nav = navigator ?: return
+        val locator = sentenceLocator(point) ?: return
+        val style = when (readAlongSettings.style) {
+            ReadAlongStyle.UNDERLINE -> Decoration.Style.Underline(tint = readAlongSettings.tint)
+            ReadAlongStyle.HIGHLIGHT -> Decoration.Style.Highlight(tint = readAlongSettings.tint)
+        }
+        val decoration = Decoration(id = "read-along-current", locator = locator, style = style)
+        lifecycleScope.launch {
+            nav.applyDecorations(listOf(decoration), READ_ALONG_DECORATION_GROUP)
+            requestReadAlongDecorationLayout()
+        }
     }
 
-    /** PR 2 fills this in: remove the sentence mark. */
+    /**
+     * Readium lays a decoration out once, when it is added, from the text
+     * range's client rects at that moment. Added while the page is still
+     * settling (right after the open, or a jump), the item ends up with no
+     * boxes and stays invisible: the range is kept, only the layout is empty
+     * (seen on the emulator). The decorator re-lays out on request, so ask it
+     * again once the page has settled. Harmless when the boxes were drawn.
+     */
+    private fun requestReadAlongDecorationLayout() {
+        val nav = navigator ?: return
+        lifecycleScope.launch {
+            delay(READ_ALONG_SETTLE_MS)
+            nav.evaluateJavascript(
+                "(function(){try{readium.getDecorations('$READ_ALONG_DECORATION_GROUP').requestLayout()}catch(e){}})()",
+            )
+        }
+    }
+
+    /** Removes the sentence mark; called when following stops. */
     private fun clearReadAlongDecoration() {
+        val nav = navigator ?: return
+        lifecycleScope.launch { nav.applyDecorations(emptyList(), READ_ALONG_DECORATION_GROUP) }
     }
 
     private fun sentenceLocator(point: SyncPointEntity): Locator? {

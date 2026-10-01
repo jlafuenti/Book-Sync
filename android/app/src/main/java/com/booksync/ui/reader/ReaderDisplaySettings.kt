@@ -133,6 +133,7 @@ class ReaderDisplaySettings(private val context: Context) {
         activity: Activity,
         nav: EpubNavigatorFragment,
         edgeTapSettings: ReaderEdgeTapSettings,
+        readAlongSettings: ReadAlongSettings,
         progressState: ReaderProgressState,
         onProgressChanged: () -> Unit,
     ) {
@@ -304,6 +305,14 @@ class ReaderDisplaySettings(private val context: Context) {
                 progressState.pageMode = if (checkedId == R.id.btn_page_mode_print) "print" else "ebook"
                 onProgressChanged()
             }
+        }
+
+        // Read-along mark: highlight or underline (issue #762)
+        val styleGroup = dialogView.findViewById<com.google.android.material.button.MaterialButtonToggleGroup>(R.id.read_along_style_group)
+        styleGroup.check(if (readAlongSettings.style == ReadAlongStyle.UNDERLINE) R.id.btn_read_along_underline else R.id.btn_read_along_highlight)
+        styleGroup.addOnButtonCheckedListener { _, checkedId, isChecked ->
+            if (isChecked) readAlongSettings.style =
+                if (checkedId == R.id.btn_read_along_underline) ReadAlongStyle.UNDERLINE else ReadAlongStyle.HIGHLIGHT
         }
 
         val dialog = MaterialAlertDialogBuilder(activity)
