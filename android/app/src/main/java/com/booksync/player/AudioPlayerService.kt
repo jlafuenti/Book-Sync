@@ -359,29 +359,19 @@ class AudioPlayerService : MediaLibraryService() {
                     // onto a later involuntary stop.
                     pauseSavePolicy.onPlaybackStarted()
                     startAutoPositionSave()
-                } else {
-                    stopAutoPositionSave()
-                    // Pause is a session boundary — log it. Also covers the
-                    // sleep-timer path, which drops playWhenReady to false.
-                    // This is THE position write for a stop (issue #226): the
-                    // player screen used to run a second one from its 500 ms
-                    // poll loop just to claim the format, so every pause with
-                    // the screen open produced two PUTs and "switch to reader"
-                    // three.
-                    //
-                    // The listener still can't see WHY playback stopped — a
-                    // deliberate pause, audio focus loss, a Bluetooth
-                    // disconnect, the sleep timer all land here. So the screen
-                    // announces its deliberate pauses with CMD_USER_PAUSE and
-                    // [PauseSavePolicy] hands the verdict over: armed → this
-                    // one stop may claim the format; unarmed → claimFormat
-                    // stays false, the background-save-hijacks-routing bug the
-                    // claimFormat split exists to fix.
-                    saveCurrentPositionForAuto(
-                        appendToLog = true,
-                        claimFormat = pauseSavePolicy.consumeClaimFormat(),
-                        detached = true,
+                }
+                // The not-playing side is in onEvents: a rebuffer also lands
+                // here as isPlaying=false and must not be treated as a pause
+                // (issue #766).
+            }
+            override fun onEvents(player: Player, events: Player.Events) {
+                if (events.containsAny(
+                        Player.EVENT_IS_PLAYING_CHANGED,
+                        Player.EVENT_PLAY_WHEN_READY_CHANGED,
+                        Player.EVENT_PLAYBACK_STATE_CHANGED,
                     )
+                ) {
+                    onPlaybackMaybeStopped(player)
                 }
             }
             /**
@@ -776,7 +766,7 @@ class AudioPlayerService : MediaLibraryService() {
         if (player != null) {
             saveLastPosition(player.currentPosition, player.currentMediaItem?.mediaId)
             // Note: we don't log a history entry here. If the player was
-            // playing, the OS will stop it → onIsPlayingChanged(false) logs.
+            // playing, the OS will stop it → onPlaybackMaybeStopped logs.
             // If it was already paused, that pause already logged. Adding
             // a log here would double-log in the common "pause, close app" flow.
             if (!player.playWhenReady) {
@@ -1342,7 +1332,8 @@ class AudioPlayerService : MediaLibraryService() {
     /**
      * The one periodic position save in the app.
      *
-     * Driven by `onIsPlayingChanged`, so it covers every source of playback —
+     * Started by `onIsPlayingChanged(true)` and torn down by the stop check in
+     * `onEvents` ([onPlaybackMaybeStopped]), so it covers every source of playback —
      * the phone UI, Android Auto, and Cast alike. `PlayerViewModel` used to run
      * an identical 5-second loop of its own whenever the player screen was
      * open, which doubled the server write volume and made the app's two
@@ -1366,9 +1357,9 @@ class AudioPlayerService : MediaLibraryService() {
                 delay(AUTO_SAVE_INTERVAL_MS)
                 val now = System.currentTimeMillis()
                 // 30-min continuous-playback tick: write a single history entry
-                // and reset the timer. Only reached while isPlaying (the loop is
-                // torn down by stopAutoPositionSave on pause), so pauses freeze
-                // the clock automatically. A log entry is a boundary: it always
+                // and reset the timer. Only reached while playback is wanted (the
+                // loop is torn down by stopAutoPositionSave on a stop), so pauses
+                // freeze the clock automatically. A log entry is a boundary: it always
                 // pushes, and doubles as this tick's heartbeat.
                 if (continuousPlaybackLog.isDue(now)) {
                     saveCurrentPositionForAuto(appendToLog = true, claimFormat = true)
@@ -1376,9 +1367,10 @@ class AudioPlayerService : MediaLibraryService() {
                 }
                 // Heartbeat: keep the local position fresh, no history entry;
                 // push to the server only when the throttle window has passed.
-                // claimFormat=true: this loop only runs while playing (started
-                // on isPlaying=true, torn down by stopAutoPositionSave on
-                // pause), so every tick here is genuine active consumption.
+                // claimFormat=true: this loop only runs while the listener wants
+                // playback (started on isPlaying=true, torn down on a stop). It
+                // keeps running through a rebuffer (issue #766), where the
+                // position is frozen but the intent to listen is unchanged.
                 saveCurrentPositionForAuto(
                     appendToLog = false, claimFormat = true,
                     pushToServer = heartbeatThrottle.shouldPush(now),
@@ -1390,6 +1382,45 @@ class AudioPlayerService : MediaLibraryService() {
     private fun stopAutoPositionSave() {
         autoPositionSaveJob?.cancel()
         autoPositionSaveJob = null
+    }
+
+    /**
+     * THE position write for a stop (issue #226), run from the player
+     * listener's `onEvents` whenever play state, play-when-ready or the
+     * playback state changes.
+     *
+     * [PlaybackStopPolicy] decides whether this is a stop at all (issue #766):
+     * a rebuffer while the user still wants playback is not, and keeps the
+     * heartbeat running; a pause, including one pressed during a stall (which
+     * changes only playWhenReady), audio-focus loss, the sleep timer (it drops
+     * playWhenReady), an error and the end of the book are. The heartbeat job
+     * doubles as the "were we playing" edge, so one stop writes once however
+     * many callbacks report it.
+     *
+     * The listener still can't see WHY playback stopped — a deliberate pause,
+     * audio focus loss, a Bluetooth disconnect, the sleep timer all land here.
+     * So the screen announces its deliberate pauses with CMD_USER_PAUSE and
+     * [PauseSavePolicy] hands the verdict over: armed → this one stop may claim
+     * the format; unarmed → claimFormat stays false, the
+     * background-save-hijacks-routing bug the claimFormat split exists to fix.
+     * The player screen used to run a second write of its own just to claim
+     * the format, so every pause with the screen open produced two PUTs.
+     */
+    private fun onPlaybackMaybeStopped(player: Player) {
+        val stopped = PlaybackStopPolicy.isStop(
+            heartbeatRunning = autoPositionSaveJob != null,
+            isPlaying = player.isPlaying,
+            playbackState = player.playbackState,
+            playWhenReady = player.playWhenReady,
+        )
+        if (!stopped) return
+        stopAutoPositionSave()
+        // A stop is a session boundary — log it.
+        saveCurrentPositionForAuto(
+            appendToLog = true,
+            claimFormat = pauseSavePolicy.consumeClaimFormat(),
+            detached = true,
+        )
     }
 
     // =========================================================

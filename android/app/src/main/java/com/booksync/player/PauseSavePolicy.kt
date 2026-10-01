@@ -3,7 +3,8 @@ package com.booksync.player
 /**
  * Whether the stop that is happening right now may claim the format (issue #226).
  *
- * `AudioPlayerService.onIsPlayingChanged(false)` is the single owner of the
+ * `AudioPlayerService`'s stop check (`onPlaybackMaybeStopped`, gated by
+ * [PlaybackStopPolicy]) is the single owner of the
  * pause position write — it covers the phone screen, Android Auto, the
  * notification and Cast alike, exactly like the heartbeat ([HeartbeatThrottle])
  * and the seek flush. But the listener fires for *any* reason playback stopped:
