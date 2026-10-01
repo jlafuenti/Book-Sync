@@ -94,14 +94,44 @@ class ReadAlongControllerTest {
     }
 
     @Test
-    fun `a locator emission outside the echo window is a manual turn and pauses following`() {
+    fun `a locator emission outside the echo window is only a suspect and keeps following`() {
         val c = following()
         val p = c.onAudioPosition(11_000, 100L)!!.point
         c.onSentenceVisibility(p, visible = false, nowMs = 150L)
-        assertEquals(ReadAlongController.LocatorVerdict.ManualTurn, c.onLocatorEmitted(5_000L))
+        assertEquals(ReadAlongController.LocatorVerdict.Suspect, c.onLocatorEmitted(5_000L))
+        assertTrue(c.isFollowing)
+    }
+
+    @Test
+    fun `a confirmed manual turn pauses following`() {
+        val c = following()
+        c.onAudioPosition(11_000, 100L)
+        assertEquals(ReadAlongController.LocatorVerdict.Suspect, c.onLocatorEmitted(5_000L))
+        c.confirmManualTurn()
         assertEquals(ReadAlongController.State.Paused, c.state)
         assertTrue(c.isPaused)
         assertFalse(c.isFollowing)
+        assertEquals(ReadAlongController.LocatorVerdict.Ignored, c.onLocatorEmitted(6_000L))
+    }
+
+    @Test
+    fun `confirming a manual turn while off or paused changes nothing`() {
+        val c = ReadAlongController(points)
+        c.confirmManualTurn()
+        assertEquals(ReadAlongController.State.Off, c.state)
+        c.start(0L)
+        c.confirmManualTurn()
+        c.confirmManualTurn()
+        assertEquals(ReadAlongController.State.Paused, c.state)
+    }
+
+    @Test
+    fun `quoteFor uses the first non-blank line of a preview`() {
+        assertEquals("“His mother …”", ReadAlongController.quoteFor("“His mother …”\n“Human,” River Shoulders said."))
+        assertEquals("Plain sentence.", ReadAlongController.quoteFor("  Plain sentence.  "))
+        assertEquals("Second", ReadAlongController.quoteFor("\n  \nSecond\nThird"))
+        assertNull(ReadAlongController.quoteFor(null))
+        assertNull(ReadAlongController.quoteFor("   \n "))
     }
 
     @Test
@@ -109,6 +139,7 @@ class ReadAlongControllerTest {
         val c = following()
         c.onAudioPosition(11_000, 100L)
         c.onLocatorEmitted(5_000L)
+        c.confirmManualTurn()
         assertNull(c.onAudioPosition(17_000, 5_500L))
         assertEquals(points[2], c.currentPoint)
     }
@@ -118,6 +149,7 @@ class ReadAlongControllerTest {
         val c = following()
         c.onAudioPosition(11_000, 100L)
         c.onLocatorEmitted(5_000L)
+        c.confirmManualTurn()
         c.onAudioPosition(17_000, 5_500L)
         val actions = c.onBackToAudio(6_000L)
         assertEquals(

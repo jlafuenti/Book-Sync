@@ -73,7 +73,7 @@ class ReadAlongWiringTest {
     fun `saves are dropped while following so the service stays the only position writer`() {
         val save = activity.substringAfter("private fun savePosition(locator: Locator)").substringBefore("val pub = publication")
         assertTrue(
-            "savePosition must return before resolving anything while readAlong.isFollowing — " +
+            "savePosition must return before resolving anything while readAlong.isFollowing â€” " +
                 "a reader save here would flip the record to ebook-sourced every few seconds",
             save.contains("if (readAlong.isFollowing)"),
         )
@@ -84,8 +84,24 @@ class ReadAlongWiringTest {
         val collector = activity.substringAfter("nav.currentLocator.collect { locator ->").substringBefore("val target = programmaticTarget")
         assertTrue(collector.contains("when (readAlong.onLocatorEmitted("))
         assertTrue(collector.contains("ReadAlongController.LocatorVerdict.Echo ->"))
-        assertTrue(collector.contains("ReadAlongController.LocatorVerdict.ManualTurn ->"))
-        assertTrue(collector.contains("showBackToAudio(true)"))
+        assertTrue(collector.contains("ReadAlongController.LocatorVerdict.Suspect ->"))
+        assertTrue(collector.contains("verifySuspectedTurn()"))
+    }
+
+    @Test
+    fun `a suspected manual turn is confirmed by the page before following pauses`() {
+        val verify = activity.substringAfter("private fun verifySuspectedTurn()").substringBefore("\n    }")
+        assertTrue(verify.contains("isSentenceVisible("))
+        assertTrue(verify.contains("readAlong.confirmManualTurn()"))
+        assertTrue(verify.contains("showBackToAudio(true)"))
+    }
+
+    @Test
+    fun `the page is asked for the preview's first line only`() {
+        val locator = activity.substringAfter("private fun sentenceLocator(").substringBefore("\n    }")
+        assertTrue(locator.contains("ReadAlongController.quoteFor(point.epubTextPreview)"))
+        val decorate = activity.substringAfter("private fun onReadAlongDecorate(").substringBefore("\n    }")
+        assertTrue(decorate.contains("ReadAlongController.quoteFor(point.epubTextPreview)"))
     }
 
     @Test

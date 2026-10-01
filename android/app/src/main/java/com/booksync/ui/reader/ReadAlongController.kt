@@ -19,9 +19,12 @@ import com.booksync.sync.SyncMatcher
  * no user input behind it. The reader's usual echo test compares the
  * emission against a target progression, but a text-anchored jump lands at
  * a progression nobody knows in advance, so here an emission within
- * [jumpEchoWindowMs] of our own jump is the echo, and anything later is the
- * user turning the page by hand — which pauses following without touching
- * playback ([State.Paused]). [onBackToAudio] resumes.
+ * [jumpEchoWindowMs] of our own jump is the echo. Anything later is only a
+ * *suspect*: Readium also emits late settle locators with nobody touching
+ * the page (seen on a slow device, well after the open), so the activity
+ * checks whether the current sentence is still on screen and calls
+ * [confirmManualTurn] only when it is not — which pauses following without
+ * touching playback ([State.Paused]). [onBackToAudio] resumes.
  */
 class ReadAlongController(
     private val points: List<SyncPointEntity>,
@@ -34,7 +37,7 @@ class ReadAlongController(
         data class Jump(val point: SyncPointEntity) : Action
     }
 
-    enum class LocatorVerdict { Ignored, Echo, ManualTurn }
+    enum class LocatorVerdict { Ignored, Echo, Suspect }
 
     var state: State = State.Off
         private set
@@ -72,10 +75,14 @@ class ReadAlongController(
     }
 
     fun onLocatorEmitted(nowMs: Long): LocatorVerdict {
-        if (state == State.Off) return LocatorVerdict.Ignored
+        if (state != State.Following) return LocatorVerdict.Ignored
         if (nowMs - lastJumpAtMs <= jumpEchoWindowMs) return LocatorVerdict.Echo
-        state = State.Paused
-        return LocatorVerdict.ManualTurn
+        return LocatorVerdict.Suspect
+    }
+
+    /** The activity found the current sentence off screen after a [LocatorVerdict.Suspect]: the user turned the page. */
+    fun confirmManualTurn() {
+        if (state == State.Following) state = State.Paused
     }
 
     fun onBackToAudio(nowMs: Long): List<Action> {
@@ -89,4 +96,16 @@ class ReadAlongController(
     private fun sameSentence(a: SyncPointEntity?, b: SyncPointEntity?): Boolean =
         a != null && b != null &&
             a.epubChapter == b.epubChapter && a.epubSentenceIndex == b.epubSentenceIndex
+
+    companion object {
+        /**
+         * The text to look for on the page for a sync point. A preview can
+         * span two paragraphs (the server's tokenizer joins a dangling
+         * fragment like `“His mother …”` to the next sentence), and a quote
+         * across a block boundary never matches the page text, so only the
+         * first line is used. Null when there is nothing to quote.
+         */
+        fun quoteFor(preview: String?): String? =
+            preview?.lineSequence()?.map { it.trim() }?.firstOrNull { it.isNotEmpty() }
+    }
 }

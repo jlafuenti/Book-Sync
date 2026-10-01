@@ -71,7 +71,7 @@ class MediaSourceWiringTest {
     @Test
     fun `both player-screen loaders ask the selector`() {
         // loadAudio goes through PairMediaItems (issue #762), which asks the
-        // selector itself — pinned just below.
+        // selector itself â€” pinned just below.
         val markers = mapOf(
             "loadAudio" to "PairMediaItems.build",
             "loadStandaloneAudio" to "mediaUriFor",

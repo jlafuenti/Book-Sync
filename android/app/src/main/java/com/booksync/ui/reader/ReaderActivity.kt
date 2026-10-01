@@ -1160,9 +1160,12 @@ class ReaderActivity : AppCompatActivity() {
                         probeLivePage(shownAtMs, userTurn = false)
                         return@collect
                     }
-                    ReadAlongController.LocatorVerdict.ManualTurn -> {
-                        showBackToAudio(true)
-                        // Fall through: a manual turn is user navigation and saves normally.
+                    ReadAlongController.LocatorVerdict.Suspect -> {
+                        // Readium also emits late settle locators with nobody
+                        // touching the page, so ask the page before pausing.
+                        // Fall through meanwhile: while following, the save
+                        // below is dropped anyway; once confirmed, saves resume.
+                        verifySuspectedTurn()
                     }
                     ReadAlongController.LocatorVerdict.Ignored -> Unit
                 }
@@ -2409,7 +2412,7 @@ class ReaderActivity : AppCompatActivity() {
     private fun onReadAlongDecorate(point: SyncPointEntity) {
         applyReadAlongDecoration(point)
         lifecycleScope.launch {
-            val preview = point.epubTextPreview?.takeIf { it.isNotBlank() } ?: return@launch
+            val preview = ReadAlongController.quoteFor(point.epubTextPreview) ?: return@launch
             val visible = isSentenceVisible(
                 preview, "chapter ${point.epubChapter} sentence ${point.epubSentenceIndex}",
             )
@@ -2429,7 +2432,7 @@ class ReaderActivity : AppCompatActivity() {
     private fun sentenceLocator(point: SyncPointEntity): Locator? {
         val pub = publication ?: return null
         val link = pub.readingOrder.getOrNull(point.epubChapter) ?: return null
-        val preview = point.epubTextPreview?.takeIf { it.isNotBlank() } ?: return null
+        val preview = ReadAlongController.quoteFor(point.epubTextPreview) ?: return null
         return pub.locatorFromLink(link)?.copy(text = Locator.Text(highlight = preview))
     }
 
@@ -2495,6 +2498,26 @@ class ReaderActivity : AppCompatActivity() {
         val answer = nav.evaluateJavascript(js).orEmpty()
         if (answer.contains("missing")) Log.w(TAG, "read-along: sentence not found in page ($where)")
         return answer.contains("visible")
+    }
+
+    /**
+     * A locator emission while following that was not our own jump's echo
+     * (issue #762). Only the page knows whether the user actually left the
+     * sentence being read: a settle emission leaves it on screen, a page turn
+     * does not. Nothing to compare against before the first audio tick.
+     */
+    private fun verifySuspectedTurn() {
+        val point = readAlong.currentPoint ?: return
+        val quote = ReadAlongController.quoteFor(point.epubTextPreview) ?: return
+        lifecycleScope.launch {
+            val visible = isSentenceVisible(
+                quote, "chapter ${point.epubChapter} sentence ${point.epubSentenceIndex}",
+            )
+            if (!visible && readAlong.isFollowing) {
+                readAlong.confirmManualTurn()
+                showBackToAudio(true)
+            }
+        }
     }
 
     private fun onBackToAudioTapped() {
