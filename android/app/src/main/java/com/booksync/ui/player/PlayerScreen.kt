@@ -1196,6 +1196,8 @@ fun PlayerScreen(
     onBack: () -> Unit,
     /** Receives the audio position at the moment of the switch — see Routes.READER. */
     onSwitchToReader: (Long) -> Unit,
+    /** Opens the reader following the audio, which keeps playing (issue #762). */
+    onReadAlong: (Long) -> Unit,
     viewModel: PlayerViewModel = hiltViewModel(),
 ) {
     val colors = Tandem.colors
@@ -1320,6 +1322,10 @@ fun PlayerScreen(
                             modifier = Modifier.tourAnchor(TourAnchor.PlayerSwitchToReader),
                         ) {
                             Icon(Icons.Default.AutoStories, "Switch to Reader", tint = colors.textPrimary)
+                        }
+                        // Read along: same screen change, but the audio is left playing.
+                        IconButton(onClick = { onReadAlong(positionMs) }) {
+                            Icon(Icons.AutoMirrored.Filled.MenuBook, "Read along", tint = colors.textPrimary)
                         }
                     }
                     // Overflow (Mark Complete / Reset Progress)

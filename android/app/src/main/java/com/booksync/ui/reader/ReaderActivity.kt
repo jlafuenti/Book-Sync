@@ -108,6 +108,8 @@ class ReaderActivity : AppCompatActivity() {
          * restores from the shared ladder alone. See [withHandoffAnchor].
          */
         const val EXTRA_HANDOFF_AUDIO_MS = "handoffAudioMs"
+        /** The player's Read along entry: the reader follows the audio that keeps playing (issue #762). */
+        const val EXTRA_READ_ALONG = "readAlong"
 
         /**
          * A standalone (unpaired) ebook — issue #169. Mutually exclusive with

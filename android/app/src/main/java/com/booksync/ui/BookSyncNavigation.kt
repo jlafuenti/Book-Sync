@@ -156,7 +156,7 @@ object Routes {
      * which only a reader save updates and can be hours stale. Absent (0) for
      * every ordinary open.
      */
-    const val READER               = "reader/{pairId}?handoffAudioMs={handoffAudioMs}"
+    const val READER               = "reader/{pairId}?handoffAudioMs={handoffAudioMs}&readAlong={readAlong}"
     /** A standalone (unpaired) ebook — no pair, no sync map (issue #169). */
     const val READER_STANDALONE    = "reader/standalone/{ebookId}"
     const val PLAYER               = "player/{pairId}"
@@ -184,11 +184,17 @@ object Routes {
         return if (params.isEmpty()) LIBRARY else "$LIBRARY?${params.joinToString("&")}"
     }
 
-    // Only the handoff adds the argument; every ordinary open builds exactly
-    // the route it always did, which `SearchDestinationTest` pins. The query
-    // parameter is optional on the pattern, so both forms match.
-    fun reader(pairId: Int, handoffAudioMs: Long = 0L) =
-        if (handoffAudioMs > 0) "reader/$pairId?handoffAudioMs=$handoffAudioMs" else "reader/$pairId"
+    // Only the handoff and read-along add their arguments; every ordinary open
+    // builds exactly the route it always did, which `SearchDestinationTest`
+    // pins. The query parameters are optional on the pattern, so every form
+    // matches.
+    fun reader(pairId: Int, handoffAudioMs: Long = 0L, readAlong: Boolean = false): String {
+        val query = buildList {
+            if (handoffAudioMs > 0) add("handoffAudioMs=$handoffAudioMs")
+            if (readAlong) add("readAlong=true")
+        }
+        return if (query.isEmpty()) "reader/$pairId" else "reader/$pairId?${query.joinToString("&")}"
+    }
     fun readerStandalone(ebookId: Int) = "reader/standalone/$ebookId"
     fun player(pairId: Int)  = "player/$pairId"
     fun playerStandalone(audiobookId: Int) = "player/standalone/$audiobookId"
@@ -577,6 +583,7 @@ fun BookSyncNavigation() {
             arguments = listOf(
                 navArgument("pairId") { type = NavType.IntType },
                 navArgument("handoffAudioMs") { type = NavType.LongType; defaultValue = 0L },
+                navArgument("readAlong") { type = NavType.BoolType; defaultValue = false },
             ),
         ) { backStackEntry ->
             val pairId = backStackEntry.arguments?.getInt("pairId") ?: return@composable
@@ -584,6 +591,7 @@ fun BookSyncNavigation() {
             ReaderScreen(
                 pairId = pairId,
                 handoffAudioMs = backStackEntry.arguments?.getLong("handoffAudioMs") ?: 0L,
+                readAlong = backStackEntry.arguments?.getBoolean("readAlong") ?: false,
                 // Guarded: this fires from the reader Activity's result, which can
                 // arrive after the tour already popped this route (see NavGuards.kt).
                 onBack = { navController.popBackStackIfCurrent(Routes.READER) },
@@ -614,6 +622,15 @@ fun BookSyncNavigation() {
                         }
                     }
                 },
+                // Unlike Switch to Reader, the audio keeps playing: the reader
+                // follows it (issue #762).
+                onReadAlong = { audioMs ->
+                    pairOpenGate.requestOpen(pairId, "Read along anyway") {
+                        navController.navigate(Routes.reader(pairId, audioMs, readAlong = true)) {
+                            popUpTo(Routes.MAIN)
+                        }
+                    }
+                },
             )
         }
 
@@ -638,6 +655,7 @@ fun BookSyncNavigation() {
                 pairId = -1,            // sentinel: no pair (ViewModel uses audiobookId from SavedStateHandle)
                 onBack = { navController.popBackStack() },
                 onSwitchToReader = { _ -> }, // not applicable for standalone
+                onReadAlong = { _ -> },      // likewise: no paired ebook to follow along in
             )
         }
 
