@@ -127,6 +127,41 @@ class ReadAlongWiringTest {
         assertTrue(!start.contains("if (!ctrl.isPlaying) ctrl.play()"))
     }
 
+    // ============ No stacked rewinds (issue #772) ============
+
+    @Test
+    fun `a page-anchored start asks for the audio position with no rewind of its own`() {
+        val start = activity.substringAfter("private fun startFollowing(").substringBefore("\n    }")
+        assertTrue(
+            "epubToAudioText subtracts RESUME_REWIND_MS by default and the player's resume " +
+                "rewind would take another 5s off the same start",
+            start.contains("repository.epubToAudioText(pairId, chapterIndex, visible.text, rewindMs = 0)"),
+        )
+    }
+
+    @Test
+    fun `the skip-rewind command goes out before the seek and the play`() {
+        val start = activity.substringAfter("private fun startFollowing(").substringBefore("\n    }")
+        val command = start.indexOf("AudioPlayerService.CMD_SUPPRESS_NEXT_RESUME_REWIND")
+        val seek = start.indexOf("ctrl.seekTo(")
+        val play = start.indexOf("ctrl.play()")
+        assertTrue("startFollowing must send CMD_SUPPRESS_NEXT_RESUME_REWIND", command >= 0)
+        assertTrue("... before it seeks", seek > command)
+        assertTrue("... and before it plays", play > command)
+        assertTrue(
+            "the command is sent with a fresh Bundle(), never Bundle.EMPTY",
+            start.contains("SessionCommand(AudioPlayerService.CMD_SUPPRESS_NEXT_RESUME_REWIND, Bundle())"),
+        )
+    }
+
+    @Test
+    fun `the reader's own play button and the other starts keep the resume rewind`() {
+        val toggle = activity.substringAfter("private fun toggleReadAlongPlayback()").substringBefore("\n    }")
+        assertTrue(!toggle.contains("CMD_SUPPRESS_NEXT_RESUME_REWIND"))
+        val sync = activity.substringAfter("private fun syncSelectedTextToAudio(").substringBefore("private fun formatAudioTime")
+        assertTrue(!sync.contains("CMD_SUPPRESS_NEXT_RESUME_REWIND"))
+    }
+
     @Test
     fun `following starts from the handoff extra only once the sync map is ready`() {
         assertTrue(activity.contains("intent.getBooleanExtra(EXTRA_READ_ALONG, false)"))

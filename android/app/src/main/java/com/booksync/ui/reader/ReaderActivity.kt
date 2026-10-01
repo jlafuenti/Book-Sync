@@ -2323,13 +2323,27 @@ class ReaderActivity : AppCompatActivity() {
             if (seekToPage) {
                 // Start where the eye is, not where the audio was: the same
                 // page-to-audio match Switch to Audio performs (issue #114 / #131).
+                // No rewind of its own (issue #772): the page match is already
+                // where the reader wants to start, and the player's resume
+                // rewind is skipped below, so neither backs it up.
                 val visible = extractVisibleTextFromWebView()
                 val chapterIndex = navigator?.currentLocator?.value
                     ?.let { publication?.spineIndexOf(it) }?.coerceAtLeast(0) ?: 0
                 val audioMs = if (visible.isPrecise) {
-                    repository.epubToAudioText(pairId, chapterIndex, visible.text)
+                    repository.epubToAudioText(pairId, chapterIndex, visible.text, rewindMs = 0)
                 } else 0
-                if (audioMs > 0) ctrl.seekTo(audioMs.toLong())
+                if (audioMs > 0) {
+                    // Only worth arming when a resume is coming: a player that
+                    // is already set to play never resumes, and the one-shot
+                    // would then wait for the user's next pause-and-play.
+                    if (!ctrl.playWhenReady) {
+                        ctrl.sendCustomCommand(
+                            SessionCommand(AudioPlayerService.CMD_SUPPRESS_NEXT_RESUME_REWIND, Bundle()),
+                            Bundle(),
+                        )
+                    }
+                    ctrl.seekTo(audioMs.toLong())
+                }
             }
             // playWhenReady, not isPlaying: a player that is buffering after the
             // seek above is already set to play, and a second play() is a

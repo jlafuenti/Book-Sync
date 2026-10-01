@@ -144,6 +144,12 @@ class AudioPlayerService : MediaLibraryService() {
         // asked for, so its save may claim the format. Consumed by exactly one
         // stop; see [PauseSavePolicy] and issue #226.
         const val CMD_USER_PAUSE = "USER_PAUSE"
+        // Sent by the reader right before it seeks to a read-along start and
+        // plays (issue #772). That seek already lands exactly where the reader
+        // wants, so the resume rewind that normally follows a pause would back
+        // it up by another 5s. One-shot: it arms ResumeRewindPlayer's skip for
+        // the next resume only; every other resume keeps the rewind.
+        const val CMD_SUPPRESS_NEXT_RESUME_REWIND = "SUPPRESS_NEXT_RESUME_REWIND"
 
         // One stable request code for the session-activity PendingIntent (issue
         // #684): every rebuild goes through the same PendingIntent.getActivity
@@ -1514,6 +1520,7 @@ class AudioPlayerService : MediaLibraryService() {
                 .add(SessionCommand(CMD_GET_CHAPTERS, Bundle.EMPTY))
                 .add(SessionCommand(CMD_SUPPRESS_NEXT_SEEK_FLUSH, Bundle.EMPTY))
                 .add(SessionCommand(CMD_USER_PAUSE, Bundle.EMPTY))
+                .add(SessionCommand(CMD_SUPPRESS_NEXT_RESUME_REWIND, Bundle.EMPTY))
                 .build()
             // AudiobookPlayer (ForwardingPlayer) already removes SEEK_TO_PREVIOUS/NEXT globally,
             // so no per-controller command restriction is needed here.
@@ -1558,6 +1565,12 @@ class AudioPlayerService : MediaLibraryService() {
                     // Arms the NEXT stop only. The pause itself comes through
                     // the normal transport command right after this.
                     pauseSavePolicy.onUserPauseCommand()
+                    return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
+                }
+                CMD_SUPPRESS_NEXT_RESUME_REWIND -> {
+                    // Local playback only: Cast is unwrapped, so there is no
+                    // wrapper to arm and no resume rewind to skip there.
+                    resumeRewindPlayer?.suppressNextResumeRewind()
                     return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
                 }
             }
