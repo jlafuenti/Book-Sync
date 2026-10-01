@@ -26,6 +26,12 @@ operator must do by hand rather than read about afterwards.
   pairs that are queued for transcription, and never starts on its own. While it runs, the
   per-pair realign endpoint answers 409.
 
+### Fixed
+
+- The sentence splitter no longer joins a paragraph to the next one, and a fragment under three
+  words now stays with its neighbour instead of being dropped. Existing sync maps keep the old
+  split until they are rebuilt (#774).
+
 ### Upgrade notes
 
 - Migration `0031_sync_map_splitter_version` adds a `splitter_version` column to `sync_maps`,
