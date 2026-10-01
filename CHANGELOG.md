@@ -25,6 +25,7 @@ operator must do by hand rather than read about afterwards.
   discards it. The job reuses each pair's cached transcript, carries saved positions over, skips
   pairs that are queued for transcription, and never starts on its own. While it runs, the
   per-pair realign endpoint answers 409.
+- System page card to dry-run and rebuild outdated sync maps (issue #774).
 
 ### Fixed
 

@@ -44,6 +44,7 @@ vi.mock('../api', async (importOriginal) => {
         getUnsupportedFiles: unsupportedMock,
         getSettings: settingsMock,
         getCalibreStatus: calibreMock,
+        getSyncMapRebuildStatus: vi.fn().mockResolvedValue({ outdated: 0, total: 0, running: false, results: [] }),
         getUsers: getUsersMock,
         getUpdateStatus: getUpdateStatusMock,
         getBackupStatus: getBackupStatusMock,

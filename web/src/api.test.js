@@ -2144,3 +2144,68 @@ describe('getTranscript() (issue #713)', () => {
         expect(fetchMock.mock.calls[0][0]).toBe('/api/transcription/42/transcript')
     })
 })
+
+describe('sync-map rebuild (issue #774)', () => {
+    const status = { current_version: 3, outdated: 2, total: 5, running: false }
+
+    it('getSyncMapRebuildStatus GETs the status', async () => {
+        const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => status })
+        vi.stubGlobal('fetch', fetchMock)
+        const { getSyncMapRebuildStatus } = await import('./api')
+        expect(await getSyncMapRebuildStatus()).toEqual(status)
+        expect(fetchMock.mock.calls[0][0]).toBe('/api/troubleshoot/sync-map-rebuild')
+        expect(fetchMock.mock.calls[0][1].method).toBeUndefined()
+    })
+
+    it('startSyncMapRebuild POSTs the documented body, defaulting the optional fields to null', async () => {
+        const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 202, json: async () => status })
+        vi.stubGlobal('fetch', fetchMock)
+        const { startSyncMapRebuild } = await import('./api')
+        expect(await startSyncMapRebuild({ dryRun: true })).toEqual(status)
+        expect(fetchMock.mock.calls[0][0]).toBe('/api/troubleshoot/sync-map-rebuild')
+        expect(fetchMock.mock.calls[0][1].method).toBe('POST')
+        expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({ dry_run: true, pair_ids: null, limit: null })
+    })
+
+    it('startSyncMapRebuild passes pair ids and a limit through', async () => {
+        const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 202, json: async () => status })
+        vi.stubGlobal('fetch', fetchMock)
+        const { startSyncMapRebuild } = await import('./api')
+        await startSyncMapRebuild({ dryRun: false, pairIds: [4, 9], limit: 3 })
+        expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({ dry_run: false, pair_ids: [4, 9], limit: 3 })
+    })
+
+    it('cancelSyncMapRebuild POSTs to the cancel endpoint', async () => {
+        const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => status })
+        vi.stubGlobal('fetch', fetchMock)
+        const { cancelSyncMapRebuild } = await import('./api')
+        expect(await cancelSyncMapRebuild()).toEqual(status)
+        expect(fetchMock.mock.calls[0][0]).toBe('/api/troubleshoot/sync-map-rebuild/cancel')
+        expect(fetchMock.mock.calls[0][1].method).toBe('POST')
+    })
+
+    it('puts the HTTP status and the server reason on the error', async () => {
+        vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+            ok: false, status: 409, json: async () => ({ detail: 'A rebuild is already running.' }),
+        }))
+        const { startSyncMapRebuild } = await import('./api')
+        const err = await startSyncMapRebuild({ dryRun: true }).catch((e) => e)
+        expect(err).toBeInstanceOf(Error)
+        expect(err.status).toBe(409)
+        expect(err.message).toBe('A rebuild is already running.')
+    })
+
+    it('falls back to a generic message and still sets the status when the body is not JSON or the detail is not text', async () => {
+        const fetchMock = vi.fn()
+            .mockResolvedValueOnce({ ok: false, status: 404, json: async () => { throw new SyntaxError('html') } })
+            .mockResolvedValueOnce({ ok: false, status: 422, json: async () => ({ detail: [{ msg: 'bad' }] }) })
+        vi.stubGlobal('fetch', fetchMock)
+        const { getSyncMapRebuildStatus, cancelSyncMapRebuild } = await import('./api')
+        const first = await getSyncMapRebuildStatus().catch((e) => e)
+        expect(first.status).toBe(404)
+        expect(first.message).toBe('Failed to load sync-map rebuild status')
+        const second = await cancelSyncMapRebuild().catch((e) => e)
+        expect(second.status).toBe(422)
+        expect(second.message).toBe('Failed to cancel the sync-map rebuild')
+    })
+})

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, waitFor } from '@testing-library/react'
+import { render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import SystemPage from './SystemPage'
 import { roleMeets } from '../roles'
@@ -18,8 +18,9 @@ import { roleMeets } from '../roles'
 
 const {
     diskMock, ebooksMock, audiobooksMock, pairsMock, queueMock,
-    unsupportedMock, settingsMock, calibreMock, authRef,
+    unsupportedMock, settingsMock, calibreMock, rebuildStatusMock, authRef,
 } = vi.hoisted(() => ({
+    rebuildStatusMock: vi.fn(),
     diskMock: vi.fn(),
     ebooksMock: vi.fn(),
     audiobooksMock: vi.fn(),
@@ -43,6 +44,7 @@ vi.mock('../api', async (importOriginal) => {
         getUnsupportedFiles: unsupportedMock,
         getSettings: settingsMock,
         getCalibreStatus: calibreMock,
+        getSyncMapRebuildStatus: rebuildStatusMock,
     }
 })
 
@@ -66,6 +68,7 @@ beforeEach(() => {
     unsupportedMock.mockReset().mockResolvedValue([])
     settingsMock.mockReset().mockResolvedValue({})
     calibreMock.mockReset().mockResolvedValue({ available: false })
+    rebuildStatusMock.mockReset().mockResolvedValue({ outdated: 0, total: 0, running: false, results: [] })
 })
 
 function renderPage(tab) {
@@ -146,5 +149,37 @@ describe('the calibre probe follows the same gate', () => {
         renderPage('unsupported')
         await waitFor(() => expect(unsupportedMock).toHaveBeenCalled())
         expect(calibreMock).not.toHaveBeenCalled()
+    })
+})
+
+/**
+ * Issue #774: the sync-map rebuild card calls an admin-only endpoint, so it is
+ * rendered for admins and never mounted for anyone else. An editor never gets
+ * past the status gate above, and the role check on the card itself is the
+ * second layer.
+ */
+describe('the sync-map rebuild card is admin-only', () => {
+    it('appears for an admin', async () => {
+        authRef.role = 'admin'
+        renderPage('status')
+        expect(await screen.findByText('Rebuild Sync Maps')).toBeInTheDocument()
+        expect(await screen.findByText('All sync maps are up to date.')).toBeInTheDocument()
+        expect(rebuildStatusMock).toHaveBeenCalled()
+    })
+
+    it('does not appear, or fetch, for an editor', async () => {
+        authRef.role = 'editor'
+        renderPage('status')
+        await new Promise(r => setTimeout(r, 0))
+        expect(screen.queryByText('Rebuild Sync Maps')).not.toBeInTheDocument()
+        expect(rebuildStatusMock).not.toHaveBeenCalled()
+    })
+
+    it('does not appear, or fetch, from the tab an editor can open', async () => {
+        authRef.role = 'editor'
+        renderPage('unsupported')
+        await waitFor(() => expect(unsupportedMock).toHaveBeenCalled())
+        expect(screen.queryByText('Rebuild Sync Maps')).not.toBeInTheDocument()
+        expect(rebuildStatusMock).not.toHaveBeenCalled()
     })
 })
