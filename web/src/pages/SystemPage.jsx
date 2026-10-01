@@ -14,6 +14,7 @@ import { useAuth } from '../contexts/AuthContext'
 import { UserManagementSection } from './UserManagementPage'
 import EbookReader from '../components/EbookReader'
 import Modal from '../components/Modal'
+import SyncMapRebuildCard from '../components/SyncMapRebuildCard'
 import UpdateCheckBanner from '../components/UpdateCheckBanner'
 import UpdateCheckSettings from '../components/UpdateCheckSettings'
 import GoogleBooksSettings from '../components/GoogleBooksSettings'
@@ -1550,6 +1551,13 @@ function SystemPage({ tab }) {
                             OPEN
                         </Link>
                     </div>
+
+                    {/* Rebuild sync maps built by an older sentence splitter (admin only, issue #774) */}
+                    {canAdmin && (
+                        <div style={{ marginBottom: 24 }}>
+                            <SyncMapRebuildCard />
+                        </div>
+                    )}
 
                     {/* ── Section: Configuration ── */}
                     <div className="system-section-header">

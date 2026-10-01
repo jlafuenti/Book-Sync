@@ -109,3 +109,35 @@ export async function getSyncMapAudit({ flaggedOnly = true } = {}) {
     );
     return jsonOrThrow(resp, 'Sync-map audit failed');
 }
+
+// Rebuild of sync maps built by an older sentence splitter (issue #774).
+// `jsonOrThrow` keeps only the message, but the card has to tell a 404 (older
+// server, no such endpoint) from a 409 (a run is already active), so these
+// three put the HTTP status on `err.status`.
+async function rebuildJson(resp, fallback) {
+    if (!resp.ok) {
+        const body = await resp.json().catch(() => ({}));
+        const err = new Error(typeof body.detail === 'string' && body.detail ? body.detail : fallback);
+        err.status = resp.status;
+        throw err;
+    }
+    return resp.json();
+}
+
+export async function getSyncMapRebuildStatus() {
+    const resp = await fetchWithAuth(`${API_BASE}/troubleshoot/sync-map-rebuild`);
+    return rebuildJson(resp, 'Failed to load sync-map rebuild status');
+}
+
+export async function startSyncMapRebuild({ dryRun, pairIds = null, limit = null }) {
+    const resp = await fetchWithAuth(`${API_BASE}/troubleshoot/sync-map-rebuild`, {
+        method: 'POST',
+        body: JSON.stringify({ dry_run: dryRun, pair_ids: pairIds, limit }),
+    });
+    return rebuildJson(resp, 'Failed to start the sync-map rebuild');
+}
+
+export async function cancelSyncMapRebuild() {
+    const resp = await fetchWithAuth(`${API_BASE}/troubleshoot/sync-map-rebuild/cancel`, { method: 'POST' });
+    return rebuildJson(resp, 'Failed to cancel the sync-map rebuild');
+}

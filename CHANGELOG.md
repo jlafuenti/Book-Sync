@@ -16,6 +16,10 @@ operator must do by hand rather than read about afterwards.
 
 ## [Unreleased]
 
+### Added
+
+- System page card to dry-run and rebuild outdated sync maps (issue #774).
+
 ## [0.8.0] - 2026-09-29
 
 ### Added
