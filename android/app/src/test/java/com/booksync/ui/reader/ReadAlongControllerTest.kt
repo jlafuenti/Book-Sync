@@ -145,7 +145,7 @@ class ReadAlongControllerTest {
 
     @Test
     fun `quoteFor uses the first non-blank line of a preview`() {
-        assertEquals("“His mother …”", ReadAlongController.quoteFor("“His mother …”\n“Human,” River Shoulders said."))
+        assertEquals("“Her brother …”", ReadAlongController.quoteFor("“Her brother …”\n“Later,” the ferryman said."))
         assertEquals("Plain sentence.", ReadAlongController.quoteFor("  Plain sentence.  "))
         assertEquals("Second", ReadAlongController.quoteFor("\n  \nSecond\nThird"))
         assertNull(ReadAlongController.quoteFor(null))
