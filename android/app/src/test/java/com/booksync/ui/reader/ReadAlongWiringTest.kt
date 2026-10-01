@@ -47,4 +47,93 @@ class ReadAlongWiringTest {
         assertTrue(screen.contains("putExtra(ReaderActivity.EXTRA_READ_ALONG, true)"))
         assertTrue(activity.contains("const val EXTRA_READ_ALONG = \"readAlong\""))
     }
+
+    private fun nearestAppDir(): File {
+        var dir = File("").absoluteFile
+        repeat(4) {
+            if (File(dir, "src/main/res").exists()) return dir
+            val app = File(dir, "app")
+            if (File(app, "src/main/res").exists()) return app
+            dir = dir.parentFile ?: return@repeat
+        }
+        throw AssertionError("Could not locate the app module from ${File("").absolutePath}")
+    }
+
+    @Test
+    fun `the toolbar has a Follow audio item hidden for standalone ebooks`() {
+        val menu = File(nearestAppDir(), "src/main/res/menu/reader_toolbar.xml").readText()
+        assertTrue(menu.contains("android:id=\"@+id/action_read_along\""))
+        assertTrue(menu.contains("android:title=\"Follow audio\""))
+        val init = activity.substringAfter("private fun initViews()").substringBefore("initOverlayHost()")
+        assertTrue(init.contains("toolbar.menu.findItem(R.id.action_read_along)?.isVisible = false"))
+        assertTrue(init.contains("R.id.action_read_along -> { toggleReadAlong(); true }"))
+    }
+
+    @Test
+    fun `saves are dropped while following so the service stays the only position writer`() {
+        val save = activity.substringAfter("private fun savePosition(locator: Locator)").substringBefore("val pub = publication")
+        assertTrue(
+            "savePosition must return before resolving anything while readAlong.isFollowing — " +
+                "a reader save here would flip the record to ebook-sourced every few seconds",
+            save.contains("if (readAlong.isFollowing)"),
+        )
+    }
+
+    @Test
+    fun `the locator collector asks the controller before treating an emission as user navigation`() {
+        val collector = activity.substringAfter("nav.currentLocator.collect { locator ->").substringBefore("val target = programmaticTarget")
+        assertTrue(collector.contains("when (readAlong.onLocatorEmitted("))
+        assertTrue(collector.contains("ReadAlongController.LocatorVerdict.Echo ->"))
+        assertTrue(collector.contains("ReadAlongController.LocatorVerdict.ManualTurn ->"))
+        assertTrue(collector.contains("showBackToAudio(true)"))
+    }
+
+    @Test
+    fun `resume re-anchoring is skipped while following`() {
+        val reanchor = activity.substringAfter("private suspend fun reanchorAfterResume()").substringBefore("val pub = publication")
+        assertTrue(reanchor.contains("if (readAlong.isFollowing) return"))
+    }
+
+    @Test
+    fun `the reader's pause button announces the pause like the player does`() {
+        val pause = activity.substringAfter("private fun toggleReadAlongPlayback()").substringBefore("\n    }")
+        assertTrue(pause.contains("AudioPlayerService.CMD_USER_PAUSE"))
+        assertTrue(pause.contains("ctrl.pause()"))
+    }
+
+    @Test
+    fun `following starts from the handoff extra only once the sync map is ready`() {
+        assertTrue(activity.contains("intent.getBooleanExtra(EXTRA_READ_ALONG, false)"))
+        val start = activity.substringAfter("private fun requestFollowing(").substringBefore("\n    }")
+        assertTrue(start.contains("repository.readiness(pairId)"))
+        assertTrue(start.contains("pendingSwitchStatus.value = status"))
+    }
+
+    @Test
+    fun `the poll runs only while started and releases the controller on destroy`() {
+        assertTrue(activity.contains("repeatOnLifecycle(Lifecycle.State.STARTED)"))
+        val destroy = activity.substringAfter("override fun onDestroy()").substringBefore("\n    }")
+        assertTrue(destroy.contains("readAlongMediaController?.release()"))
+    }
+
+    @Test
+    fun `playback ending stops following`() {
+        assertTrue(activity.contains("Player.STATE_ENDED -> stopFollowing()"))
+    }
+
+    @Test
+    fun `the follow, decorate and jump entry points keep the names the decoration PR builds on`() {
+        listOf(
+            "private fun startFollowing(",
+            "private fun stopFollowing()",
+            "private fun onReadAlongDecorate(",
+            "private fun jumpToSentence(",
+            "private suspend fun isSentenceVisible(",
+            "private fun showBackToAudio(",
+            "private fun applyReadAlongDecoration(",
+            "private fun clearReadAlongDecoration()",
+        ).forEach { signature ->
+            assertTrue("ReaderActivity must declare $signature", activity.contains(signature))
+        }
+    }
 }
