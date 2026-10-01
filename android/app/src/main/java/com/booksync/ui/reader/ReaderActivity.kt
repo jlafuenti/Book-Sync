@@ -2012,9 +2012,12 @@ class ReaderActivity : AppCompatActivity() {
     /** The "turn pages by tapping the edges" preference — see [handleReaderTap]. */
     private val edgeTapSettings: ReaderEdgeTapSettings by lazy { ReaderEdgeTapSettings(this) }
 
+    /** Read-along's highlight-or-underline preference (issue #762). */
+    private val readAlongSettings: ReadAlongSettings by lazy { ReadAlongSettings(this) }
+
     private fun showDisplaySettings() {
         val nav = navigator ?: return
-        displaySettings.showDialog(this, nav, edgeTapSettings, progressState) { renderProgress() }
+        displaySettings.showDialog(this, nav, edgeTapSettings, readAlongSettings, progressState) { renderProgress() }
     }
 
     // ============ Text Selection Sync ============
