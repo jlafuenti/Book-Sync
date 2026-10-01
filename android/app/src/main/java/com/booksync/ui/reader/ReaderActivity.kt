@@ -1727,7 +1727,7 @@ class ReaderActivity : AppCompatActivity() {
         // is the only writer, so the record stays audiobook-sourced. A reader
         // save here would flip it to ebook-sourced every few seconds.
         if (readAlong.isFollowing) {
-            Log.d(TAG, "savePosition: dropped, following audio — the service owns the position")
+            Log.d(TAG, "savePosition: dropped, following audio â€” the service owns the position")
             return
         }
         // A standalone ebook has no pair row; everything below keys off

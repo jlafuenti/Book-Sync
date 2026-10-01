@@ -191,7 +191,7 @@ fun ReaderScreen(
     onSwitchToAudio: () -> Unit,
     /** Non-zero only when the player handed over — see Routes.READER. */
     handoffAudioMs: Long = 0L,
-    /** True when the player's Read along entry opened the reader � see Routes.READER. */
+    /** True when the player's Read along entry opened the reader — see Routes.READER. */
     readAlong: Boolean = false,
     viewModel: ReaderViewModel = hiltViewModel(),
 ) {
