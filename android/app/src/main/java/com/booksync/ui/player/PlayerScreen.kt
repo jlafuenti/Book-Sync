@@ -60,6 +60,7 @@ import com.booksync.data.repository.PositionSyncTimeouts.SERVER_POSITION_TIMEOUT
 import com.booksync.player.AudioPlayerService
 import com.booksync.player.MediaId
 import com.booksync.player.MediaSourceSelector
+import com.booksync.player.PairMediaItems
 import com.booksync.player.PlaybackFailure
 import com.booksync.player.PlaybackOffsets
 import com.booksync.player.PlaybackRecovery
@@ -666,22 +667,12 @@ class PlayerViewModel @Inject constructor(
         // book that is not on the device streams from the server instead of
         // leaving the player with nothing loaded and every control dead.
         val audioFile = repository.localAudioFile(pair.audiobookFilename)
-        val uri = mediaUriFor(audioFile, pair.audiobookId) ?: return
+        // Built by PairMediaItems, which the reader's read-along shares (issue #762).
+        val mediaItem = PairMediaItems.build(pair, audioFile, serverUrl) ?: return
 
         // Only the downloaded file has embedded art to read; the streaming case
         // falls back to the server's cover, which the screen already fetches.
         if (audioFile != null && audioFile.isFile) loadCoverArt(audioFile)
-
-        val mediaItem = MediaItem.Builder()
-            .setMediaId(MediaId.Pair(pair.id).value)
-            .setUri(uri)
-            .setMediaMetadata(
-                MediaMetadata.Builder()
-                    .setTitle(pair.audiobookTitle)
-                    .setArtist(pair.audiobookAuthor)
-                    .build()
-            )
-            .build()
 
         // The notification and lock screen read artwork off the MediaItem, and
         // the phone's item never carried any — only the Android Auto path set it
@@ -691,7 +682,7 @@ class PlayerViewModel @Inject constructor(
 
         // Only set if not already loaded (check current media item)
         val currentUri = mediaController.currentMediaItem?.localConfiguration?.uri
-        if (currentUri != uri) {
+        if (currentUri != mediaItem.localConfiguration?.uri) {
             mediaController.setMediaItem(mediaItem)
             mediaController.prepare()
 
@@ -1205,6 +1196,8 @@ fun PlayerScreen(
     onBack: () -> Unit,
     /** Receives the audio position at the moment of the switch — see Routes.READER. */
     onSwitchToReader: (Long) -> Unit,
+    /** Opens the reader following the audio, which keeps playing (issue #762). */
+    onReadAlong: (Long) -> Unit,
     viewModel: PlayerViewModel = hiltViewModel(),
 ) {
     val colors = Tandem.colors
@@ -1329,6 +1322,10 @@ fun PlayerScreen(
                             modifier = Modifier.tourAnchor(TourAnchor.PlayerSwitchToReader),
                         ) {
                             Icon(Icons.Default.AutoStories, "Switch to Reader", tint = colors.textPrimary)
+                        }
+                        // Read along: same screen change, but the audio is left playing.
+                        IconButton(onClick = { onReadAlong(positionMs) }) {
+                            Icon(Icons.AutoMirrored.Filled.MenuBook, "Read along", tint = colors.textPrimary)
                         }
                     }
                     // Overflow (Mark Complete / Reset Progress)

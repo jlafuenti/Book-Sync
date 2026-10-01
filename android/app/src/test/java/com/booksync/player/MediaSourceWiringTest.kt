@@ -70,13 +70,29 @@ class MediaSourceWiringTest {
 
     @Test
     fun `both player-screen loaders ask the selector`() {
-        listOf("loadAudio", "loadStandaloneAudio").forEach { name ->
+        // loadAudio goes through PairMediaItems (issue #762), which asks the
+        // selector itself — pinned just below.
+        val markers = mapOf(
+            "loadAudio" to "PairMediaItems.build",
+            "loadStandaloneAudio" to "mediaUriFor",
+        )
+        markers.forEach { (name, marker) ->
             assertTrue(
                 "PlayerViewModel.$name must build its URI through " +
                     "MediaSourceSelector (issue #171).",
-                codeLines(functionBody(playerScreen, name)).any { it.contains("mediaUriFor") },
+                codeLines(functionBody(playerScreen, name)).any { it.contains(marker) },
             )
         }
+    }
+
+    @Test
+    fun `PairMediaItems asks the selector`() {
+        val items = source("com/booksync/player/PairMediaItems.kt")
+        assertTrue(
+            "PairMediaItems.build must select its source through MediaSourceSelector " +
+                "or the player and the reader's read-along diverge (issues #171, #762).",
+            codeLines(items).any { it.contains("MediaSourceSelector.select(") },
+        )
     }
 
     @Test
