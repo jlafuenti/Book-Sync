@@ -2342,18 +2342,6 @@ class ReaderActivity : AppCompatActivity() {
                 ).show()
                 return@launch
             }
-            val wantedId = MediaId.Pair(pairId).value
-            if (ctrl.currentMediaItem?.mediaId != wantedId) {
-                val item = PairMediaItems.build(
-                    p, repository.localAudioFile(p.audiobookFilename), serverUrlManager.currentUrl,
-                )
-                if (item == null) {
-                    Log.w(TAG, "read-along: no audio source for pair $pairId")
-                    return@launch
-                }
-                ctrl.setMediaItem(item)
-                ctrl.prepare()
-            }
             // Where the audio starts. A page or selection start goes to an exact
             // sentence, so neither this lookup nor the player's resume rewind
             // may back it up (issue #772).
@@ -2371,17 +2359,38 @@ class ReaderActivity : AppCompatActivity() {
                     } else 0
                 }
             }
-            if (audioMs > 0) {
+            val wantedId = MediaId.Pair(pairId).value
+            val plan = planAudioStart(
+                itemLoaded = ctrl.currentMediaItem?.mediaId == wantedId,
+                targetMs = audioMs,
+                savedMs = repository.getBookmark(pairId)?.audioPositionMs,
+            )
+            if (audioMs > 0 && !ctrl.playWhenReady) {
                 // Only worth arming when a resume is coming: a player that is
                 // already set to play never resumes, and the one-shot would
                 // then wait for the user's next pause-and-play.
-                if (!ctrl.playWhenReady) {
-                    ctrl.sendCustomCommand(
-                        SessionCommand(AudioPlayerService.CMD_SUPPRESS_NEXT_RESUME_REWIND, Bundle()),
-                        Bundle(),
+                ctrl.sendCustomCommand(
+                    SessionCommand(AudioPlayerService.CMD_SUPPRESS_NEXT_RESUME_REWIND, Bundle()),
+                    Bundle(),
+                )
+            }
+            when (plan) {
+                is AudioStartPlan.Load -> {
+                    val item = PairMediaItems.build(
+                        p, repository.localAudioFile(p.audiobookFilename), serverUrlManager.currentUrl,
                     )
+                    if (item == null) {
+                        Log.w(TAG, "read-along: no audio source for pair $pairId")
+                        return@launch
+                    }
+                    // The start position travels with the item: the session
+                    // resolves a new item asynchronously with its own start,
+                    // and a seek sent in between is lost (seen on a phone:
+                    // Read along began at the top of the book).
+                    if (plan.startMs != null) ctrl.setMediaItem(item, plan.startMs) else ctrl.setMediaItem(item)
+                    ctrl.prepare()
                 }
-                ctrl.seekTo(audioMs.toLong())
+                is AudioStartPlan.Seek -> plan.seekMs?.let { ctrl.seekTo(it) }
             }
             // playWhenReady, not isPlaying: a player that is buffering after the
             // seek above is already set to play, and a second play() is a

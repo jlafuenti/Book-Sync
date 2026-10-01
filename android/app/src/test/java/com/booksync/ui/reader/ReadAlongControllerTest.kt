@@ -208,4 +208,30 @@ class ReadAlongControllerTest {
         c.start(1_000L)
         assertEquals(points[0], c.onAudioPosition(11_000, 1_100L)?.point)
     }
+
+    @Test
+    fun `a loaded item is sought to the target`() {
+        assertEquals(AudioStartPlan.Seek(42_000L), planAudioStart(itemLoaded = true, targetMs = 42_000, savedMs = 9_000))
+    }
+
+    @Test
+    fun `a loaded item with no target is left where it is`() {
+        assertEquals(AudioStartPlan.Seek(null), planAudioStart(itemLoaded = true, targetMs = 0, savedMs = 9_000))
+    }
+
+    @Test
+    fun `an item that must be loaded starts at the target, never at zero`() {
+        assertEquals(AudioStartPlan.Load(42_000L), planAudioStart(itemLoaded = false, targetMs = 42_000, savedMs = 9_000))
+    }
+
+    @Test
+    fun `an item that must be loaded with no target starts at the saved position`() {
+        assertEquals(AudioStartPlan.Load(9_000L), planAudioStart(itemLoaded = false, targetMs = 0, savedMs = 9_000))
+    }
+
+    @Test
+    fun `an item that must be loaded with nothing known lets the service choose`() {
+        assertEquals(AudioStartPlan.Load(null), planAudioStart(itemLoaded = false, targetMs = 0, savedMs = null))
+        assertEquals(AudioStartPlan.Load(null), planAudioStart(itemLoaded = false, targetMs = 0, savedMs = 0))
+    }
 }

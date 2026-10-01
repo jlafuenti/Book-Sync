@@ -303,4 +303,19 @@ class ReadAlongWiringTest {
         val listener = activity.substringAfter("readAlongSettings.setListener {").substringBefore("\n        }")
         assertTrue(listener.contains("readAlong.currentPoint?.let { applyReadAlongDecoration(it) }"))
     }
+
+    @Test
+    fun `an unloaded audiobook is loaded at the start position, not sought afterwards`() {
+        // Found on a phone (issue #772): with the audio service not running, the
+        // reader loaded the item with no start position and sought right after;
+        // the service resolved the start to zero and the seek was lost, so
+        // Read along began at the top of the book.
+        val start = activity.substringAfter("private fun startFollowing(").substringBefore("\n    }")
+        val target = start.indexOf("val audioMs = when (start)")
+        val plan = start.indexOf("planAudioStart(")
+        val load = start.indexOf("PairMediaItems.build(")
+        assertTrue("the target must be known before the item is loaded", target in 0 until plan && plan in 0 until load)
+        assertTrue(start.contains("ctrl.setMediaItem(item, plan.startMs)"))
+        assertTrue(start.contains("repository.getBookmark(pairId)?.audioPositionMs"))
+    }
 }
