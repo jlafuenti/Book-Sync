@@ -318,4 +318,26 @@ class ReadAlongWiringTest {
         assertTrue(start.contains("ctrl.setMediaItem(item, plan.startMs)"))
         assertTrue(start.contains("repository.getBookmark(pairId)?.audioPositionMs"))
     }
+
+    @Test
+    fun `the toolbar button stops the audio as well as the following`() {
+        // Owner feedback on a phone (issue #772): pressing Follow audio while it
+        // is on used to hide the controls and leave the audio running with
+        // nothing on screen to stop it.
+        val toggle = activity.substringAfter("private fun toggleReadAlong()").substringBefore("\n    }")
+        assertTrue(toggle.contains("stopFollowingAndPause()"))
+        val stop = activity.substringAfter("private fun stopFollowingAndPause()").substringBefore("\n    }")
+        assertTrue("a deliberate pause is announced like the player's", stop.contains("AudioPlayerService.CMD_USER_PAUSE"))
+        assertTrue(stop.contains("ctrl.pause()"))
+        assertTrue(stop.contains("stopFollowing()"))
+        assertTrue(
+            "the pause must come before the controls go, or a failure leaves audio with no controls",
+            stop.indexOf("ctrl.pause()") < stop.indexOf("stopFollowing()"),
+        )
+    }
+
+    @Test
+    fun `the end of the book stops following without a pause command`() {
+        assertTrue(activity.contains("Player.STATE_ENDED -> stopFollowing()"))
+    }
 }

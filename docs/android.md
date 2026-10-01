@@ -678,6 +678,9 @@ the page turns when the sentence leaves it.
   and keeps playing. "Follow audio" in the reader toolbar starts the audio at
   the visible page (the same page→audio match as Switch to Audio) and plays.
   Both go through the readiness gate: no sync map, no following.
+  Pressing the toolbar button again stops following and pauses the audio
+  (the reader's audio controls go with it); leaving the reader does not
+  touch playback.
 - **Logic.** `ui/reader/ReadAlongController.kt` is pure Kotlin: audio
   position → sync point via `SyncMatcher.pointForAudioPosition` (no new
   matching rule, parity fixtures unchanged), decorate on sentence change, jump

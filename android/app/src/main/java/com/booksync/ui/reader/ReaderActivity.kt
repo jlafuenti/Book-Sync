@@ -2311,7 +2311,7 @@ class ReaderActivity : AppCompatActivity() {
 
     private fun toggleReadAlong() {
         if (readAlong.state != ReadAlongController.State.Off) {
-            stopFollowing()
+            stopFollowingAndPause()
         } else {
             requestFollowing(FollowStart.VisiblePage)
         }
@@ -2411,6 +2411,23 @@ class ReaderActivity : AppCompatActivity() {
         }
     }
 
+    /**
+     * The toolbar button while following is on (issue #772): stop the audio
+     * too. Turning following off hides the reader's only audio controls, so
+     * leaving playback running left audio with nothing on screen to stop it.
+     * Leaving the reader, or the book ending, still goes through
+     * [stopFollowing] alone and does not touch playback.
+     */
+    private fun stopFollowingAndPause() {
+        readAlongMediaController?.let { ctrl ->
+            if (ctrl.playWhenReady) {
+                ctrl.sendCustomCommand(SessionCommand(AudioPlayerService.CMD_USER_PAUSE, Bundle()), Bundle())
+                ctrl.pause()
+            }
+        }
+        stopFollowing()
+    }
+
     private fun stopFollowing() {
         readAlongPollJob?.cancel()
         readAlongPollJob = null
@@ -2421,7 +2438,8 @@ class ReaderActivity : AppCompatActivity() {
         setFollowToolbar(active = false)
         readAlongBar.visibility = View.GONE
         showBackToAudio(false)
-        // Playback and the position are left exactly as they are (issue #762).
+        // Playback is not touched here; the toolbar button pauses first, in
+        // stopFollowingAndPause.
     }
 
     private fun setFollowToolbar(active: Boolean) {
