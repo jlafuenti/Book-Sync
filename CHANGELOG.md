@@ -16,6 +16,12 @@ operator must do by hand rather than read about afterwards.
 
 ## [Unreleased]
 
+### Fixed
+
+- The sentence splitter no longer joins a paragraph to the next one, and a fragment under three
+  words now stays with its neighbour instead of being dropped. Existing sync maps keep the old
+  split until they are rebuilt (#774).
+
 ## [0.8.0] - 2026-09-29
 
 ### Added
