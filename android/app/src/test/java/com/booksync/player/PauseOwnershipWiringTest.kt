@@ -57,6 +57,35 @@ class PauseOwnershipWiringTest {
     }
 
     /**
+     * Issue #766. `onIsPlayingChanged(false)` fires on every rebuffer, and it
+     * used to run the pause write each time — a stalling stream pushed about
+     * once a second. The stop write now goes through [PlaybackStopPolicy], which
+     * lets a stall pass. A pause pressed *during* a stall changes only
+     * `playWhenReady` (isPlaying is already false), so the check has to run on
+     * that event too, not just on isPlaying changes.
+     */
+    @Test
+    fun `the stop write is gated on PlaybackStopPolicy and sees playWhenReady changes`() {
+        val service = codeLines(source("com/booksync/player/AudioPlayerService.kt"))
+        assertTrue(
+            "The pause write must ask PlaybackStopPolicy whether this is a stop, " +
+                "so a rebuffer does not push a position (issue #766).",
+            service.any { it.contains("PlaybackStopPolicy.isStop(") },
+        )
+        assertTrue(
+            "The stop check must run from onEvents, which carries the player and " +
+                "sees PLAY_WHEN_READY changes: a pause during a stall fires no " +
+                "onIsPlayingChanged.",
+            service.any { it.contains("override fun onEvents(") } &&
+                service.any { it.contains("EVENT_PLAY_WHEN_READY_CHANGED") },
+        )
+        assertTrue(
+            "Exactly one place consumes the PauseSavePolicy verdict: the gated stop.",
+            service.count { it.contains("claimFormat = pauseSavePolicy.consumeClaimFormat()") } == 1,
+        )
+    }
+
+    /**
      * Issue #480. `CMD_USER_PAUSE` is sent only by the player screen, so a pause
      * from the notification, the lock screen, Android Auto or a Bluetooth button
      * left the flag unarmed and claimed nothing — listening through the surfaces
