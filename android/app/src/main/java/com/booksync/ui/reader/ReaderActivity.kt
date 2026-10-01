@@ -1172,6 +1172,7 @@ class ReaderActivity : AppCompatActivity() {
                 when (readAlong.onLocatorEmitted(System.currentTimeMillis())) {
                     ReadAlongController.LocatorVerdict.Echo -> {
                         probeLivePage(shownAtMs, userTurn = false)
+                        requestReadAlongDecorationLayout()
                         return@collect
                     }
                     ReadAlongController.LocatorVerdict.Suspect -> {
@@ -2460,7 +2461,28 @@ class ReaderActivity : AppCompatActivity() {
             ReadAlongStyle.HIGHLIGHT -> Decoration.Style.Highlight(tint = readAlongSettings.tint)
         }
         val decoration = Decoration(id = "read-along-current", locator = locator, style = style)
-        lifecycleScope.launch { nav.applyDecorations(listOf(decoration), READ_ALONG_DECORATION_GROUP) }
+        lifecycleScope.launch {
+            nav.applyDecorations(listOf(decoration), READ_ALONG_DECORATION_GROUP)
+            requestReadAlongDecorationLayout()
+        }
+    }
+
+    /**
+     * Readium lays a decoration out once, when it is added, from the text
+     * range's client rects at that moment. Added while the page is still
+     * settling (right after the open, or a jump), the item ends up with no
+     * boxes and stays invisible: the range is kept, only the layout is empty
+     * (seen on the emulator). The decorator re-lays out on request, so ask it
+     * again once the page has settled. Harmless when the boxes were drawn.
+     */
+    private fun requestReadAlongDecorationLayout() {
+        val nav = navigator ?: return
+        lifecycleScope.launch {
+            delay(READ_ALONG_SETTLE_MS)
+            nav.evaluateJavascript(
+                "(function(){try{readium.getDecorations('$READ_ALONG_DECORATION_GROUP').requestLayout()}catch(e){}})()",
+            )
+        }
     }
 
     /** Removes the sentence mark; called when following stops. */
