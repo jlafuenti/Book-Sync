@@ -506,7 +506,15 @@ async def realign_pair(
     (`routers/library.py`) has to do exactly the same thing after it re-points a
     pair at its converted EPUB — issue #101.
     """
+    from services import sync_map_rebuild
     from services.realign import RealignError, realign_pair_from_cached_transcript
+
+    # Two writers on one pair's map would fight (issue #774).
+    if sync_map_rebuild.is_running():
+        raise HTTPException(
+            status_code=409,
+            detail="A bulk sync map rebuild is running; try again when it finishes.",
+        )
 
     try:
         result = await realign_pair_from_cached_transcript(db, pair_id)

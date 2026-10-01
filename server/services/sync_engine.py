@@ -11,7 +11,7 @@ import os
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
-from sqlalchemy import select, delete
+from sqlalchemy import func, select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from models.book import BookPair, EBook
@@ -19,6 +19,7 @@ from models.bookmark import Bookmark, BookmarkSource
 from models.sync_map import SyncMap, SyncPoint
 from schemas import PositionScope
 from services.alignment import AlignedPoint, AlignmentDiagnostics
+from services.epub_parser import SENTENCE_SPLITTER_VERSION
 from services.file_hash import hash_file
 from services.position_service import ScopeRef, _sync_derived_progress
 from services.sync_matcher import match_text_to_sync_points
@@ -64,12 +65,38 @@ async def _ebook_file_hash(db: AsyncSession, book_pair_id: int) -> Optional[str]
         return None
 
 
+@dataclass(frozen=True)
+class SaveSyncMapResult:
+    """What `save_sync_map_with_result` did besides saving the map.
+
+    `bookmarks` is how many bookmarks the pair had when an earlier map was
+    replaced (0 for a first-ever map, which has nothing to translate from);
+    `bookmarks_remapped` is how many of them the re-map actually moved.
+    """
+    version: int
+    bookmarks: int
+    bookmarks_remapped: int
+
+
 async def save_sync_map(
     db: AsyncSession,
     book_pair_id: int,
     aligned_points: List[AlignedPoint],
     diagnostics: Optional[AlignmentDiagnostics] = None,
 ) -> SyncMap:
+    """Save a sync map and return it. See `save_sync_map_with_result`."""
+    sync_map, _result = await save_sync_map_with_result(
+        db, book_pair_id, aligned_points, diagnostics
+    )
+    return sync_map
+
+
+async def save_sync_map_with_result(
+    db: AsyncSession,
+    book_pair_id: int,
+    aligned_points: List[AlignedPoint],
+    diagnostics: Optional[AlignmentDiagnostics] = None,
+) -> Tuple[SyncMap, SaveSyncMapResult]:
     """
     Save alignment results as a SyncMap with SyncPoints.
 
@@ -151,6 +178,8 @@ async def save_sync_map(
         epub_file_hash=await _ebook_file_hash(db, book_pair_id),
         degraded=bool(diagnostics and diagnostics.degraded),
         degraded_reason=(diagnostics.reason if diagnostics and diagnostics.degraded else None),
+        # The split this map's coordinates belong to (issue #774).
+        splitter_version=SENTENCE_SPLITTER_VERSION,
     )
     db.add(sync_map)
     await db.flush()
@@ -177,12 +206,22 @@ async def save_sync_map(
     # Only a *replacement* invalidates anything. A first-ever map has no old
     # coordinates to translate from, and its points are what the next write will
     # establish coordinates against anyway.
+    bookmarks = 0
+    bookmarks_remapped = 0
     if old_points:
-        await remap_bookmarks_for_pair(
+        bookmarks = (await db.execute(
+            select(func.count()).select_from(Bookmark)
+            .where(Bookmark.book_pair_id == book_pair_id)
+        )).scalar_one()
+        bookmarks_remapped = await remap_bookmarks_for_pair(
             db, book_pair_id, aligned_points, old_points, new_version
         )
 
-    return sync_map
+    return sync_map, SaveSyncMapResult(
+        version=new_version,
+        bookmarks=bookmarks,
+        bookmarks_remapped=bookmarks_remapped,
+    )
 
 
 # ---------------------------------------------------------------------------
