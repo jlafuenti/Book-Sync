@@ -22,9 +22,11 @@ import com.booksync.sync.SyncMatcher
  * [jumpEchoWindowMs] of our own jump is the echo. Anything later is only a
  * *suspect*: Readium also emits late settle locators with nobody touching
  * the page (seen on a slow device, well after the open), so the activity
- * checks whether the current sentence is still on screen and calls
- * [confirmManualTurn] only when it is not — which pauses following without
- * touching playback ([State.Paused]). [onBackToAudio] resumes.
+ * waits for the page to settle, checks whether the current sentence is
+ * still on screen and reports through [onSuspectVerified]: gone means a
+ * manual turn, which pauses following without touching playback
+ * ([State.Paused]); back on screen while paused means the user returned,
+ * and following resumes. [onBackToAudio] resumes from anywhere else.
  */
 class ReadAlongController(
     private val points: List<SyncPointEntity>,
@@ -75,14 +77,26 @@ class ReadAlongController(
     }
 
     fun onLocatorEmitted(nowMs: Long): LocatorVerdict {
-        if (state != State.Following) return LocatorVerdict.Ignored
+        if (state == State.Off) return LocatorVerdict.Ignored
         if (nowMs - lastJumpAtMs <= jumpEchoWindowMs) return LocatorVerdict.Echo
         return LocatorVerdict.Suspect
     }
 
-    /** The activity found the current sentence off screen after a [LocatorVerdict.Suspect]: the user turned the page. */
-    fun confirmManualTurn() {
-        if (state == State.Following) state = State.Paused
+    /**
+     * The page's answer to a [LocatorVerdict.Suspect], once it has settled:
+     * following with the sentence gone means the user turned the page
+     * ([State.Paused]); paused with the sentence back on screen means they
+     * returned to it, so following resumes by itself. Returns true when the
+     * state changed.
+     */
+    fun onSuspectVerified(visible: Boolean): Boolean {
+        val next = when {
+            state == State.Following && !visible -> State.Paused
+            state == State.Paused && visible -> State.Following
+            else -> return false
+        }
+        state = next
+        return true
     }
 
     fun onBackToAudio(nowMs: Long): List<Action> {

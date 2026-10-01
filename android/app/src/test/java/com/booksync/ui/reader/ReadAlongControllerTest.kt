@@ -103,26 +103,44 @@ class ReadAlongControllerTest {
     }
 
     @Test
-    fun `a confirmed manual turn pauses following`() {
+    fun `a suspect whose sentence has left the page is a manual turn and pauses following`() {
         val c = following()
         c.onAudioPosition(11_000, 100L)
         assertEquals(ReadAlongController.LocatorVerdict.Suspect, c.onLocatorEmitted(5_000L))
-        c.confirmManualTurn()
+        assertTrue(c.onSuspectVerified(visible = false))
         assertEquals(ReadAlongController.State.Paused, c.state)
         assertTrue(c.isPaused)
         assertFalse(c.isFollowing)
-        assertEquals(ReadAlongController.LocatorVerdict.Ignored, c.onLocatorEmitted(6_000L))
     }
 
     @Test
-    fun `confirming a manual turn while off or paused changes nothing`() {
+    fun `a suspect whose sentence is still on the page changes nothing`() {
+        val c = following()
+        c.onAudioPosition(11_000, 100L)
+        c.onLocatorEmitted(5_000L)
+        assertFalse(c.onSuspectVerified(visible = true))
+        assertTrue(c.isFollowing)
+    }
+
+    @Test
+    fun `while paused a later emission is still a suspect and the sentence coming back resumes following`() {
+        val c = following()
+        c.onAudioPosition(11_000, 100L)
+        c.onLocatorEmitted(5_000L)
+        c.onSuspectVerified(visible = false)
+        assertEquals(ReadAlongController.LocatorVerdict.Suspect, c.onLocatorEmitted(9_000L))
+        assertFalse(c.onSuspectVerified(visible = false))
+        assertTrue(c.isPaused)
+        assertTrue(c.onSuspectVerified(visible = true))
+        assertTrue(c.isFollowing)
+    }
+
+    @Test
+    fun `verifying a suspect while off changes nothing`() {
         val c = ReadAlongController(points)
-        c.confirmManualTurn()
+        assertFalse(c.onSuspectVerified(visible = false))
+        assertFalse(c.onSuspectVerified(visible = true))
         assertEquals(ReadAlongController.State.Off, c.state)
-        c.start(0L)
-        c.confirmManualTurn()
-        c.confirmManualTurn()
-        assertEquals(ReadAlongController.State.Paused, c.state)
     }
 
     @Test
@@ -139,7 +157,7 @@ class ReadAlongControllerTest {
         val c = following()
         c.onAudioPosition(11_000, 100L)
         c.onLocatorEmitted(5_000L)
-        c.confirmManualTurn()
+        c.onSuspectVerified(visible = false)
         assertNull(c.onAudioPosition(17_000, 5_500L))
         assertEquals(points[2], c.currentPoint)
     }
@@ -149,7 +167,7 @@ class ReadAlongControllerTest {
         val c = following()
         c.onAudioPosition(11_000, 100L)
         c.onLocatorEmitted(5_000L)
-        c.confirmManualTurn()
+        c.onSuspectVerified(visible = false)
         c.onAudioPosition(17_000, 5_500L)
         val actions = c.onBackToAudio(6_000L)
         assertEquals(

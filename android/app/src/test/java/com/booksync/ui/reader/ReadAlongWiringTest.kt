@@ -91,9 +91,11 @@ class ReadAlongWiringTest {
     @Test
     fun `a suspected manual turn is confirmed by the page before following pauses`() {
         val verify = activity.substringAfter("private fun verifySuspectedTurn()").substringBefore("\n    }")
+        assertTrue("the probe must wait for the page to settle", verify.contains("delay(READ_ALONG_SETTLE_MS)"))
+        assertTrue("only one probe per burst", verify.contains("suspectVerifyJob?.cancel()"))
         assertTrue(verify.contains("isSentenceVisible("))
-        assertTrue(verify.contains("readAlong.confirmManualTurn()"))
-        assertTrue(verify.contains("showBackToAudio(true)"))
+        assertTrue(verify.contains("readAlong.onSuspectVerified(visible)"))
+        assertTrue(verify.contains("showBackToAudio(readAlong.isPaused)"))
     }
 
     @Test

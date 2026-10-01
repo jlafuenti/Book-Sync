@@ -159,6 +159,10 @@ class ReaderActivity : AppCompatActivity() {
         // toolbar icon's alpha while following is off (255 while on).
         private const val READ_ALONG_POLL_MS = 500L
         private const val READ_ALONG_ICON_OFF_ALPHA = 140
+        // How long after a suspect locator emission to wait before asking the
+        // page whether the sentence is still on screen (Readium's snap-back
+        // and settle emissions arrive well inside this).
+        private const val READ_ALONG_SETTLE_MS = 700L
     }
 
     @Inject lateinit var repository: BookSyncRepository
@@ -336,6 +340,8 @@ class ReaderActivity : AppCompatActivity() {
     private var readAlong: ReadAlongController = ReadAlongController(emptyList())
     private var readAlongMediaController: MediaController? = null
     private var readAlongPollJob: Job? = null
+    /** The pending settle-then-probe for a suspect locator emission; see [verifySuspectedTurn]. */
+    private var suspectVerifyJob: Job? = null
 
     /** One-shot: the [EXTRA_READ_ALONG] request is honoured on the first locator only. */
     private var readAlongRequested = false
@@ -2327,6 +2333,8 @@ class ReaderActivity : AppCompatActivity() {
     private fun stopFollowing() {
         readAlongPollJob?.cancel()
         readAlongPollJob = null
+        suspectVerifyJob?.cancel()
+        suspectVerifyJob = null
         readAlong.stop()
         clearReadAlongDecoration()
         setFollowToolbar(active = false)
@@ -2507,16 +2515,18 @@ class ReaderActivity : AppCompatActivity() {
      * does not. Nothing to compare against before the first audio tick.
      */
     private fun verifySuspectedTurn() {
-        val point = readAlong.currentPoint ?: return
-        val quote = ReadAlongController.quoteFor(point.epubTextPreview) ?: return
-        lifecycleScope.launch {
+        // One probe per burst, after the page has settled: a drag that snaps
+        // back emits mid-gesture with the columns shifted, and a probe taken
+        // then reads the sentence as gone (seen on the emulator).
+        suspectVerifyJob?.cancel()
+        suspectVerifyJob = lifecycleScope.launch {
+            delay(READ_ALONG_SETTLE_MS)
+            val point = readAlong.currentPoint ?: return@launch
+            val quote = ReadAlongController.quoteFor(point.epubTextPreview) ?: return@launch
             val visible = isSentenceVisible(
                 quote, "chapter ${point.epubChapter} sentence ${point.epubSentenceIndex}",
             )
-            if (!visible && readAlong.isFollowing) {
-                readAlong.confirmManualTurn()
-                showBackToAudio(true)
-            }
+            if (readAlong.onSuspectVerified(visible)) showBackToAudio(readAlong.isPaused)
         }
     }
 
