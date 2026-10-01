@@ -160,7 +160,7 @@ class ReadAlongController(
         /**
          * The text to look for on the page for a sync point. A preview can
          * span two paragraphs (the server's tokenizer joins a dangling
-         * fragment like `“His mother …”` to the next sentence), and a quote
+         * fragment like `“Her brother …”` to the next sentence), and a quote
          * across a block boundary never matches the page text, so only the
          * first line is used. Null when there is nothing to quote.
          */
