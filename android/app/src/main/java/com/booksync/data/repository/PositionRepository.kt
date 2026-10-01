@@ -1547,8 +1547,13 @@ class PositionRepository @Inject constructor(
      * unsynced local always wins, otherwise whichever of remote/local is
      * newer by `captured_at` (falling back to `updated_at`) wins, with a tie
      * or a missing remote left alone.
+     *
+     * Then, unless the local bookmark was unsynced, applies the remote row's
+     * completion flag to the pair's own progress rows ([projectPairCompletion],
+     * issue #771).
      */
-    private suspend fun reconcileBookmark(pairId: Int, remote: PositionResponse?) {
+    private suspend fun reconcileBookmark(pair: BookPairEntity, remote: PositionResponse?) {
+        val pairId = pair.id
         val local = bookmarkDao.getBookmark(scope, pairId)
         // Prefer captured_at (the true on-device capture moment) over updated_at
         // (a bookkeeping timestamp) whenever the server/local row provides one —
@@ -1575,6 +1580,70 @@ class PositionRepository @Inject constructor(
                 pushBookmark(pairId, local, appendToLog = false)
                 log("syncBookmark pair=$pairId: pushed local ts=$localTs")
             }
+        }
+
+        // An unsynced bookmark was just pushed, and the server may have
+        // recomputed completion from it — `remote` predates that, so the next
+        // sync applies the result instead. Every other branch, the tie
+        // included, projects: a device that pulled this bookmark on a build
+        // that dropped the flag has a matching bookmark and would otherwise
+        // never be repaired.
+        if (remote != null && (local == null || local.syncedToServer)) {
+            projectPairCompletion(pair, remote)
+        }
+    }
+
+    /**
+     * Applies a pair row's `is_completed` to the pair's own `user_progress`
+     * rows — the rows Continue Reading (Home and Android Auto) hides a
+     * finished pair by (issue #771).
+     *
+     * Pair completion lives only on the server's pair bookmark, which
+     * [BookmarkEntity] has no field for, and a pair has no standalone-scope
+     * row for [reconcileProgress] to carry it. Before this, only
+     * [markPairComplete] ever wrote the flag locally, so a fresh install
+     * listed every finished pair and a device never saw another client
+     * un-finish one. Both directions now come from the server.
+     *
+     * Per row: an unsynced local row wins (an offline [markPairComplete]
+     * waiting for the sweep), as does one newer than the remote row (Mark
+     * Complete tapped while the startup fetch was in flight). Otherwise only
+     * the flag changes — positions and timestamps stay. A missing row is
+     * created only to carry `true`; it is written synced, so it is never
+     * pushed back as a standalone-scope write.
+     */
+    private suspend fun projectPairCompletion(pair: BookPairEntity, remote: PositionResponse) {
+        val completed = remote.is_completed
+        val remoteTs = parseSyncTimestamp(preferCapturedAt(remote.captured_at, remote.updated_at))
+        for ((mediaType, mediaId) in listOf("ebook" to pair.ebookId, "audiobook" to pair.audiobookId)) {
+            val local = userProgressDao.getProgress(scope, mediaType, mediaId)
+            if (local == null) {
+                if (!completed) continue
+                userProgressDao.upsertProgress(
+                    UserProgressEntity(
+                        mediaType = mediaType,
+                        mediaId = mediaId,
+                        bookPairId = pair.id,
+                        epubCfi = null,
+                        epubChapter = null,
+                        epubProgressPercent = null,
+                        audioPositionMs = null,
+                        isCompleted = true,
+                        updatedAt = remoteTs,
+                        deviceId = remote.device_id,
+                        deviceName = remote.device_name,
+                        capturedAt = remote.captured_at,
+                        scopeKey = scope,
+                        syncedToServer = true,
+                    )
+                )
+            } else {
+                if (!local.syncedToServer || local.isCompleted == completed) continue
+                val localTs = local.capturedAt?.let { parseSyncTimestamp(it) } ?: local.updatedAt
+                if (localTs > remoteTs) continue
+                userProgressDao.upsertProgress(local.copy(isCompleted = completed))
+            }
+            log("syncCompletion pair=${pair.id} $mediaType=$mediaId: completed=$completed from server")
         }
     }
 
@@ -1667,6 +1736,11 @@ class PositionRepository @Inject constructor(
      * `PlayerScreen.refreshBookmark`). The bulk response already carries
      * those rows for free, so applying them here closes that gap for a fresh
      * sign-in without any extra round trips.
+     *
+     * Pair completion is pulled here too, on both paths (issue #771): each
+     * pair row's `is_completed` is projected onto the pair's own ebook and
+     * audiobook `user_progress` rows, which is what Continue Reading hides a
+     * finished pair by — see [projectPairCompletion].
      */
     suspend fun syncAllBookmarksAndProgress(pairs: List<BookPairEntity>) {
         val bulk = try {
@@ -1695,7 +1769,7 @@ class PositionRepository @Inject constructor(
 
         for (pair in pairs) {
             currentCoroutineContext().ensureActive()
-            reconcileBookmark(pair.id, byPair[pair.id])
+            reconcileBookmark(pair, byPair[pair.id])
             reconcileProgress("audiobook", pair.audiobookId, byAudiobook[pair.audiobookId])
         }
 
@@ -1735,7 +1809,7 @@ class PositionRepository @Inject constructor(
                 // unsynced local row is still worth pushing in the first case,
                 // and the push simply fails in the second, so both are handled
                 // by falling through to the local-wins branch inside reconcileBookmark.
-                reconcileBookmark(pair.id, fetchPosition("pair", pair.id).position)
+                reconcileBookmark(pair, fetchPosition("pair", pair.id).position)
             } catch (_: Exception) { /* offline or no server record yet — skip */ }
 
             try {

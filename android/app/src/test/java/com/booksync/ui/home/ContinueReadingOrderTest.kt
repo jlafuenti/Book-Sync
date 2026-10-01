@@ -236,8 +236,8 @@ class ContinueReadingOrderTest {
     /**
      * Issue #618. `getRecentlyPlayedStandaloneAudiobooksFlow` is not actually
      * filtered to books without a pair (see `Daos.kt`'s
-     * `getRecentlyPlayedStandaloneAudiobooks`), and `syncAllBookmarksAndProgress`
-     * writes a `user_progress` row for every pair's audiobook — so an
+     * `getRecentlyPlayedStandaloneAudiobooks`), and a pair's audiobook can carry
+     * its own `user_progress` row (see `HomeViewModel`) — so an
      * in-progress paired book used to contribute both a `pair_N` row and an
      * `audiobook_M` row here. Android Auto's Continue Listening has the same
      * two sources and drops the duplicate the same way (`AutoBrowseTreeTest`).
