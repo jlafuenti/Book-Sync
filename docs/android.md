@@ -668,6 +668,44 @@ this callback. The transformer is what fixes that case; the escape hatch covers 
 (a missing or unreadable spine item, a truncated download) and keeps any future variant a
 nuisance rather than a lock-out.
 
+### Read-along (issue #762)
+
+While the audiobook plays, the reader can follow it: the current sentence is
+marked (highlight by default, underline from Display Settings → Reading) and
+the page turns when the sentence leaves it.
+
+- **Entry.** "Read along" on the player opens the reader on the matching page
+  and keeps playing. "Follow audio" in the reader toolbar starts the audio at
+  the visible page (the same page→audio match as Switch to Audio) and plays.
+  Both go through the readiness gate: no sync map, no following.
+- **Logic.** `ui/reader/ReadAlongController.kt` is pure Kotlin: audio
+  position → sync point via `SyncMatcher.pointForAudioPosition` (no new
+  matching rule, parity fixtures unchanged), decorate on sentence change, jump
+  only when the page reports the sentence off screen, and a 1.5 s echo window
+  after our own jump. A locator emission outside that window is only a
+  suspect manual turn: the reader waits for the page to settle (700 ms) and
+  asks the page whether the sentence is still on screen. If it is, the
+  emission was Readium's own snap-back or settle and following carries on; if
+  it is not, following pauses without pausing the audio and "Back to audio"
+  appears. A paused follow resumes by itself when the sentence returns to the
+  screen, or when "Back to audio" is tapped.
+- **Position.** While following, `ReaderActivity.savePosition` drops every
+  save, so `AudioPlayerService`'s heartbeat is the only writer and the record
+  stays `audiobook`-sourced (`docs/position-sync-contract.md`). A manual turn
+  or switching following off lifts that; the next reader save claims `ebook`
+  as before. Resume re-anchoring is skipped while following.
+- **Marking.** One Readium `Decoration` in group `read-along`, anchored by
+  the sync point's `epub_text_preview` as a text quote. Only the first line of
+  the preview is quoted: a preview can span two paragraphs (the server joins a
+  dangling fragment to the next sentence), and a quote across a block boundary
+  never matches the page text.
+  The preview is capped at 200 characters server-side, so a longer sentence is
+  marked up to the cap. While following is paused the mark stays on the
+  sentence that was current.
+- **Audio.** The reader attaches its own `MediaController` to the running
+  service and polls every 500 ms, like the player and the mini player. Its
+  pause button announces `CMD_USER_PAUSE` first, like the player's.
+
 ## Position sync
 
 The Android app writes position through the same endpoint as the web app and follows the same
