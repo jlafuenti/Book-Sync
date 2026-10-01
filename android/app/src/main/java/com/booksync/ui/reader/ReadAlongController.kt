@@ -4,6 +4,22 @@ import com.booksync.data.local.entity.SyncPointEntity
 import com.booksync.sync.SyncMatcher
 
 /**
+ * Where a read-along start puts the audio (issue #772). One sealed type so the
+ * three entry points (the player's handoff, the toolbar toggle, a text
+ * selection) share a single start path in `ReaderActivity.startFollowing`.
+ */
+sealed interface FollowStart {
+    /** Follow from wherever the audio already is (the player's Read along handoff). */
+    object KeepAudio : FollowStart
+
+    /** Seek to the sentence on the visible page first (the toolbar's Follow audio). */
+    object VisiblePage : FollowStart
+
+    /** Seek to [ms] first (the sentence a selection matched). */
+    data class AudioMs(val ms: Int) : FollowStart
+}
+
+/**
  * Read-along's decision logic (issue #762), kept free of Android so it is
  * JVM-testable; [ReaderActivity] owns the MediaController, the poll and the
  * Readium calls and feeds this class.

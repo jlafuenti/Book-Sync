@@ -705,6 +705,23 @@ the page turns when the sentence leaves it.
 - **Audio.** The reader attaches its own `MediaController` to the running
   service and polls every 500 ms, like the player and the mini player. Its
   pause button announces `CMD_USER_PAUSE` first, like the player's.
+- **From a selection.** "Read along" in the text-selection toolbar (next to
+  Define and Sync to Audio, same availability rule as Sync to Audio) looks the
+  selected sentence up in the sync map and starts following from it, without
+  leaving the reader. Unlike Sync to Audio it writes no handoff bookmark and
+  sets no pending audio seek. It works while following is already on or
+  paused: it seeks, and following resumes with the "Back to audio" chip
+  hidden. All three entry points share one start path
+  (`ReaderActivity.startFollowing(FollowStart)`).
+- **Toolbar allow-list.** The selection toolbar keeps only Copy and Tandem's own
+  items; every other item, system or OEM, is removed whatever its title
+  (`selectionNoiseItemIds`). The system's Read aloud is removed on purpose:
+  Read along replaces it.
+- **No rewind on a read-along start.** A page or selection start looks the
+  audio up with `rewindMs = 0` and sends `CMD_SUPPRESS_NEXT_RESUME_REWIND`
+  before it seeks and plays, so `ResumeRewindPlayer` skips its resume rewind
+  for that one play. Ordinary resumes, Sync to Audio and the reader's own
+  play/pause button keep the 5 s rewind.
 
 ## Position sync
 

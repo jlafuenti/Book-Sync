@@ -127,6 +127,88 @@ class ReadAlongWiringTest {
         assertTrue(!start.contains("if (!ctrl.isPlaying) ctrl.play()"))
     }
 
+    // ============ Read along from a selection (issue #772) ============
+
+    private val selectionController by lazy { source("com/booksync/ui/reader/ReaderSelectionController.kt") }
+    private val readAlongSource by lazy { source("com/booksync/ui/reader/ReadAlongController.kt") }
+
+    @Test
+    fun `the selection toolbar host has a Read along action`() {
+        val host = selectionController.substringAfter("interface Host {").substringBefore("private var hasInstalledInterceptor")
+        assertTrue(host.contains("fun onReadAlong(dismiss: () -> Unit)"))
+        assertTrue(
+            "the activity must implement it",
+            activity.contains("override fun onReadAlong(dismiss: () -> Unit) = readAlongFromSelection(dismiss)"),
+        )
+    }
+
+    @Test
+    fun `the Read along item sits after Sync to Audio, under the same availability condition`() {
+        val inject = selectionController.substringAfter("private fun injectCustomItems(").substringBefore("/** Remove the noise")
+        assertTrue(
+            inject.contains(
+                "if (host.syncToAudioAvailable && menu.findItem(R.id.action_read_along_selection) == null)",
+            ),
+        )
+        assertTrue(inject.contains("menu.add(0, R.id.action_read_along_selection, 2, \"Read along\")"))
+        assertTrue(inject.contains("host.onReadAlong { mode.finish() }"))
+    }
+
+    @Test
+    fun `reading along from a selection looks the audio up with no rewind and leaves the handoff alone`() {
+        val body = activity.substringAfter("private fun readAlongFromSelection(").substringBefore("\n    }")
+        assertTrue(body.contains("navigator?.currentSelection()"))
+        assertTrue(body.contains("selectionTooShortToSync(selectedText)"))
+        assertTrue(body.contains("repository.epubToAudioText(pairId, chapterIndex, selectedText, rewindMs = 0)"))
+        assertTrue("no match keeps the existing toast", body.contains("No matching audio found"))
+        assertTrue("a match goes through the readiness gate", body.contains("requestFollowing(FollowStart.AudioMs(audioMs))"))
+        assertTrue(
+            "the handoff writes a bookmark and arms a pending seek the player would act on later",
+            !body.contains("syncSelectionToAudio(") && !body.contains("PageAudioHandoff"),
+        )
+        assertTrue("the reader stays open", !body.contains("switchToAudio()"))
+    }
+
+    @Test
+    fun `dismiss is called only after the selection has been read`() {
+        val body = activity.substringAfter("private fun readAlongFromSelection(").substringBefore("\n    }")
+        assertTrue(body.indexOf("navigator?.currentSelection()") < body.indexOf("dismiss()"))
+    }
+
+    @Test
+    fun `every follow entry point shares one start path keyed by a sealed FollowStart`() {
+        assertTrue(readAlongSource.contains("sealed interface FollowStart"))
+        assertTrue(readAlongSource.contains("object KeepAudio : FollowStart"))
+        assertTrue(readAlongSource.contains("object VisiblePage : FollowStart"))
+        assertTrue(readAlongSource.contains("data class AudioMs(val ms: Int) : FollowStart"))
+        assertTrue(activity.contains("private fun requestFollowing(start: FollowStart)"))
+        assertTrue(activity.contains("private fun startFollowing(start: FollowStart)"))
+        assertTrue(!activity.contains("seekToPage"))
+        // The three callers: the player handoff keeps the audio where it is,
+        // the toolbar toggle starts at the visible page.
+        assertTrue(activity.contains("requestFollowing(FollowStart.KeepAudio)"))
+        val toggle = activity.substringAfter("private fun toggleReadAlong()").substringBefore("\n    }")
+        assertTrue(toggle.contains("requestFollowing(FollowStart.VisiblePage)"))
+    }
+
+    @Test
+    fun `an explicit audio position is sought to with the rewind skipped, even while already following`() {
+        val start = activity.substringAfter("private fun startFollowing(").substringBefore("\n    }")
+        assertTrue(start.contains("is FollowStart.AudioMs -> start.ms"))
+        assertTrue(start.contains("FollowStart.KeepAudio -> 0"))
+        assertTrue(start.contains("readAlong.start(System.currentTimeMillis())"))
+        assertTrue("a fresh start hides the Back to audio chip", start.contains("showBackToAudio(false)"))
+        assertTrue("an earlier suspect probe must not pause the new run", start.contains("suspectVerifyJob?.cancel()"))
+        assertTrue("it never toggles following off", !start.contains("stopFollowing()"))
+    }
+
+    @Test
+    fun `the toolbar toggle and the selection entry share the readiness gate`() {
+        val gate = activity.substringAfter("private fun requestFollowing(").substringBefore("\n    }")
+        assertTrue(gate.contains("repository.readiness(pairId)"))
+        assertTrue(gate.contains("startFollowing(start)"))
+    }
+
     // ============ No stacked rewinds (issue #772) ============
 
     @Test
