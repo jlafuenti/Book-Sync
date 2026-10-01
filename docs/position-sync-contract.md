@@ -275,6 +275,12 @@ beat a genuinely newer write from a phone, and the log is the history of moves t
 *user* made. A bookmark with no usable anchor keeps its coordinates and its old
 `sync_map_version`, so the drift stays visible instead of being papered over.
 
+A bookmark that holds no position is skipped outright: chapter 0, sentence 0, no audio
+position and no attested map version is what opening a book without reading it leaves
+behind. Its preview is the book's opening text, and matching that would move the row onto
+the first aligned sentence, stale every hint and project progress for a book the reader
+never started (issue #774).
+
 > **Clients must check the version before using a cached map.** Android caches
 > sync points in Room; before this it never compared versions, so after a
 > re-transcription `epubToAudioText` kept finding the right text and returning an

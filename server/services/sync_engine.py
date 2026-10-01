@@ -326,6 +326,28 @@ def resolve_on_map(
     return (match.epub_chapter, match.epub_sentence_index, match.audio_start_ms)
 
 
+def _holds_no_position(bookmark: Bookmark) -> bool:
+    """True for a row left at the origin by a book that was opened, not read.
+
+    Chapter 0, sentence 0, audio 0 and no attested map version: there is no
+    position here to translate, only the book's opening text as a preview.
+    Matching that preview moves the row onto the first aligned sentence (often
+    another chapter, past unaligned front matter), bumps `anchor_revision` and
+    projects progress for a book the reader never started — and a bulk rebuild
+    does it to every such row at once (issue #774). A row that did attest a
+    version was resolved against real points and is re-mapped as usual. A row
+    in chapter 0 whose coordinates were cleared by an ebook replacement and
+    that has no audio position looks the same and is treated the same: the
+    top of the book is where it already points.
+    """
+    return (
+        bookmark.sync_map_version is None
+        and not bookmark.epub_chapter
+        and not bookmark.epub_sentence_index
+        and not bookmark.audio_position_ms
+    )
+
+
 async def remap_bookmarks_for_pair(
     db: AsyncSession,
     book_pair_id: int,
@@ -365,6 +387,8 @@ async def remap_bookmarks_for_pair(
 
     A row with no usable anchor keeps its coordinates and its old
     `sync_map_version`, so the drift stays visible instead of being papered over.
+    A row that holds no position at all (`_holds_no_position`) is skipped
+    outright: there is nothing to translate.
 
     Returns the number of bookmarks re-mapped.
     """
@@ -390,6 +414,8 @@ async def remap_bookmarks_for_pair(
 
     remapped = 0
     for bookmark in bookmarks:
+        if _holds_no_position(bookmark):
+            continue
         resolved = resolve_on_map(
             bookmark.source, bookmark.audio_position_ms,
             _anchor_text(bookmark, old_points), bookmark.epub_chapter,
