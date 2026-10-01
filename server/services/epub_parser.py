@@ -16,6 +16,7 @@ from urllib.parse import unquote, urldefrag
 
 from ebooklib import epub
 from bs4 import BeautifulSoup
+from bs4.element import CData, NavigableString, Tag
 import nltk
 
 from services.nltk_data import ensure_punkt
@@ -56,8 +57,78 @@ def _extract_text_from_html(html_content: str) -> str:
     return "\n".join(lines)
 
 
+_BLOCK_TAGS = frozenset({
+    "p", "div", "h1", "h2", "h3", "h4", "h5", "h6", "li", "ul", "ol", "dl",
+    "dt", "dd", "blockquote", "pre", "section", "article", "aside", "header",
+    "footer", "nav", "main", "figure", "figcaption", "table", "tr", "td", "th",
+    "caption", "hr", "address", "body", "html",
+})
+
+
+def _extract_blocks_from_html(html_content: str) -> List[str]:
+    """
+    Split an HTML document into its text blocks, in document order (issue #774).
+
+    A block-level element flushes the running text both when it opens and when
+    it closes, so loose text between two paragraphs is a block of its own and
+    nested blocks never merge. Inline elements do not flush. Text nodes within
+    one block are joined with a single space and whitespace is collapsed, which
+    keeps the normalised text identical to the old `get_text(separator="\\n")`
+    extraction the web client mirrors. A single `<br>` is only whitespace; two
+    or more in a row (nothing but whitespace between them) end the block.
+    """
+    soup = BeautifulSoup(html_content, "html.parser")
+
+    for element in soup(["script", "style", "head"]):
+        element.decompose()
+
+    blocks: List[str] = []
+    buffer: List[str] = []
+
+    def flush() -> None:
+        text = " ".join(" ".join(buffer).split())
+        buffer.clear()
+        if text:
+            blocks.append(text)
+
+    consecutive_br = 0
+    # Iterative walk (deeply nested markup must not hit the recursion limit);
+    # each entry is (children iterator, tag to flush on leaving or None).
+    stack = [(iter(soup.contents), None)]
+    while stack:
+        children, closing = stack[-1]
+        node = next(children, None)
+        if node is None:
+            stack.pop()
+            if closing in _BLOCK_TAGS:
+                flush()
+                consecutive_br = 0
+            continue
+        if isinstance(node, Tag):
+            if node.name == "br":
+                consecutive_br += 1
+                if consecutive_br >= 2:
+                    flush()
+                continue
+            consecutive_br = 0
+            if node.name in _BLOCK_TAGS:
+                flush()
+            stack.append((iter(node.contents), node.name))
+        elif type(node) in (NavigableString, CData):
+            text = str(node)
+            if text.strip():
+                consecutive_br = 0
+                buffer.append(text)
+    flush()
+    return blocks
+
+
 def _split_into_sentences(text: str) -> List[str]:
-    """Split text into sentences using NLTK."""
+    """Split text into sentences using NLTK.
+
+    Kept for Alembic migration 0004 and the sync-map audit; sentence building
+    uses `_extract_blocks_from_html` and `_split_block_into_sentences`.
+    """
     # Lazily, not at import: this used to run at module scope and could
     # block the whole app lifespan on a slow CDN (issue #322).
     ensure_punkt()
@@ -72,6 +143,35 @@ def _split_into_sentences(text: str) -> List[str]:
             filtered.append(sent)
 
     return filtered
+
+
+def _split_block_into_sentences(block: str) -> List[str]:
+    """
+    Split one block's text into sentences; none can span the block's edges.
+
+    A sentence of fewer than three words is not dropped: it joins the previous
+    sentence of the block, or, when it opens the block, the next one. A block
+    with fewer than three words in total yields nothing.
+    """
+    ensure_punkt()
+    pieces = [s.strip() for s in nltk.sent_tokenize(block)]
+
+    sentences: List[str] = []
+    pending = ""  # leading fragments waiting for the next full sentence
+    for piece in pieces:
+        if not piece:
+            continue
+        if len(piece.split()) >= 3:
+            sentences.append(f"{pending} {piece}" if pending else piece)
+            pending = ""
+        elif sentences:
+            sentences[-1] = f"{sentences[-1]} {piece}"
+        else:
+            pending = f"{pending} {piece}" if pending else piece
+
+    if pending:  # the block held nothing but short fragments
+        return [pending] if len(pending.split()) >= 3 else []
+    return sentences
 
 
 def _build_sentences_from_documents(documents: List[str]) -> List[EpubSentence]:
@@ -91,20 +191,21 @@ def _build_sentences_from_documents(documents: List[str]) -> List[EpubSentence]:
     sentences: List[EpubSentence] = []
 
     for spine_index, content in enumerate(documents):
-        text = _extract_text_from_html(content)
+        blocks = _extract_blocks_from_html(content)
 
-        if not text.strip():
+        if not blocks:
             continue
 
-        # Try to extract chapter title from the first line
-        lines = text.strip().split("\n")
+        # Try to extract chapter title from the first block
         chapter_title = ""
-        if lines and len(lines[0].split()) <= 10:
-            # First line is short enough to be a title
-            chapter_title = lines[0].strip()
+        if len(blocks[0].split()) <= 10:
+            # First block is short enough to be a title
+            chapter_title = blocks[0]
 
-        # Split into sentences
-        chapter_sentences = _split_into_sentences(text)
+        # Split each block separately so no sentence spans two of them
+        chapter_sentences: List[str] = []
+        for block in blocks:
+            chapter_sentences.extend(_split_block_into_sentences(block))
 
         if not chapter_sentences:
             continue
@@ -339,8 +440,9 @@ def extract_mobi_sentences(mobi_path: str) -> List[EpubSentence]:
         with open(extracted_path, "r", encoding="utf-8", errors="ignore") as f:
             html_content = f.read()
 
-        text = _extract_text_from_html(html_content)
-        sentences_text = _split_into_sentences(text)
+        sentences_text: List[str] = []
+        for block in _extract_blocks_from_html(html_content):
+            sentences_text.extend(_split_block_into_sentences(block))
 
         sentences = []
         for sent_index, sent_text in enumerate(sentences_text):
