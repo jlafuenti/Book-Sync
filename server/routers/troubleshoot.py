@@ -36,14 +36,17 @@ from utils import safe_join
 from models.transcription_queue import TranscriptionQueueItem
 from models.user import User
 from rate_limit import expensive_reads
-from routers.auth import get_current_user, get_editor_user, rate_limited
+from routers.auth import get_admin_user, get_current_user, get_editor_user, rate_limited
 from schemas import (
     ActionResult, BulkChapterRepairResult, ChapterRepairResult, DeletedCount,
     LibraryScanProgress, MultiFileDismissResult, MultiFileRemoveTracksResult,
-    ReplaceFileResult, RequeueResult, SyncMapAuditResponse, TroubleshootIssues,
+    ReplaceFileResult, RequeueResult, SyncMapAuditResponse, SyncMapRebuildStart,
+    SyncMapRebuildStatus, TroubleshootIssues,
 )
 from services import chapter_repair, library_verify, pair_plausibility
 from services import sync_map_audit as sync_map_audit_service
+from services import sync_map_rebuild
+from services.epub_parser import SENTENCE_SPLITTER_VERSION
 from services.audio_change import invalidate_audiobook_transcripts
 from services.position_service import (
     demote_pair_positions,
@@ -1136,6 +1139,65 @@ async def sync_map_audit(
         "realign_endpoint": sync_map_audit_service.REALIGN_ENDPOINT,
         "pairs": flagged if flagged_only else rows,
     }
+
+
+# ---------------------------------------------------------------------------
+# Sync-map rebuild after a splitter change (issue #774)
+# ---------------------------------------------------------------------------
+
+async def _rebuild_status(db: AsyncSession) -> dict:
+    outdated, total = await sync_map_rebuild.count_outdated(db)
+    return {
+        "current_version": SENTENCE_SPLITTER_VERSION,
+        "outdated": outdated,
+        "total": total,
+        **sync_map_rebuild.status_snapshot(),
+    }
+
+
+@router.get("/sync-map-rebuild", response_model=SyncMapRebuildStatus)
+async def sync_map_rebuild_status(
+    db: AsyncSession = Depends(get_db, scope="function"),
+    _: User = Depends(get_admin_user),
+):
+    """How many sync maps predate the current sentence splitter, and how the
+    rebuild job is doing. Admin-only, like the job it reports on."""
+    return await _rebuild_status(db)
+
+
+@router.post("/sync-map-rebuild", response_model=SyncMapRebuildStatus, status_code=202)
+async def sync_map_rebuild_start(
+    body: SyncMapRebuildStart,
+    db: AsyncSession = Depends(get_db, scope="function"),
+    _: User = Depends(get_admin_user),
+):
+    """Start rebuilding outdated sync maps from their cached transcripts, in the
+    background. Nothing starts on its own; this is the only way in.
+
+    Rebuilds one pair at a time (roughly ten seconds each, no re-transcription),
+    carrying saved positions over. `dry_run` does the same work, bookmark re-map
+    included, reports what it would have done, and discards it — run that first.
+    Pairs in the transcription queue, not synced, or without a cached transcript
+    are skipped. 409 while a run is already active.
+    """
+    try:
+        await sync_map_rebuild.start(
+            dry_run=body.dry_run, pair_ids=body.pair_ids, limit=body.limit
+        )
+    except sync_map_rebuild.AlreadyRunning:
+        raise HTTPException(status_code=409, detail="A sync map rebuild is already running")
+    return await _rebuild_status(db)
+
+
+@router.post("/sync-map-rebuild/cancel", response_model=SyncMapRebuildStatus)
+async def sync_map_rebuild_cancel(
+    db: AsyncSession = Depends(get_db, scope="function"),
+    _: User = Depends(get_admin_user),
+):
+    """Stop the rebuild before its next pair. The pair in flight finishes; the
+    maps not yet reached stay outdated and a later run picks them up."""
+    sync_map_rebuild.cancel()
+    return await _rebuild_status(db)
 
 
 class DeleteCoversRequest(BaseModel):

@@ -69,6 +69,23 @@ def test_ensure_punkt_is_called_before_tokenizing_epub_text(monkeypatch):
     )
 
 
+def test_ensure_punkt_is_called_before_tokenizing_a_block(monkeypatch):
+    """Sentence building goes through the block splitter (issue #774)."""
+    from services import epub_parser
+
+    order = []
+    monkeypatch.setattr(epub_parser, "ensure_punkt", lambda: order.append("ensure"))
+    monkeypatch.setattr(
+        nltk, "sent_tokenize", lambda text: order.append("tokenize") or [text]
+    )
+
+    epub_parser._split_block_into_sentences("A sentence long enough to survive filtering.")
+
+    assert order == ["ensure", "tokenize"], (
+        "_split_block_into_sentences must ensure the corpus before tokenising."
+    )
+
+
 def test_the_image_provisions_the_corpus_at_build_time():
     """The only guard CI can offer: no workflow builds the Docker image.
 

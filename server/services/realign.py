@@ -25,17 +25,19 @@ import json
 import logging
 import zipfile
 from dataclasses import dataclass
+from typing import Optional
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from models.book import BookPair, PairStatus
+from models.sync_map import SyncMap, SyncPoint
 from models.transcript import AudioTranscript
 from services.alignment import align_texts_with_diagnostics
 from services.ebook_integrity import format_is_alignable
 from services.epub_parser import extract_book_sentences
-from services.sync_engine import save_sync_map
+from services.sync_engine import save_sync_map_with_result
 from services.transcription import TranscribedSentence
 from utils import utcnow
 
@@ -74,6 +76,14 @@ class NoCachedTranscript(RealignError):
 class RealignResult:
     points: int
     matched: int
+    #: What the replaced map looked like, for the bulk rebuild's report (issue
+    #: #774). None when the pair had no map before.
+    old_points: Optional[int] = None
+    #: Old points whose stored preview spans a line break — the symptom the
+    #: splitter change fixes.
+    old_multiline_points: Optional[int] = None
+    bookmarks: int = 0
+    bookmarks_remapped: int = 0
 
     @property
     def interpolated(self) -> int:
@@ -125,7 +135,23 @@ async def realign_pair_from_cached_transcript(
             "Alignment produced no points (empty transcript or ebook text)."
         )
 
-    await save_sync_map(db, pair_id, aligned, diagnostics)
+    # Counted before the save: the save deletes the outgoing map's points.
+    old_map_id = (await db.execute(
+        select(SyncMap.id).where(SyncMap.book_pair_id == pair_id)
+    )).scalar_one_or_none()
+    old_points = old_multiline = None
+    if old_map_id is not None:
+        old_points = (await db.execute(
+            select(func.count()).select_from(SyncPoint)
+            .where(SyncPoint.sync_map_id == old_map_id)
+        )).scalar_one()
+        old_multiline = (await db.execute(
+            select(func.count()).select_from(SyncPoint)
+            .where(SyncPoint.sync_map_id == old_map_id,
+                   SyncPoint.epub_text_preview.contains("\n"))
+        )).scalar_one()
+
+    _map, saved = await save_sync_map_with_result(db, pair_id, aligned, diagnostics)
     pair.status = PairStatus.SYNCED
     pair.synced_at = utcnow()
 
@@ -134,4 +160,11 @@ async def realign_pair_from_cached_transcript(
         f"[realign] pair {pair_id}: {len(aligned)} points, {matched} matched, "
         f"from {pair.ebook.file_path}"
     )
-    return RealignResult(points=len(aligned), matched=matched)
+    return RealignResult(
+        points=len(aligned),
+        matched=matched,
+        old_points=old_points,
+        old_multiline_points=old_multiline,
+        bookmarks=saved.bookmarks,
+        bookmarks_remapped=saved.bookmarks_remapped,
+    )

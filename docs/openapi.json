@@ -4940,6 +4940,245 @@
         "title": "SyncMapAuditRow",
         "type": "object"
       },
+      "SyncMapRebuildPairResult": {
+        "additionalProperties": false,
+        "properties": {
+          "bookmarks": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bookmarks"
+          },
+          "bookmarks_remapped": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bookmarks Remapped"
+          },
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          },
+          "matched": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Matched"
+          },
+          "new_points": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "New Points"
+          },
+          "old_multiline_points": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Old Multiline Points"
+          },
+          "old_points": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Old Points"
+          },
+          "outcome": {
+            "title": "Outcome",
+            "type": "string"
+          },
+          "pair_id": {
+            "title": "Pair Id",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "pair_id",
+          "outcome",
+          "detail",
+          "old_points",
+          "new_points",
+          "matched",
+          "old_multiline_points",
+          "bookmarks",
+          "bookmarks_remapped"
+        ],
+        "title": "SyncMapRebuildPairResult",
+        "type": "object"
+      },
+      "SyncMapRebuildStart": {
+        "description": "Body of `POST /api/troubleshoot/sync-map-rebuild` (issue #774).",
+        "properties": {
+          "dry_run": {
+            "default": false,
+            "title": "Dry Run",
+            "type": "boolean"
+          },
+          "limit": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Limit"
+          },
+          "pair_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "integer"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pair Ids"
+          }
+        },
+        "title": "SyncMapRebuildStart",
+        "type": "object"
+      },
+      "SyncMapRebuildStatus": {
+        "additionalProperties": false,
+        "properties": {
+          "cancelled": {
+            "title": "Cancelled",
+            "type": "boolean"
+          },
+          "current_version": {
+            "title": "Current Version",
+            "type": "integer"
+          },
+          "dry_run": {
+            "title": "Dry Run",
+            "type": "boolean"
+          },
+          "failed": {
+            "title": "Failed",
+            "type": "integer"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "outdated": {
+            "title": "Outdated",
+            "type": "integer"
+          },
+          "processed": {
+            "title": "Processed",
+            "type": "integer"
+          },
+          "results": {
+            "items": {
+              "$ref": "#/components/schemas/SyncMapRebuildPairResult"
+            },
+            "title": "Results",
+            "type": "array"
+          },
+          "running": {
+            "title": "Running",
+            "type": "boolean"
+          },
+          "skipped": {
+            "title": "Skipped",
+            "type": "integer"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "succeeded": {
+            "title": "Succeeded",
+            "type": "integer"
+          },
+          "to_process": {
+            "title": "To Process",
+            "type": "integer"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "current_version",
+          "outdated",
+          "total",
+          "running",
+          "dry_run",
+          "started_at",
+          "finished_at",
+          "to_process",
+          "processed",
+          "succeeded",
+          "failed",
+          "skipped",
+          "cancelled",
+          "results"
+        ],
+        "title": "SyncMapRebuildStatus",
+        "type": "object"
+      },
       "SyncMapResponse": {
         "properties": {
           "book_pair_id": {
@@ -12659,6 +12898,105 @@
           }
         ],
         "summary": "Sync Map Audit",
+        "tags": [
+          "troubleshoot"
+        ]
+      }
+    },
+    "/api/troubleshoot/sync-map-rebuild": {
+      "get": {
+        "description": "How many sync maps predate the current sentence splitter, and how the\nrebuild job is doing. Admin-only, like the job it reports on.",
+        "operationId": "sync_map_rebuild_status_api_troubleshoot_sync_map_rebuild_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SyncMapRebuildStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Sync Map Rebuild Status",
+        "tags": [
+          "troubleshoot"
+        ]
+      },
+      "post": {
+        "description": "Start rebuilding outdated sync maps from their cached transcripts, in the\nbackground. Nothing starts on its own; this is the only way in.\n\nRebuilds one pair at a time (roughly ten seconds each, no re-transcription),\ncarrying saved positions over. `dry_run` does the same work, bookmark re-map\nincluded, reports what it would have done, and discards it — run that first.\nPairs in the transcription queue, not synced, or without a cached transcript\nare skipped. 409 while a run is already active.",
+        "operationId": "sync_map_rebuild_start_api_troubleshoot_sync_map_rebuild_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SyncMapRebuildStart"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SyncMapRebuildStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Sync Map Rebuild Start",
+        "tags": [
+          "troubleshoot"
+        ]
+      }
+    },
+    "/api/troubleshoot/sync-map-rebuild/cancel": {
+      "post": {
+        "description": "Stop the rebuild before its next pair. The pair in flight finishes; the\nmaps not yet reached stay outdated and a later run picks them up.",
+        "operationId": "sync_map_rebuild_cancel_api_troubleshoot_sync_map_rebuild_cancel_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SyncMapRebuildStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Sync Map Rebuild Cancel",
         "tags": [
           "troubleshoot"
         ]

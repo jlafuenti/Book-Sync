@@ -53,6 +53,15 @@ class SyncMap(Base):
     #: Human-readable explanation (anchor counts, offset) when `degraded` is
     #: True; NULL otherwise.
     degraded_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    #: `epub_parser.SENTENCE_SPLITTER_VERSION` at the time this map was built
+    #: (issue #774). `sentence_index` only means something relative to the split
+    #: that produced it, so a map stamped below the current version names old
+    #: coordinates until it is realigned from the cached transcript. The server
+    #: default is 1: every map that predates the column was built under the
+    #: first split, and is therefore outdated, not current.
+    splitter_version: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default="1"
+    )
 
     # Relationships
     book_pair = relationship("BookPair", back_populates="sync_map")
