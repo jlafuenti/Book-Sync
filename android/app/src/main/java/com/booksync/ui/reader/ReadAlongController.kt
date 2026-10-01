@@ -4,6 +4,51 @@ import com.booksync.data.local.entity.SyncPointEntity
 import com.booksync.sync.SyncMatcher
 
 /**
+ * Where a read-along start puts the audio (issue #772). One sealed type so the
+ * three entry points (the player's handoff, the toolbar toggle, a text
+ * selection) share a single start path in `ReaderActivity.startFollowing`.
+ */
+sealed interface FollowStart {
+    /** Follow from wherever the audio already is (the player's Read along handoff). */
+    object KeepAudio : FollowStart
+
+    /** Seek to the sentence on the visible page first (the toolbar's Follow audio). */
+    object VisiblePage : FollowStart
+
+    /** Seek to [ms] first (the sentence a selection matched). */
+    data class AudioMs(val ms: Int) : FollowStart
+}
+
+/**
+ * How the reader gets the audio to a read-along start (issue #772).
+ *
+ * A seek only works on an item the session has already loaded. When the
+ * reader has to load the audiobook itself (the audio service was not running),
+ * the session resolves the item asynchronously and picks its own start
+ * position; a seek issued in between is lost, and with no saved position the
+ * book starts at zero. So the start position has to travel with the item.
+ */
+sealed interface AudioStartPlan {
+    /** The item is loaded: seek to [seekMs], or leave the audio where it is when null. */
+    data class Seek(val seekMs: Long?) : AudioStartPlan
+
+    /** The item must be loaded at [startMs]; null lets the service resume where the book was left. */
+    data class Load(val startMs: Long?) : AudioStartPlan
+}
+
+/**
+ * [targetMs] is the sentence the start is anchored on (0 when there is none),
+ * [savedMs] the pair's saved audio position. A target always wins; an item
+ * that must be loaded without one starts at the saved position rather than
+ * at the top of the book.
+ */
+fun planAudioStart(itemLoaded: Boolean, targetMs: Int, savedMs: Int?): AudioStartPlan {
+    val target = targetMs.takeIf { it > 0 }?.toLong()
+    if (itemLoaded) return AudioStartPlan.Seek(target)
+    return AudioStartPlan.Load(target ?: savedMs?.takeIf { it > 0 }?.toLong())
+}
+
+/**
  * Read-along's decision logic (issue #762), kept free of Android so it is
  * JVM-testable; [ReaderActivity] owns the MediaController, the poll and the
  * Readium calls and feeds this class.

@@ -1139,7 +1139,7 @@ class ReaderActivity : AppCompatActivity() {
                     intent.getBooleanExtra(EXTRA_READ_ALONG, false)
                 ) {
                     readAlongRequested = true
-                    requestFollowing(seekToPage = false)
+                    requestFollowing(FollowStart.KeepAudio)
                 }
 
                 // A configuration change (rotation, dark-mode toggle, split
@@ -2134,6 +2134,7 @@ class ReaderActivity : AppCompatActivity() {
                     get() = selectionSyncAvailable(pair, networkMonitor.isOnline.value)
                 override fun onDefine(dismiss: () -> Unit) = defineSelectedWord(dismiss)
                 override fun onSyncToAudio(dismiss: () -> Unit) = syncSelectedTextToAudio(dismiss)
+                override fun onReadAlong(dismiss: () -> Unit) = readAlongFromSelection(dismiss)
             },
         )
     }
@@ -2259,6 +2260,39 @@ class ReaderActivity : AppCompatActivity() {
         }
     }
 
+    /**
+     * "Read along" in the selection toolbar (issue #772): look the selected
+     * sentence up in the sync map and start following the audio from there,
+     * staying in the reader. Reads the selection from Readium's navigator at
+     * click time and calls [dismiss] only afterwards, as [syncSelectedTextToAudio]
+     * does. Unlike Sync to Audio this writes no handoff bookmark, leaves the
+     * pending audio seek alone, and does not leave the reader: the lookup is
+     * made with no rewind, and the start goes through the same readiness gate
+     * as the toolbar's Follow audio.
+     */
+    private fun readAlongFromSelection(dismiss: () -> Unit) {
+        lifecycleScope.launch {
+            val selection = navigator?.currentSelection()
+            val selectedText = selection?.locator?.text?.highlight?.trim().orEmpty()
+            dismiss()
+
+            if (selectionTooShortToSync(selectedText)) {
+                android.widget.Toast.makeText(this@ReaderActivity, "Select more text to sync", android.widget.Toast.LENGTH_SHORT).show()
+                return@launch
+            }
+
+            val locator = selection?.locator ?: return@launch
+            val pub = publication ?: return@launch
+            val chapterIndex = pub.spineIndexOf(locator).coerceAtLeast(0)
+            val audioMs = repository.epubToAudioText(pairId, chapterIndex, selectedText, rewindMs = 0)
+            if (audioMs <= 0) {
+                android.widget.Toast.makeText(this@ReaderActivity, "No matching audio found", android.widget.Toast.LENGTH_SHORT).show()
+                return@launch
+            }
+            requestFollowing(FollowStart.AudioMs(audioMs))
+        }
+    }
+
     private fun formatAudioTime(ms: Long): String {
         val totalSec = (ms / 1000).toInt()
         val h = totalSec / 3600
@@ -2277,14 +2311,14 @@ class ReaderActivity : AppCompatActivity() {
 
     private fun toggleReadAlong() {
         if (readAlong.state != ReadAlongController.State.Off) {
-            stopFollowing()
+            stopFollowingAndPause()
         } else {
-            requestFollowing(seekToPage = true)
+            requestFollowing(FollowStart.VisiblePage)
         }
     }
 
     /** Readiness gate shared with Switch to Audio (issue #536): no sync map, no following. */
-    private fun requestFollowing(seekToPage: Boolean) {
+    private fun requestFollowing(start: FollowStart) {
         if (isStandalone) return
         lifecycleScope.launch {
             val status = repository.readiness(pairId)
@@ -2293,11 +2327,11 @@ class ReaderActivity : AppCompatActivity() {
                 pendingSwitchStatus.value = status
                 return@launch
             }
-            startFollowing(seekToPage)
+            startFollowing(start)
         }
     }
 
-    private fun startFollowing(seekToPage: Boolean) {
+    private fun startFollowing(start: FollowStart) {
         lifecycleScope.launch {
             val p = pair ?: return@launch
             val points = repository.getSyncPoints(pairId)
@@ -2308,33 +2342,65 @@ class ReaderActivity : AppCompatActivity() {
                 ).show()
                 return@launch
             }
-            val wantedId = MediaId.Pair(pairId).value
-            if (ctrl.currentMediaItem?.mediaId != wantedId) {
-                val item = PairMediaItems.build(
-                    p, repository.localAudioFile(p.audiobookFilename), serverUrlManager.currentUrl,
-                )
-                if (item == null) {
-                    Log.w(TAG, "read-along: no audio source for pair $pairId")
-                    return@launch
+            // Where the audio starts. A page or selection start goes to an exact
+            // sentence, so neither this lookup nor the player's resume rewind
+            // may back it up (issue #772).
+            val audioMs = when (start) {
+                FollowStart.KeepAudio -> 0
+                is FollowStart.AudioMs -> start.ms
+                FollowStart.VisiblePage -> {
+                    // Start where the eye is, not where the audio was: the same
+                    // page-to-audio match Switch to Audio performs (issue #114 / #131).
+                    val visible = extractVisibleTextFromWebView()
+                    val chapterIndex = navigator?.currentLocator?.value
+                        ?.let { publication?.spineIndexOf(it) }?.coerceAtLeast(0) ?: 0
+                    if (visible.isPrecise) {
+                        repository.epubToAudioText(pairId, chapterIndex, visible.text, rewindMs = 0)
+                    } else 0
                 }
-                ctrl.setMediaItem(item)
-                ctrl.prepare()
             }
-            if (seekToPage) {
-                // Start where the eye is, not where the audio was: the same
-                // page-to-audio match Switch to Audio performs (issue #114 / #131).
-                val visible = extractVisibleTextFromWebView()
-                val chapterIndex = navigator?.currentLocator?.value
-                    ?.let { publication?.spineIndexOf(it) }?.coerceAtLeast(0) ?: 0
-                val audioMs = if (visible.isPrecise) {
-                    repository.epubToAudioText(pairId, chapterIndex, visible.text)
-                } else 0
-                if (audioMs > 0) ctrl.seekTo(audioMs.toLong())
+            val wantedId = MediaId.Pair(pairId).value
+            val plan = planAudioStart(
+                itemLoaded = ctrl.currentMediaItem?.mediaId == wantedId,
+                targetMs = audioMs,
+                savedMs = repository.getBookmark(pairId)?.audioPositionMs,
+            )
+            if (audioMs > 0 && !ctrl.playWhenReady) {
+                // Only worth arming when a resume is coming: a player that is
+                // already set to play never resumes, and the one-shot would
+                // then wait for the user's next pause-and-play.
+                ctrl.sendCustomCommand(
+                    SessionCommand(AudioPlayerService.CMD_SUPPRESS_NEXT_RESUME_REWIND, Bundle()),
+                    Bundle(),
+                )
+            }
+            when (plan) {
+                is AudioStartPlan.Load -> {
+                    val item = PairMediaItems.build(
+                        p, repository.localAudioFile(p.audiobookFilename), serverUrlManager.currentUrl,
+                    )
+                    if (item == null) {
+                        Log.w(TAG, "read-along: no audio source for pair $pairId")
+                        return@launch
+                    }
+                    // The start position travels with the item: the session
+                    // resolves a new item asynchronously with its own start,
+                    // and a seek sent in between is lost (seen on a phone:
+                    // Read along began at the top of the book).
+                    if (plan.startMs != null) ctrl.setMediaItem(item, plan.startMs) else ctrl.setMediaItem(item)
+                    ctrl.prepare()
+                }
+                is AudioStartPlan.Seek -> plan.seekMs?.let { ctrl.seekTo(it) }
             }
             // playWhenReady, not isPlaying: a player that is buffering after the
             // seek above is already set to play, and a second play() is a
             // COMMAND_PLAY_PAUSE the service would log as a deliberate pause.
             if (!ctrl.playWhenReady) ctrl.play()
+            // Already following or paused (a selection can start a run at any
+            // time): a fresh controller ends the pause and, with the chip
+            // hidden below, leaves exactly one run in Following.
+            suspectVerifyJob?.cancel()
+            suspectVerifyJob = null
             readAlong = ReadAlongController(points)
             readAlong.start(System.currentTimeMillis())
             setFollowToolbar(active = true)
@@ -2343,6 +2409,23 @@ class ReaderActivity : AppCompatActivity() {
             showBackToAudio(false)
             startReadAlongPoll(ctrl)
         }
+    }
+
+    /**
+     * The toolbar button while following is on (issue #772): stop the audio
+     * too. Turning following off hides the reader's only audio controls, so
+     * leaving playback running left audio with nothing on screen to stop it.
+     * Leaving the reader, or the book ending, still goes through
+     * [stopFollowing] alone and does not touch playback.
+     */
+    private fun stopFollowingAndPause() {
+        readAlongMediaController?.let { ctrl ->
+            if (ctrl.playWhenReady) {
+                ctrl.sendCustomCommand(SessionCommand(AudioPlayerService.CMD_USER_PAUSE, Bundle()), Bundle())
+                ctrl.pause()
+            }
+        }
+        stopFollowing()
     }
 
     private fun stopFollowing() {
@@ -2355,7 +2438,8 @@ class ReaderActivity : AppCompatActivity() {
         setFollowToolbar(active = false)
         readAlongBar.visibility = View.GONE
         showBackToAudio(false)
-        // Playback and the position are left exactly as they are (issue #762).
+        // Playback is not touched here; the toolbar button pauses first, in
+        // stopFollowingAndPause.
     }
 
     private fun setFollowToolbar(active: Boolean) {

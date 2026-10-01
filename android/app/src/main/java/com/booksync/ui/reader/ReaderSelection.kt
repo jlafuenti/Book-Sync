@@ -5,7 +5,7 @@ import com.booksync.data.repository.BookSyncRepository
 
 /**
  * The decision half of the reader's text-selection toolbar (issue #227):
- * which floating-toolbar items are noise, which text "Define" looks up, and
+ * which floating-toolbar items are kept, which text "Define" looks up, and
  * what "Sync to Audio" on a selection writes.
  *
  * Plain Kotlin on purpose, so `ReaderSelectionTest` can pin it. The WebView
@@ -41,58 +41,32 @@ const val MIN_SYNC_SELECTION_CHARS = 5
 internal fun defineSelectionText(currentSelectionHighlight: String?): String =
     currentSelectionHighlight?.trim().orEmpty()
 
-/** One item of the floating selection toolbar, as far as the noise rule cares. */
+/** One item of the floating selection toolbar, as far as the allow-list cares. */
 data class SelectionMenuItem(val id: Int, val title: String?)
 
 /**
- * Ids of the items to remove from the floating selection toolbar: Web
- * Search / Select All / Share / Translate / Assist. Copy (`android.R.id.copy`)
- * is kept so users can still quote a passage, anything unrecognised is left
- * alone so accessibility items like "Read Aloud" stay available, and our own
- * injected actions are never touched.
+ * Ids of the items to remove from the floating selection toolbar. It is an
+ * allow-list (issue #772): Copy (`android.R.id.copy`, so users can still quote
+ * a passage) and our own injected actions (Define, Sync to Audio, Read along)
+ * are kept, and EVERY other item is removed, whatever its id or title.
  *
- * The system populates these items dynamically (some on Android 14+ from
- * text classification), so they are matched by id AND by a loose title
- * contains check to catch variants like "Share…", "Search web", or locale
- * strings.
+ * The system populates the toolbar dynamically (some items on Android 14+
+ * from text classification, others per OEM), so a deny-list of known noise
+ * lets each new system or vendor item leak in until someone notices. Read
+ * aloud is removed on purpose: it speaks the selection over the book's own
+ * audio, and Read along is the replacement.
+ *
+ * Matching is by id only; titles are never consulted, so a localised or
+ * renamed item cannot slip through either way.
  */
 internal fun selectionNoiseItemIds(items: List<SelectionMenuItem>): List<Int> {
-    val knownNoiseIds = setOf(
-        android.R.id.shareText,
-        android.R.id.selectAll,
-        // android.R.id.textAssist (= 0x1020041) is the slot the system
-        // TextClassifier uses to inject "smart" suggestions like a
-        // Google-branded "Define" or "Translate" chip. We have our own
-        // Define / Sync to Audio actions, so strip whatever the
-        // classifier picks here unconditionally. Without this strip a
-        // "G Define" appears next to ours on the second-or-later
-        // selection (after the async classifier pass finishes).
-        android.R.id.textAssist,
-        // Some OEMs use non-android-framework ids for these text-classifier
-        // items; match by title below catches them.
+    val keptIds = setOf(
+        android.R.id.copy,
+        R.id.action_define,
+        R.id.action_sync_selection,
+        R.id.action_read_along_selection,
     )
-    // Substrings (case-insensitive) to match against the item title.
-    // Use contains rather than exact match so we catch "Share…",
-    // "Select all", "Search web", OEM-specific labels, etc.
-    val noiseTitleSubstrings = listOf(
-        "share", "select all", "translate",
-        "web search", "search web", "assist",
-    )
-    val itemsToRemove = mutableListOf<Int>()
-    for (item in items) {
-        val itemId = item.id
-        val titleLower = item.title.orEmpty().lowercase().trim().trimEnd('…', '.', ' ')
-        // Don't touch our own custom items
-        if (itemId == R.id.action_define || itemId == R.id.action_sync_selection) continue
-        // Don't touch Copy — users still need it
-        if (itemId == android.R.id.copy) continue
-        // Leave Read Aloud / accessibility items alone
-        if ("read aloud" in titleLower || "speak" in titleLower) continue
-        val matchesId = itemId in knownNoiseIds
-        val matchesTitle = noiseTitleSubstrings.any { it in titleLower }
-        if (matchesId || matchesTitle) itemsToRemove += itemId
-    }
-    return itemsToRemove
+    return items.filter { it.id !in keptIds }.map { it.id }
 }
 
 /** Soft hyphen and the zero-width characters: invisible, never part of a lookup. */

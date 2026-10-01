@@ -57,7 +57,7 @@ class ReaderSelectionController(
     private val host: Host,
 ) {
 
-    /** What the activity provides: the two selection actions. */
+    /** What the activity provides: the three selection actions. */
     interface Host {
         /**
          * Whether "Sync to Audio" has anything to resolve against — a synced
@@ -83,6 +83,13 @@ class ReaderSelectionController(
          */
         fun onDefine(dismiss: () -> Unit)
         fun onSyncToAudio(dismiss: () -> Unit)
+
+        /**
+         * Start following the audiobook from the selected sentence (issue
+         * #772). Same [dismiss] contract as [onDefine]; offered under the same
+         * [syncToAudioAvailable] condition as Sync to Audio.
+         */
+        fun onReadAlong(dismiss: () -> Unit)
     }
 
     private var hasInstalledInterceptor: Boolean = false
@@ -255,8 +262,9 @@ class ReaderSelectionController(
     }
 
     /**
-     * Insert the reader's two custom selection actions: Define (order 0,
-     * leftmost) and Sync to Audio (order 1). Idempotent via `findItem` —
+     * Insert the reader's three custom selection actions: Define (order 0,
+     * leftmost), Sync to Audio (order 1) and Read along (order 2, issue #772).
+     * Idempotent via `findItem` —
      * safe to call from both `onCreateActionMode` and `onPrepareActionMode`,
      * and from the [onActionModeStarted] fallback.
      *
@@ -266,9 +274,9 @@ class ReaderSelectionController(
      * given a `dismiss` callback rather than having this method call
      * `mode.finish()` itself — see [Host.onDefine].
      *
-     * Sync to Audio is only injected when [Host.syncToAudioAvailable] says
-     * there is something to resolve it against, since it has nothing to
-     * scrub to otherwise.
+     * Sync to Audio and Read along are only injected when
+     * [Host.syncToAudioAvailable] says there is something to resolve them
+     * against, since they have nothing to scrub to otherwise.
      */
     private fun injectCustomItems(mode: ActionMode, menu: Menu) {
         if (menu.findItem(R.id.action_define) == null) {
@@ -285,9 +293,16 @@ class ReaderSelectionController(
             }
             Log.d(TAG, "Added 'Sync to Audio' to ActionMode menu")
         }
+        if (host.syncToAudioAvailable && menu.findItem(R.id.action_read_along_selection) == null) {
+            menu.add(0, R.id.action_read_along_selection, 2, "Read along").setOnMenuItemClickListener {
+                host.onReadAlong { mode.finish() }
+                true
+            }
+            Log.d(TAG, "Added 'Read along' to ActionMode menu")
+        }
     }
 
-    /** Remove the noise items [selectionNoiseItemIds] names from the floating toolbar. */
+    /** Remove the items [selectionNoiseItemIds] names (everything but Copy and ours) from the floating toolbar. */
     private fun trimSelectionMenu(menu: Menu?) {
         menu ?: return
         val items = (0 until menu.size()).mapNotNull { i ->

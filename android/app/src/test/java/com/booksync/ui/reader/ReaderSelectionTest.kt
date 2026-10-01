@@ -88,23 +88,52 @@ class ReaderSelectionTest {
     }
 
     @Test
-    fun `copy, our own actions, accessibility items and unknowns are left alone`() {
+    fun `copy and each of our own actions are kept`() {
         val kept = listOf(
             item(android.R.id.copy, "Copy"),
             item(R.id.action_define, "Define"),
             item(R.id.action_sync_selection, "Sync to Audio"),
-            item(2001, "Read aloud"),
-            item(2002, "Speak"),
-            item(2003, "Paste"),
-            item(2004, null),
+            item(R.id.action_read_along_selection, "Read along"),
         )
         assertTrue(selectionNoiseItemIds(kept).isEmpty())
     }
 
     @Test
-    fun `our own items are kept even if an OEM title rule would match them`() {
-        // The id check comes first: nothing we injected is ever stripped.
+    fun `Read aloud is removed on purpose, whatever its id`() {
+        // Issue #772: the system's Read aloud speaks the selection over the
+        // book's own audio; Read along is the replacement.
+        val items = listOf(item(2001, "Read aloud"), item(2002, "Speak"), item(2003, "Read Aloud"))
+        assertEquals(items.map { it.id }, selectionNoiseItemIds(items))
+    }
+
+    @Test
+    fun `an item with an unknown id and an unknown title is removed`() {
+        // The allow-list (issue #772): a new system or OEM item must not leak
+        // into the toolbar just because no rule names it yet.
+        val items = listOf(
+            item(3001, "Frobnicate"),
+            item(3002, "Paste"),
+            item(3003, null),
+            item(3004, ""),
+        )
+        assertEquals(items.map { it.id }, selectionNoiseItemIds(items))
+    }
+
+    @Test
+    fun `an unknown item is removed but our own neighbours stay`() {
+        val items = listOf(
+            item(android.R.id.copy, "Copy"),
+            item(4001, "Something new"),
+            item(R.id.action_read_along_selection, "Read along"),
+        )
+        assertEquals(listOf(4001), selectionNoiseItemIds(items))
+    }
+
+    @Test
+    fun `our own items are kept even if their title looks like noise`() {
+        // The id decides, never the title: nothing we injected is ever stripped.
         assertTrue(selectionNoiseItemIds(listOf(item(R.id.action_define, "Define (assist)"))).isEmpty())
+        assertTrue(selectionNoiseItemIds(listOf(item(R.id.action_read_along_selection, "Share"))).isEmpty())
     }
 
     // ---------------------------------------------------------- Define word

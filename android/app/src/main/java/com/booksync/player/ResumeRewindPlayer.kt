@@ -50,6 +50,24 @@ class ResumeRewindPlayer(delegate: Player) : ForwardingPlayer(delegate) {
         return wasRewind
     }
 
+    /**
+     * One-shot (issue #772): the next paused-to-playing request does not
+     * rewind. The reader's read-along start seeks to the exact sentence it
+     * wants and then plays; the usual resume rewind would back that deliberate
+     * seek up by another [PlaybackOffsets.RESUME_REWIND_MS]. Armed by
+     * `AudioPlayerService.CMD_SUPPRESS_NEXT_RESUME_REWIND`, spent by the next
+     * resume candidate (a first play after a load is not a resume and would not
+     * rewind anyway, but it still spends it, so a skip can never linger and
+     * swallow the rewind of a later, ordinary resume), dropped when another
+     * item loads. Setting playWhenReady to true while it already is true is no
+     * resume and leaves it armed.
+     */
+    fun suppressNextResumeRewind() {
+        suppressNextRewind = true
+    }
+
+    private var suppressNextRewind = false
+
     init {
         delegate.addListener(object : Player.Listener {
             override fun onIsPlayingChanged(isPlaying: Boolean) {
@@ -60,6 +78,7 @@ class ResumeRewindPlayer(delegate: Player) : ForwardingPlayer(delegate) {
                 // New book (or a re-load of this one): the next play is a fresh
                 // start again, not a resume.
                 hasPlayedSinceItemTransition = false
+                suppressNextRewind = false
             }
         })
     }
@@ -71,9 +90,13 @@ class ResumeRewindPlayer(delegate: Player) : ForwardingPlayer(delegate) {
      * this method twice and jump back 10s instead of 5s.
      */
     override fun setPlayWhenReady(playWhenReady: Boolean) {
-        if (playWhenReady && hasPlayedSinceItemTransition && !getPlayWhenReady()) {
-            rewindSeekInFlight = true
-            seekTo(PlaybackOffsets.resumePosition(currentPosition))
+        if (playWhenReady && !getPlayWhenReady()) {
+            val skipRewind = suppressNextRewind
+            suppressNextRewind = false
+            if (hasPlayedSinceItemTransition && !skipRewind) {
+                rewindSeekInFlight = true
+                seekTo(PlaybackOffsets.resumePosition(currentPosition))
+            }
         }
         super.setPlayWhenReady(playWhenReady)
     }

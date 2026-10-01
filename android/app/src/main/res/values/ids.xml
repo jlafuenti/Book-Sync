@@ -2,4 +2,5 @@
 <resources>
     <item name="action_sync_selection" type="id" />
     <item name="action_define" type="id" />
+    <item name="action_read_along_selection" type="id" />
 </resources>

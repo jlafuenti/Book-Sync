@@ -139,6 +139,97 @@ class ResumeRewindPlayerTest {
         assertTrue(player.wrappedPlayer === delegate)
     }
 
+    // ============ One-shot skip, for a read-along start (issue #772) ============
+    //
+    // A read-along start from the reader seeks to the exact sentence it wants
+    // and then plays. Without this the wrapper would rewind that deliberate
+    // seek by another 5s. The reader arms the skip with
+    // suppressNextResumeRewind() right before it seeks; only the one resume
+    // that follows is exempt.
+
+    @Test
+    fun `an armed skip stops the next resume from rewinding`() {
+        startPlayingAt(90_000L)
+
+        player.suppressNextResumeRewind()
+        player.play()
+
+        verify(exactly = 0) { delegate.seekTo(any<Long>()) }
+        verify { delegate.playWhenReady = true }
+        assertFalse("no rewind seek, so nothing to flag", player.consumeResumeRewindSeek())
+    }
+
+    @Test
+    fun `the skip is one-shot, the resume after it rewinds again`() {
+        startPlayingAt(90_000L)
+        player.suppressNextResumeRewind()
+        player.play()
+
+        // Pause and resume again: an ordinary resume.
+        every { delegate.playWhenReady } returns false
+        every { delegate.currentPosition } returns 120_000L
+        player.play()
+
+        verify(exactly = 1) { delegate.seekTo(any<Long>()) }
+        verify(exactly = 1) { delegate.seekTo(115_000L) }
+    }
+
+    @Test
+    fun `without an armed skip a resume still rewinds`() {
+        startPlayingAt(90_000L)
+
+        player.play()
+
+        verify(exactly = 1) { delegate.seekTo(85_000L) }
+    }
+
+    @Test
+    fun `a skip armed before the first play is spent by it`() {
+        // Not a resume (nothing has been heard yet, so nothing would rewind),
+        // but it is still the play the skip was armed for: it must not linger
+        // and swallow the rewind of a later, ordinary resume.
+        every { delegate.currentPosition } returns 90_000L
+        every { delegate.playWhenReady } returns false
+        player.suppressNextResumeRewind()
+        player.play()
+        verify(exactly = 0) { delegate.seekTo(any<Long>()) }
+
+        listener.onIsPlayingChanged(true)
+        every { delegate.playWhenReady } returns false
+        player.play()
+
+        verify(exactly = 1) { delegate.seekTo(85_000L) }
+    }
+
+    @Test
+    fun `loading another item drops a skip that was never used`() {
+        startPlayingAt(90_000L)
+        player.suppressNextResumeRewind()
+
+        listener.onMediaItemTransition(null, Player.MEDIA_ITEM_TRANSITION_REASON_PLAYLIST_CHANGED)
+        listener.onIsPlayingChanged(true)
+        every { delegate.playWhenReady } returns false
+        player.play()
+
+        verify(exactly = 1) { delegate.seekTo(85_000L) }
+    }
+
+    @Test
+    fun `a play request while already set to play leaves the skip armed`() {
+        // Setting playWhenReady true when it already is true is no resume and
+        // changes nothing; the skip stays for the resume it was armed for.
+        listener.onIsPlayingChanged(true)
+        every { delegate.currentPosition } returns 90_000L
+        every { delegate.playWhenReady } returns true
+        player.suppressNextResumeRewind()
+        player.playWhenReady = true
+
+        every { delegate.playWhenReady } returns false
+        player.play()
+
+        verify(exactly = 0) { delegate.seekTo(any<Long>()) }
+    }
+
     // ============ Seek-flush support (issue #166) ============
     //
     // The service flushes the position on user seeks via
