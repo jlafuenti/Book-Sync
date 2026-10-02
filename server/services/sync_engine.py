@@ -435,6 +435,16 @@ async def remap_bookmarks_for_pair(
 
         chapter, sentence, audio_ms = resolved
         chapter_moved = bookmark.epub_chapter != chapter
+        if chapter_moved:
+            # Named in the log (ids and coordinates only, never text) so a
+            # dry-run rebuild shows which positions would relocate (issue #774).
+            logger.info(
+                "Re-map for pair %s: bookmark %s (user %s) changes chapter, "
+                "ch %s -> %s, sentence %s -> %s",
+                book_pair_id, bookmark.id, bookmark.user_id,
+                bookmark.epub_chapter, chapter,
+                bookmark.epub_sentence_index, sentence,
+            )
         bookmark.epub_chapter = chapter
         bookmark.epub_sentence_index = sentence
         if audio_ms is not None:
