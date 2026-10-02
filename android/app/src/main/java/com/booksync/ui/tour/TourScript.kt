@@ -13,7 +13,7 @@ enum class TourAnchor {
     CardOverflow,
     SheetRead, SheetListen, SheetDownloadPair, SheetViewDetails,
     DetailsChips, DetailsSyncMapChip, DetailsPrimaryAction, DetailsRefreshSync, DetailsUnlink,
-    ReaderPage, ReaderProgress, ReaderSwitchToAudio,
+    ReaderPage, ReaderProgress, ReaderSwitchToAudio, ReaderFollowAudio,
     PlayerTransport, PlayerSwitchToReader,
     DownloadedPills, AccountStorage, AccountServer, AccountReplayTour,
     TabLibrary, TabDownloaded, TabAccount,
@@ -286,6 +286,19 @@ val TOUR: List<TourStep> = listOf(
         anchor = TourAnchor.ReaderSwitchToAudio,
         title = "Switch to Audio",
         body = "Jumps to roughly this page in the audiobook — quick, but not sentence-precise.",
+        needsPair = true,
+    ),
+    TourStep(
+        // Look, don't tap (issue #764): tapping Follow audio would start playback
+        // inside the tour, so this advances on Next. When the pair has no usable
+        // audio the reader hides the item, the anchor never registers, and the
+        // step degrades exactly like reader_switch_to_audio above.
+        id = "reader_follow_audio",
+        screen = TourScreen.Reader,
+        anchor = TourAnchor.ReaderFollowAudio,
+        title = "Follow audio",
+        body = "Follow audio keeps the page in step with the audiobook and marks the sentence " +
+            "being read. Turn a page by hand and the audio keeps going; Back to audio snaps you back.",
         needsPair = true,
     ),
     TourStep(

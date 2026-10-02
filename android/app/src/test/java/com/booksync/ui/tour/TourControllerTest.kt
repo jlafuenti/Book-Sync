@@ -242,6 +242,64 @@ class TourControllerTest {
     }
 
     @Test
+    fun `reader_follow_audio follows reader_switch_to_audio on Next and ignores taps`() = runTest {
+        val controller = newController()
+        controller.start()
+        advanceUntilIdle()
+        controller.advanceUntil("reader_switch_to_audio")
+
+        controller.next()
+        assertEquals("reader_follow_audio", running(controller).step.id)
+        val indexHere = running(controller).index
+
+        // Tapping the spotlighted item (or any other event) must not move the card on.
+        controller.onEvent(TourEvent.AnchorTapped(TourAnchor.ReaderFollowAudio))
+        controller.onEvent(TourEvent.ReaderBarsShown)
+        assertEquals(indexHere, running(controller).index)
+
+        controller.next()
+        assertEquals(READER_SELECTION_STEP_ID, running(controller).step.id)
+    }
+
+    @Test
+    fun `reader_follow_audio resolves Found when its anchor registers`() = runTest {
+        val controller = newController()
+        controller.start()
+        advanceUntilIdle()
+        controller.advanceUntil("reader_follow_audio")
+        registry.setSettled(TourScreen.Reader, true)
+        registry.set(TourAnchor.ReaderFollowAudio, Rect(0f, 0f, 10f, 10f))
+        advanceUntilIdle()
+
+        assertEquals(AnchorResolution.Found, running(controller).resolution)
+        assertFalse(running(controller).degraded)
+    }
+
+    @Test
+    fun `reader_follow_audio and reader_switch_to_audio both go Missing the same way when hidden`() = runTest {
+        // A standalone book hides both toolbar items, so neither anchor ever registers.
+        val controller = newController()
+        controller.start()
+        advanceUntilIdle()
+        controller.advanceUntil("reader_switch_to_audio")
+        registry.setSettled(TourScreen.Reader, true)
+        advanceTimeBy(700)
+        assertEquals(AnchorResolution.Missing, running(controller).resolution)
+        assertNull(running(controller).anchor)
+
+        controller.next()
+        assertEquals("reader_follow_audio", running(controller).step.id)
+        advanceTimeBy(700)
+        assertEquals(AnchorResolution.Missing, running(controller).resolution)
+        assertTrue(running(controller).degraded)
+        assertNull(running(controller).anchor)
+
+        // A degraded card still walks on with Next.
+        controller.next()
+        assertEquals(READER_SELECTION_STEP_ID, running(controller).step.id)
+    }
+
+    @Test
     fun `the reader bars grace does not start until the reader has settled`() = runTest {
         // Issue #642: the old 4 s grace counted from the reader Activity's own
         // creation, before the book had loaded — a slow load could raise the
