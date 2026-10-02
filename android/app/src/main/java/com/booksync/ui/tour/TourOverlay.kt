@@ -66,7 +66,20 @@ fun TourOverlay(
     onBack: () -> Unit,
     onSkip: () -> Unit,
     onQuit: () -> Unit,
+    /** Place the card above the spotlight when it fits there (the card sheet, issue #788). */
+    preferCardAbove: Boolean = false,
 ) {
+    if (state.revealing) {
+        // The card is held back (issue #788): the screen the user just opened shows
+        // undimmed, but taps still stop here so nothing is opened from under the tour
+        // before the card can say what this screen is.
+        Box(
+            Modifier
+                .fillMaxSize()
+                .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {},
+        )
+        return
+    }
     val colors = Tandem.colors
     val density = LocalDensity.current
     var screenSize by remember { mutableStateOf(Size.Zero) }
@@ -160,7 +173,7 @@ fun TourOverlay(
 
         // Measured on first layout; the estimate only serves the very first frame.
         var cardHeightPx by remember { mutableStateOf(with(density) { 220.dp.toPx() }) }
-        val placement = cardPlacement(hole, screenSize, cardHeightPx)
+        val placement = cardPlacement(hole, screenSize, cardHeightPx, preferAbove = preferCardAbove)
         val cardAlignment = when (placement) {
             Placement.Below, Placement.Above -> Alignment.TopCenter
             Placement.Center -> Alignment.Center

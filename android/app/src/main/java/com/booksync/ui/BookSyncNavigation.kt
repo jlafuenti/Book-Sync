@@ -375,9 +375,17 @@ fun BookSyncNavigation() {
                 }
                 is TourNav.OpenLibraryAt -> Unit // LibraryScreen scrolls to it
                 is TourNav.OpenDetails -> navController.navigate(Routes.bookDetailsPair(navEvent.pairId))
-                is TourNav.OpenReader -> navController.navigate(Routes.reader(navEvent.pairId))
+                // Back onto the reader or the player (issue #788), from the player, the reader
+                // or the Library: over Main, the way Switch to Reader / Switch to Audio go.
+                is TourNav.OpenReader -> navController.navigate(Routes.reader(navEvent.pairId)) {
+                    popUpTo(Routes.MAIN)
+                }
+                is TourNav.OpenPlayer -> navController.navigate(Routes.player(navEvent.pairId)) {
+                    popUpTo(Routes.MAIN)
+                }
                 TourNav.PopToMain -> navController.popBackStack(Routes.MAIN, inclusive = false)
-                TourNav.ShowReaderBars, TourNav.SkipToToolbarSync -> Unit // the reader Activity's
+                TourNav.ShowReaderBars, TourNav.SkipToToolbarSync, TourNav.CloseReader -> Unit // the reader Activity's
+                TourNav.CloseSheet -> Unit // the card sheet's own (CardOverflowMenu)
                 is TourNav.CleanUp -> cleanUpTourPair(
                     context,
                     tourRepository,

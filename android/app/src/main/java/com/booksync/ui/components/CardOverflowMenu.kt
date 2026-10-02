@@ -54,6 +54,8 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import com.booksync.data.repository.SyncMapAutoFetch
 import com.booksync.ui.theme.Tandem
 import androidx.compose.runtime.collectAsState
+import com.booksync.ui.tour.SHEET_TOUR_CARD_ROOM
+import com.booksync.ui.tour.TourNav
 import com.booksync.ui.tour.TourOverlay
 import com.booksync.ui.tour.TourScreen
 import com.booksync.ui.tour.TourScreenSettled
@@ -345,6 +347,13 @@ fun CardOverflowMenu(
             tour.controller.onEvent(TourEvent.SheetOpened(target.pairId))
         }
     }
+    // Back from the first sheet card onto the Library (issue #788). onDismiss directly, not
+    // onDismissRequest: that one reports SheetClosed, which is for a swipe-away mid-step.
+    LaunchedEffect(Unit) {
+        tour.controller.nav.collect { if (it == TourNav.CloseSheet) onDismiss() }
+    }
+    val tourState by tour.controller.state.collectAsState()
+    val tourOnSheet = (tourState as? TourState.Running)?.step?.screen == TourScreen.Sheet
     // The sheet has nothing to wait on — its rows render the moment it opens
     // (issue #642), so it reports settled unconditionally rather than leaving
     // the tour's Sheet steps stuck judging it on the fixed timer's old cap.
@@ -374,6 +383,10 @@ fun CardOverflowMenu(
     ) {
         Box {
         Column(modifier = Modifier.fillMaxWidth()) {
+        // Room for a sheet step's card above the rows it points at (issue #788) — see
+        // SHEET_TOUR_CARD_ROOM. Inside the Box the overlay below is matched to, so the
+        // overlay covers it too.
+        if (tourOnSheet) Spacer(Modifier.height(SHEET_TOUR_CARD_ROOM))
         Column(
             modifier = Modifier
                 .fillMaxWidth()
@@ -445,7 +458,6 @@ fun CardOverflowMenu(
         // Sheet steps of the walkthrough live here: a ModalBottomSheet is its
         // own window above the activity, so the nav host's overlay cannot
         // reach it (issue #597). Matched over the whole sheet content.
-        val tourState by tour.controller.state.collectAsState()
         (tourState as? TourState.Running)?.takeIf { it.step.screen == TourScreen.Sheet }?.let { running ->
             // matchParentSize: cover the sheet's content without growing it
             // (a fillMaxSize child would stretch the sheet to the full screen).
@@ -456,6 +468,7 @@ fun CardOverflowMenu(
                     onBack = { tour.controller.back() },
                     onSkip = { tour.controller.skip() },
                     onQuit = { tour.controller.quit() },
+                    preferCardAbove = true,
                 )
             }
         }

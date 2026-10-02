@@ -161,24 +161,126 @@ class TourControllerTest {
     }
 
     @Test
-    fun `back never crosses a screen boundary`() = runTest {
-        // Stepping back from the first Details card would land on "tap View
-        // details" with the sheet already closed — a card that cannot advance.
+    fun `every step after the first offers Back`() = runTest {
+        // Issue #788: Back used to stop at every screen boundary, so the first card on
+        // the sheet, Details, the reader, the player and each tab had none.
+        val controller = newController()
+        controller.start()
+        advanceUntilIdle()
+        assertFalse(running(controller).canGoBack)
+
+        controller.next()
+        while (running(controller).step.id != "done") {
+            assertTrue("${running(controller).step.id} offers Back", running(controller).canGoBack)
+            controller.advanceUntil(TOUR[running(controller).index + 1].id)
+        }
+        assertTrue(running(controller).canGoBack)
+    }
+
+    /**
+     * Back across a screen boundary (issue #788) puts the app back where the previous card
+     * expects it: the previous step's control has to be on screen again, or its card could
+     * never advance. Each case is the nav [TourController.back] emits from [fromStep], and the
+     * step it lands on. `OpenLibraryAt` is the Library's own scroll-to-the-pair on re-entry,
+     * not part of the back navigation, so it is left out of the comparison.
+     */
+    private fun TestScope.assertBackFrom(fromStep: String, landsOn: String, expected: List<TourNav>) {
+        val scope = unconfinedScope()
+        val controller = newController(scope = scope)
+        val navLog = mutableListOf<TourNav>()
+        scope.launch { controller.nav.collect { navLog.add(it) } }
+        controller.start()
+        advanceUntilIdle()
+        controller.advanceUntil(fromStep)
+        navLog.clear()
+
+        controller.back()
+
+        assertEquals(landsOn, running(controller).step.id)
+        assertEquals("back from $fromStep", expected, navLog.filterNot { it is TourNav.OpenLibraryAt })
+    }
+
+    @Test
+    fun `back from Library to Home switches back to the Home tab`() = runTest {
+        assertBackFrom("library_open_pair", "home_tap_library", listOf(TourNav.GoToTab("home")))
+    }
+
+    @Test
+    fun `back from the first sheet card closes the sheet`() = runTest {
+        assertBackFrom("sheet_stream", "library_open_pair", listOf(TourNav.CloseSheet))
+    }
+
+    @Test
+    fun `back from the first Details card leaves Details and asks Library to reopen the sheet`() = runTest {
+        assertBackFrom("details_chips", "sheet_view_details", listOf(TourNav.PopToMain))
+    }
+
+    @Test
+    fun `back from the first reader card closes the reader onto Details`() = runTest {
+        assertBackFrom("reader_tap_page", "details_tap_read", listOf(TourNav.CloseReader))
+    }
+
+    @Test
+    fun `back from the player reopens the reader`() = runTest {
+        assertBackFrom("player_paused", SELECTION_MENU_STEP_ID, listOf(TourNav.OpenReader(42)))
+    }
+
+    @Test
+    fun `back from the reader after the player reopens the player`() = runTest {
+        assertBackFrom("reader_trick", "player_switch_to_reader", listOf(TourNav.OpenPlayer(42)))
+    }
+
+    @Test
+    fun `back from Library after the reader reopens the reader`() = runTest {
+        assertBackFrom("library_filters", "reader_trick", listOf(TourNav.OpenReader(42)))
+    }
+
+    @Test
+    fun `back from Downloaded switches back to the Library tab`() = runTest {
+        assertBackFrom("downloaded_pills", "library_tap_downloaded", listOf(TourNav.GoToTab("library")))
+    }
+
+    @Test
+    fun `back from Account switches back to the Downloaded tab`() = runTest {
+        assertBackFrom("account_storage_and_server", "downloaded_tap_account", listOf(TourNav.GoToTab("downloaded")))
+    }
+
+    @Test
+    fun `back within a screen emits no navigation`() = runTest {
+        assertBackFrom("details_sync_map", "details_chips", emptyList())
+    }
+
+    @Test
+    fun `back onto the sheet carries a one-off request for Library to reopen it`() = runTest {
+        // The Library is not composed while Details is on top, so a nav event emitted
+        // now would reach no collector. The request rides on the state instead, the same
+        // way `library_open_pair` drives Library's scroll.
         val controller = newController()
         controller.start()
         advanceUntilIdle()
         controller.advanceUntil("details_chips")
-        val index = running(controller).index
-        assertFalse(running(controller).canGoBack)
+        assertNull(running(controller).sheetRequest)
 
         controller.back()
+        assertEquals(42, running(controller).sheetRequest)
 
-        assertEquals(index, running(controller).index)
-        // Within a screen it still works.
-        controller.next()
-        assertTrue(running(controller).canGoBack)
+        controller.sheetRequestHandled()
+        assertNull(running(controller).sheetRequest)
+        assertEquals("sheet_view_details", running(controller).step.id)
+    }
+
+    @Test
+    fun `a sheet request does not outlive its step`() = runTest {
+        val controller = newController()
+        controller.start()
+        advanceUntilIdle()
+        controller.advanceUntil("details_chips")
         controller.back()
-        assertEquals(index, running(controller).index)
+
+        controller.onEvent(TourEvent.DetailsOpened(42))
+
+        assertEquals("details_chips", running(controller).step.id)
+        assertNull(running(controller).sheetRequest)
     }
 
     @Test
@@ -301,10 +403,9 @@ class TourControllerTest {
     }
 
     @Test
-    fun `the reader bars grace does not start until the reader has settled`() = runTest {
-        // Issue #642: the old 4 s grace counted from the reader Activity's own
-        // creation, before the book had loaded — a slow load could raise the
-        // bars itself before the user had anything to look at yet.
+    fun `the reader tap-page step never raises the bars or advances by itself`() = runTest {
+        // Issue #788: a 4 s grace used to raise the bars on the user's behalf, and the
+        // resulting ReaderBarsShown advanced the step — it read as moving on by itself.
         val scope = unconfinedScope()
         val controller = newController(scope = scope)
         val navLog = mutableListOf<TourNav>()
@@ -312,25 +413,16 @@ class TourControllerTest {
         controller.start()
         advanceUntilIdle()
         controller.advanceUntil("reader_tap_page")
-
-        advanceTimeBy(60_000)
-        assertFalse(navLog.contains(TourNav.ShowReaderBars))
-
-        // Not advanceUntilIdle() here: with only the grace-period delay left
-        // pending, that would drain the scheduler by running the delay to
-        // completion outright, rather than leaving it for advanceTimeBy below
-        // to cross a specific number of milliseconds at a time.
         registry.setSettled(TourScreen.Reader, true)
 
-        advanceTimeBy(READER_BARS_GRACE_MS - 1)
-        assertFalse(navLog.contains(TourNav.ShowReaderBars))
+        advanceTimeBy(120_000)
 
-        advanceTimeBy(2)
-        assertTrue(navLog.contains(TourNav.ShowReaderBars))
+        assertEquals("reader_tap_page", running(controller).step.id)
+        assertFalse(navLog.contains(TourNav.ShowReaderBars))
     }
 
     @Test
-    fun `leaving the reader tap-page step first cancels the bars grace request`() = runTest {
+    fun `skip on the reader tap-page step raises the bars and moves on`() = runTest {
         val scope = unconfinedScope()
         val controller = newController(scope = scope)
         val navLog = mutableListOf<TourNav>()
@@ -338,12 +430,55 @@ class TourControllerTest {
         controller.start()
         advanceUntilIdle()
         controller.advanceUntil("reader_tap_page")
-        registry.setSettled(TourScreen.Reader, true)
 
+        controller.skip()
+        // The reader reports the bars it just raised; that must not skip a second step.
         controller.onEvent(TourEvent.ReaderBarsShown)
-        advanceTimeBy(READER_BARS_GRACE_MS + 10)
 
-        assertFalse(navLog.contains(TourNav.ShowReaderBars))
+        assertTrue(navLog.contains(TourNav.ShowReaderBars))
+        assertEquals("reader_progress", running(controller).step.id)
+    }
+
+    @Test
+    fun `the first Details card waits 2 s after View details before showing`() = runTest {
+        // Issue #788: the card used to cover Details the instant it opened.
+        val controller = newController()
+        controller.start()
+        advanceUntilIdle()
+        controller.advanceUntil("details_chips")
+        assertTrue(running(controller).revealing)
+
+        advanceTimeBy(DETAILS_REVEAL_MS - 1)
+        assertTrue(running(controller).revealing)
+
+        advanceTimeBy(2)
+        assertFalse(running(controller).revealing)
+        assertEquals("details_chips", running(controller).step.id)
+    }
+
+    @Test
+    fun `stepping back onto the first Details card shows it at once`() = runTest {
+        val controller = newController()
+        controller.start()
+        advanceUntilIdle()
+        controller.advanceUntil("details_sync_map")
+
+        controller.back()
+
+        assertEquals("details_chips", running(controller).step.id)
+        assertFalse(running(controller).revealing)
+    }
+
+    @Test
+    fun `no other step holds its card back`() = runTest {
+        val controller = newController()
+        controller.start()
+        advanceUntilIdle()
+        while (running(controller).step.id != "done") {
+            val id = running(controller).step.id
+            if (id != "details_chips") assertFalse("$id shows at once", running(controller).revealing)
+            controller.advanceUntil(TOUR[running(controller).index + 1].id)
+        }
     }
 
     @Test
@@ -380,15 +515,15 @@ class TourControllerTest {
     }
 
     @Test
-    fun `skip on a non-skippable WaitFor step does nothing`() = runTest {
+    fun `skip on a step that is not a skippable WaitFor does nothing`() = runTest {
         val controller = newController()
         controller.start()
         advanceUntilIdle()
-        controller.advanceUntil("reader_tap_page")
+        controller.advanceUntil("details_tap_read")
 
         controller.skip()
 
-        assertEquals("reader_tap_page", running(controller).step.id)
+        assertEquals("details_tap_read", running(controller).step.id)
     }
 
     @Test

@@ -468,6 +468,10 @@ class ReaderActivity : AppCompatActivity() {
                     // The tour moved on to a Main screen: popping the reader
                     // route in the nav host does not close this Activity.
                     TourNav.PopToMain -> finish()
+                    // Back out of the reader (issue #788): onto Details, which sits under this
+                    // Activity's route, or onto the player, which the nav host opens itself.
+                    TourNav.CloseReader -> finish()
+                    is TourNav.OpenPlayer -> finish()
                     else -> Unit
                 }
             }
