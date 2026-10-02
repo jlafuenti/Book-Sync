@@ -51,6 +51,8 @@ sealed class TourEvent {
     data class ReaderOpened(val pairId: Int) : TourEvent()
     data object ReaderBarsShown : TourEvent()
     data object ReaderSyncedSelection : TourEvent()
+    /** The reader's text-selection menu came up over a selection (issue #764). */
+    data object ReaderSelectionStarted : TourEvent()
     /** The user tapped the progress text and it cycled to a new mode (issue #743). */
     data object ReaderProgressModeChanged : TourEvent()
     data class PlayerOpened(val pairId: Int) : TourEvent()
@@ -72,6 +74,7 @@ sealed class TourEvent {
         is ReaderOpened -> actual is ReaderOpened
         ReaderBarsShown -> actual is ReaderBarsShown
         ReaderSyncedSelection -> actual is ReaderSyncedSelection
+        ReaderSelectionStarted -> actual is ReaderSelectionStarted
         ReaderProgressModeChanged -> actual is ReaderProgressModeChanged
         SheetClosed -> actual is SheetClosed
         is PlayerOpened -> actual is PlayerOpened
@@ -113,6 +116,17 @@ data class TourStep(
 
 /** The id of the one step where the tour must not block the reader's own gestures. */
 const val READER_SELECTION_STEP_ID = "reader_select_sentence"
+
+/** The step after [READER_SELECTION_STEP_ID]: explains the selection menu's two actions (issue #764). */
+const val SELECTION_MENU_STEP_ID = "reader_selection_menu"
+
+/** Both selection steps: the overlay blocks nothing on either, so the gesture and its menu work. */
+val SELECTION_STEP_IDS: Set<String> = setOf(READER_SELECTION_STEP_ID, SELECTION_MENU_STEP_ID)
+
+fun isSelectionStep(stepId: String): Boolean = stepId in SELECTION_STEP_IDS
+
+private const val SELECTION_EMPTY_BODY = "You're offline with nothing downloaded for this book, so " +
+    "this step can't run here. Skip uses the page-level sync instead."
 
 /**
  * The walkthrough script (issue #597) — ≈25 real steps plus a closing "Done"
@@ -308,11 +322,25 @@ val TOUR: List<TourStep> = listOf(
         // page itself, and the overlay leaves the whole page unblocked so the
         // real press-and-drag selection gesture reaches the reader beneath it.
         anchor = TourAnchor.ReaderPage,
-        title = "Sync a sentence to audio",
-        body = "Press and hold a word, then drag to select at least a few words — a whole " +
-            "sentence gives the best match. Tap Sync to Audio.",
-        emptyBody = "You're offline with nothing downloaded for this book, so this step can't " +
-            "run here. Skip uses the page-level sync instead.",
+        title = "Select a sentence",
+        body = "Press and hold a word, then drag to select at least a few words. A whole " +
+            "sentence gives the best match.",
+        emptyBody = SELECTION_EMPTY_BODY,
+        advance = Advance.WaitFor(TourEvent.ReaderSelectionStarted, skippable = true),
+        needsPair = true,
+    ),
+    TourStep(
+        id = SELECTION_MENU_STEP_ID,
+        screen = TourScreen.Reader,
+        // Same page-wide anchor and unblocked overlay as the step above: the
+        // selection and its floating menu have to stay usable (issue #764).
+        anchor = TourAnchor.ReaderPage,
+        title = "Read along or Sync to Audio",
+        body = "The menu over your selection has two ways into the audio. Read along starts " +
+            "the audiobook at this sentence and keeps the page following it. Sync to Audio " +
+            "opens the player at this sentence. Tap Sync to Audio to carry on. If the menu " +
+            "has closed, select the sentence again.",
+        emptyBody = SELECTION_EMPTY_BODY,
         advance = Advance.WaitFor(TourEvent.ReaderSyncedSelection, skippable = true),
         needsPair = true,
     ),

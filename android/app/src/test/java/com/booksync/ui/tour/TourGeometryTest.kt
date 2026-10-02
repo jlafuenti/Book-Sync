@@ -3,6 +3,7 @@ package com.booksync.ui.tour
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Test
 
 /** Pure placement math for [TourOverlay]'s card — issue #597 Track A, plan §4/§6. */
@@ -60,5 +61,27 @@ class TourGeometryTest {
         val margin = 24f
         val hole = Rect(0f, 0f, 1000f, screen.height - cardHeight - margin)
         assertEquals(Placement.Below, cardPlacement(hole, screen, cardHeight))
+    }
+
+    // ---- spotlight ring (issue #764) ----
+
+    @Test
+    fun `a Found hole gets a ring just outside its edge, with a matching corner radius`() {
+        val hole = Rect(100f, 200f, 300f, 260f)
+        val ring = spotlightRing(hole, blockNothing = false, strokePx = 6f, holeCornerPx = 12f)
+        assertEquals(Rect(97f, 197f, 303f, 263f), ring?.rect)
+        assertEquals(15f, ring?.cornerRadiusPx)
+        assertEquals(6f, ring?.strokePx)
+    }
+
+    @Test
+    fun `no hole means no ring`() {
+        assertNull(spotlightRing(null, blockNothing = false, strokePx = 6f, holeCornerPx = 12f))
+    }
+
+    @Test
+    fun `the full-page selection hole gets no ring`() {
+        val fullPage = Rect(0f, 0f, 1000f, 2000f)
+        assertNull(spotlightRing(fullPage, blockNothing = true, strokePx = 6f, holeCornerPx = 12f))
     }
 }

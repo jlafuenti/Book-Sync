@@ -16,6 +16,10 @@ import org.junit.Test
  */
 class TourScriptTest {
 
+    private companion object {
+        val EM_DASH: Char = 0x2014.toChar()
+    }
+
     @Test
     fun `step ids are unique`() {
         val ids = TOUR.map { it.id }
@@ -41,8 +45,8 @@ class TourScriptTest {
     }
 
     @Test
-    fun `total step count is at most 29`() {
-        assertTrue(TOUR.size <= 29)
+    fun `total step count is at most 30`() {
+        assertTrue(TOUR.size <= 30)
     }
 
     @Test
@@ -197,10 +201,46 @@ class TourScriptTest {
     }
 
     @Test
-    fun `reader_select_sentence explains how much to select`() {
+    fun `reader_select_sentence explains how much to select and waits for a selection`() {
         val step = TOUR.first { it.id == READER_SELECTION_STEP_ID }
+        assertEquals("Select a sentence", step.title)
         assertTrue(step.body.contains("at least a few words"))
+        assertTrue(step.body.contains("A whole sentence gives the best match."))
+        assertEquals(Advance.WaitFor(TourEvent.ReaderSelectionStarted, skippable = true), step.advance)
+        assertEquals(TourAnchor.ReaderPage, step.anchor)
+        assertNotNull(step.emptyBody)
+        assertTrue(step.needsPair)
+    }
+
+    @Test
+    fun `reader_selection_menu follows reader_select_sentence and explains both menu actions`() {
+        // Issue #764: since #772 the selection menu offers Read along as well as
+        // Sync to Audio, so the tour explains both before asking for the sync.
+        val ids = TOUR.map { it.id }
+        val a = ids.indexOf(READER_SELECTION_STEP_ID)
+        val b = ids.indexOf("reader_selection_menu")
+        assertTrue("reader_selection_menu is missing", b >= 0)
+        assertEquals(a + 1, b)
+        assertEquals(b + 1, ids.indexOf("player_paused"))
+
+        val step = TOUR[b]
+        assertEquals(TourScreen.Reader, step.screen)
+        assertEquals(TourAnchor.ReaderPage, step.anchor)
+        assertEquals("Read along or Sync to Audio", step.title)
+        assertTrue(step.body.contains("Read along"))
         assertTrue(step.body.contains("Sync to Audio"))
+        assertEquals(Advance.WaitFor(TourEvent.ReaderSyncedSelection, skippable = true), step.advance)
+        assertEquals(TOUR[a].emptyBody, step.emptyBody)
+        assertTrue(step.needsPair)
+        assertFalse("no em-dashes in tour copy", step.title.contains(EM_DASH) || step.body.contains(EM_DASH))
+    }
+
+    @Test
+    fun `both selection steps are recognised as selection steps, nothing else is`() {
+        assertEquals(setOf(READER_SELECTION_STEP_ID, "reader_selection_menu"), SELECTION_STEP_IDS)
+        assertTrue(isSelectionStep(READER_SELECTION_STEP_ID))
+        assertTrue(isSelectionStep("reader_selection_menu"))
+        assertFalse(isSelectionStep("reader_trick"))
     }
 
     @Test

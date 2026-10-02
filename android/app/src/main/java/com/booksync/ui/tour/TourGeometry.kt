@@ -29,6 +29,26 @@ fun cardPlacement(hole: Rect?, screen: Size, cardHeight: Float): Placement {
     }
 }
 
+/** An outline drawn around the spotlight hole, in the overlay's own pixels. */
+data class SpotlightRing(val rect: Rect, val cornerRadiusPx: Float, val strokePx: Float)
+
+/**
+ * The outline that keeps the spotlight visible on any background (issue #764): on a dark
+ * reader theme the control behind a cleared hole is as dark as the scrim, so the hole alone
+ * shows nothing. The ring sits just outside the hole's edge, so it never covers the control.
+ * Null when there is no hole, and when the "hole" is the whole page ([blockNothing], the
+ * selection steps), where an outline around the page would be noise.
+ */
+fun spotlightRing(hole: Rect?, blockNothing: Boolean, strokePx: Float, holeCornerPx: Float): SpotlightRing? {
+    if (hole == null || blockNothing) return null
+    val half = strokePx / 2f
+    return SpotlightRing(
+        rect = Rect(hole.left - half, hole.top - half, hole.right + half, hole.bottom + half),
+        cornerRadiusPx = holeCornerPx + half,
+        strokePx = strokePx,
+    )
+}
+
 /**
  * The card's top edge for [placement], in the overlay's own pixels, clamped so
  * the card never leaves the host: a "below" card that would run off the
