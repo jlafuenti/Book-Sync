@@ -39,6 +39,11 @@ operator must do by hand rather than read about afterwards.
   back the way it was once the walkthrough ends" (it read as though the book's state at the end
   were what got restored), and the Done card says the book "has been put back", instead of
   repeating the welcome card's promise after the walkthrough is over. Same wording as Android.
+- Four confirmation dialogs drew as a bare strip of text and buttons across the page, with no
+  panel behind them (#783): System → Rebuild sync maps and Force Delete, and Troubleshoot's remove
+  tracks and bulk delete. They passed a `modal-dialog` class that no stylesheet ever defined, which
+  replaced the default `.modal` panel. They now use the standard dialog panel, and a test fails on
+  any class handed to `Modal` that no stylesheet defines.
 
 ### Upgrade notes
 

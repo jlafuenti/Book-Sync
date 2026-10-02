@@ -258,7 +258,7 @@ export default function SyncMapRebuildCard() {
             </div>
 
             {confirmOpen && (
-                <Modal onClose={() => setConfirmOpen(false)} labelledBy="sync-rebuild-confirm-title" className="modal-dialog">
+                <Modal onClose={() => setConfirmOpen(false)} labelledBy="sync-rebuild-confirm-title">
                     <h3 id="sync-rebuild-confirm-title" style={{ marginTop: 0 }}>
                         {selected ? 'Rebuild the selected sync maps?' : `Rebuild ${outdated} sync ${outdated === 1 ? 'map' : 'maps'}?`}
                     </h3>

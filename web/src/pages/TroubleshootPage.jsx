@@ -402,7 +402,7 @@ function IssueSection({ cat, rows, canEdit, onChanged, onOpenDetails }) {
                     <input ref={replaceInputRef} type="file" style={{ display: 'none' }} onChange={onReplacePicked} />
 
                     {confirmRemoveTracks && (
-                        <Modal onClose={() => setConfirmRemoveTracks(null)} labelledBy="confirm-remove-tracks-title" className="modal-dialog">
+                        <Modal onClose={() => setConfirmRemoveTracks(null)} labelledBy="confirm-remove-tracks-title">
                                 <h3 id="confirm-remove-tracks-title" style={{ marginTop: 0 }}>
                                     Remove {confirmRemoveTracks.imported_track_count} imported track
                                     row{confirmRemoveTracks.imported_track_count === 1 ? '' : 's'}?
@@ -420,7 +420,7 @@ function IssueSection({ cat, rows, canEdit, onChanged, onOpenDetails }) {
                     )}
 
                     {confirmDelete && (
-                        <Modal onClose={() => setConfirmDelete(false)} labelledBy="confirm-bulk-delete-title" className="modal-dialog">
+                        <Modal onClose={() => setConfirmDelete(false)} labelledBy="confirm-bulk-delete-title">
                                 <h3 id="confirm-bulk-delete-title" style={{ marginTop: 0 }}>Delete {selected.size} item{selected.size !== 1 ? 's' : ''}?</h3>
                                 <p>The selected files will be permanently deleted from storage and unpaired. This cannot be undone.</p>
                                 <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
