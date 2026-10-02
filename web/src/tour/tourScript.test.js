@@ -246,13 +246,14 @@ describe('copy parity with the Android TourScript.kt', () => {
         expect(web.body).toContain('Ebook pages / Print pages menu')
     })
 
-    it('done matches the Android title and base body, plus the welcome "put back" sentence as a suffix', () => {
+    it('done matches the Android title and base body, plus the past-tense "put back" sentence', () => {
+        // Issue #788: the suffix used to repeat the welcome card's promise ("is put back
+        // ... when you finish") on the card that ends the walkthrough. It now says what
+        // Android's Done card says (TourOverlay.kt) — that it has happened.
         const android = androidStep('done')
-        const androidWelcome = androidStep('welcome')
         const web = webStep('done')
         expect(web.title).toBe(android.title)
         expect(web.body).toBe(android.body)
-        const putBackSentence = androidWelcome.body.slice(androidWelcome.body.indexOf('The book we open'))
-        expect(web.cleanUpSuffix.trim()).toBe(putBackSentence)
+        expect(web.cleanUpSuffix).toBe(' The book we used has been put back the way it was.')
     })
 })

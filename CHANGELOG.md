@@ -35,6 +35,10 @@ operator must do by hand rather than read about afterwards.
 - Rebuilding or realigning a sync map no longer moves a never-read book's placeholder position
   onto the first aligned sentence, which created reading progress for a book the reader had only
   opened (#774).
+- Web walkthrough copy (#788): the welcome card now says the book opened along the way "will be put
+  back the way it was once the walkthrough ends" (it read as though the book's state at the end
+  were what got restored), and the Done card says the book "has been put back", instead of
+  repeating the welcome card's promise after the walkthrough is over. Same wording as Android.
 
 ### Upgrade notes
 

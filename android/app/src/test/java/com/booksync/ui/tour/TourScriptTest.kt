@@ -193,6 +193,29 @@ class TourScriptTest {
     }
 
     @Test
+    fun `home_welcome says when the book is put back`() {
+        // Issue #788: "is put back the way it was when you finish" read as though the
+        // book's state at the end were what got restored.
+        val step = TOUR.first { it.id == "home_welcome" }
+        assertTrue(step.body.endsWith("will be put back the way it was once the walkthrough ends."))
+        assertFalse(step.body.contains("when you finish"))
+    }
+
+    @Test
+    fun `reader_tap_page can be skipped rather than advancing on its own`() {
+        val step = TOUR.first { it.id == "reader_tap_page" }
+        assertEquals(Advance.WaitFor(TourEvent.ReaderBarsShown, skippable = true), step.advance)
+    }
+
+    @Test
+    fun `only details_chips holds its card back, for DETAILS_REVEAL_MS`() {
+        // Issue #788: the Details page gets a moment on its own after View details opens it.
+        assertEquals(DETAILS_REVEAL_MS, TOUR.first { it.id == "details_chips" }.revealDelayMs)
+        assertEquals(listOf("details_chips"), TOUR.filter { it.revealDelayMs > 0 }.map { it.id })
+        assertEquals(2_000L, DETAILS_REVEAL_MS)
+    }
+
+    @Test
     fun `details_chips explains green, grey, and the sync map downloading itself`() {
         val step = TOUR.first { it.id == "details_chips" }
         assertTrue(step.body.contains("green chip"))

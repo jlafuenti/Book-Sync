@@ -112,7 +112,16 @@ data class TourStep(
     val advance: Advance = Advance.Next,
     val needsPair: Boolean = false,
     val altAnchors: List<TourAnchor> = emptyList(),
+    /**
+     * How long the card stays hidden after the user's tap brings this step's screen up
+     * (issue #788): the screen gets a moment on its own before the scrim and card cover it.
+     * Only on the way forward — stepping Back onto the step shows the card at once.
+     */
+    val revealDelayMs: Long = 0,
 )
+
+/** How long the Details page shows on its own after View details opens it (issue #788). */
+const val DETAILS_REVEAL_MS = 2_000L
 
 /** The id of the one step where the tour must not block the reader's own gestures. */
 const val READER_SELECTION_STEP_ID = "reader_select_sentence"
@@ -151,8 +160,8 @@ val TOUR: List<TourStep> = listOf(
         anchor = null,
         title = "Welcome to Tandem",
         body = "This is a five-minute walkthrough of the app, using your own library. " +
-            "Quit any time with the × in the corner. The book we open along the way is put " +
-            "back the way it was when you finish.",
+            "Quit any time with the × in the corner. The book we open along the way will be " +
+            "put back the way it was once the walkthrough ends.",
     ),
     TourStep(
         id = "home_continue_reading",
@@ -234,6 +243,7 @@ val TOUR: List<TourStep> = listOf(
         body = "A green chip means that part is already on this phone. Grey ones stream; " +
             "the sync map downloads itself the first time you open the book.",
         needsPair = true,
+        revealDelayMs = DETAILS_REVEAL_MS,
     ),
     TourStep(
         id = "details_sync_map",
@@ -278,7 +288,9 @@ val TOUR: List<TourStep> = listOf(
         body = "Tap the middle of the page to bring up the toolbar.",
         emptyBody = "The reader's toolbar isn't available to spotlight yet on this build — " +
             "tap the middle of the page to bring it up.",
-        advance = Advance.WaitFor(TourEvent.ReaderBarsShown, skippable = false),
+        // Skippable rather than timed (issue #788): the tour used to raise the bars itself
+        // 4 s after the reader settled, which read as the step moving on by itself.
+        advance = Advance.WaitFor(TourEvent.ReaderBarsShown, skippable = true),
         needsPair = true,
     ),
     TourStep(

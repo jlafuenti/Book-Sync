@@ -41,8 +41,8 @@ export const TOUR = [
         anchor: null,
         title: 'Welcome to Tandem',
         body: 'This is a five-minute walkthrough of the app, using your own library. '
-            + 'Quit any time with the × in the corner. The book we open along the way is put '
-            + 'back the way it was when you finish.',
+            + 'Quit any time with the × in the corner. The book we open along the way will be '
+            + 'put back the way it was once the walkthrough ends.',
         advance: ADVANCE.next(),
         // A replay starts from the Account page; the next four steps live
         // on Home, so the tour goes there first.
@@ -343,7 +343,7 @@ export const TOUR = [
         anchor: null,
         title: 'Done',
         body: 'That\'s Tandem. Enjoy your books.',
-        cleanUpSuffix: ' The book we open along the way is put back the way it was when you finish.',
+        cleanUpSuffix: ' The book we used has been put back the way it was.',
         advance: ADVANCE.finish(),
     },
 ]

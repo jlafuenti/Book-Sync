@@ -13,13 +13,9 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
 /** Where the tour is right now. */
-/** How long the "tap the page" reader step waits, once the reader has settled, before raising the bars itself. */
-const val READER_BARS_GRACE_MS = 4_000L
-
 /**
  * Whether a step's anchor (or, for `details_maintenance`, one of its
  * [TourStep.altAnchors]) has shown up (issue #642).
@@ -50,7 +46,7 @@ sealed class TourState {
         val spotlighted: TourAnchor?,
         val pairId: Int?,
         val total: Int,
-        /** False on step 0 and on the first step of a new screen (see [TourController.back]). */
+        /** False on step 0 only (see [TourController.back]). */
         val canGoBack: Boolean = false,
         /**
          * True when [pairId] was untouched — see [TourPairPicker.isUntouched] — the moment
@@ -67,6 +63,19 @@ sealed class TourState {
          * until this clears, since the step list itself isn't final yet.
          */
         val preparing: Boolean = false,
+        /**
+         * True while [step]'s card is held back after a forward move ([TourStep.revealDelayMs],
+         * issue #788): the overlay draws no scrim and no card, only blocks taps, so the screen
+         * the user just opened can be looked at on its own for a moment.
+         */
+        val revealing: Boolean = false,
+        /**
+         * A pair whose card sheet the Library should open, set by Back from the first Details
+         * card onto the sheet steps (issue #788) and cleared by
+         * [TourController.sheetRequestHandled]. State rather than a [TourNav]: the Library is
+         * not composed while Details is on top, so a nav event emitted then reaches no one.
+         */
+        val sheetRequest: Int? = null,
     ) : TourState() {
         /**
          * True once [step]'s anchor has waited this tour out without showing up. A step
@@ -85,6 +94,12 @@ sealed class TourNav {
     data class OpenDetails(val pairId: Int) : TourNav()
     data class OpenReader(val pairId: Int) : TourNav()
     data object PopToMain : TourNav()
+    /** Back from the first sheet card onto the Library (issue #788): the open card sheet closes. */
+    data object CloseSheet : TourNav()
+    /** Back from the first reader card onto Details (issue #788): the reader Activity finishes. */
+    data object CloseReader : TourNav()
+    /** Back from the reader onto the player's steps (issue #788): the reader finishes and the player opens. */
+    data class OpenPlayer(val pairId: Int) : TourNav()
     data object ShowReaderBars : TourNav()
     data object SkipToToolbarSync : TourNav()
     /**
@@ -173,7 +188,7 @@ class TourController(
      *  the tour opened has no bearing on this device-wide reader setting. */
     private var savedProgressMode: String = ""
     private var anchorWatchJob: Job? = null
-    private var barsGraceJob: Job? = null
+    private var revealJob: Job? = null
     private var startJob: Job? = null
     /** Bumped by every [start], so a stale `start()` coroutine that resumes late (its
      *  [awaitLibrary] having finally returned) can tell it was superseded and must not
@@ -189,7 +204,7 @@ class TourController(
     /** Picks a pair (degrading gracefully to the skip card when none qualifies) and enters step 0. */
     fun start() {
         anchorWatchJob?.cancel()
-        barsGraceJob?.cancel()
+        revealJob?.cancel()
         startJob?.cancel()
         val generation = ++startGeneration
         steps = TOUR
@@ -239,18 +254,56 @@ class TourController(
     }
 
     /**
-     * Steps back within the current screen only. Across a screen boundary the
-     * previous step's control is gone (the sheet closed, the reader finished),
-     * so it would land on a "tap this" card that can never advance.
+     * Steps back one card, from any step after the first (issue #788). Across a screen
+     * boundary the previous card's control is gone (the sheet closed, the reader finished),
+     * so this first puts the app back where that card expects it — see [backNav] — or the
+     * card would ask for a tap that can never land.
      */
     fun back() {
         val running = _state.value as? TourState.Running ?: return
-        if (!canGoBack(running.index)) return
-        enter(running.index - 1)
+        if (running.preparing || !canGoBack(running.index)) return
+        val from = steps[running.index].screen
+        val to = steps[running.index - 1].screen
+        backNav(from, to).orEmpty().forEach { _nav.tryEmit(it) }
+        enter(
+            running.index - 1,
+            viaBack = true,
+            sheetRequest = if (from == TourScreen.Details && to == TourScreen.Sheet) pairId else null,
+        )
+    }
+
+    /** The Library has opened the sheet [TourState.Running.sheetRequest] asked for. */
+    fun sheetRequestHandled() {
+        val running = _state.value as? TourState.Running ?: return
+        if (running.sheetRequest != null) _state.value = running.copy(sheetRequest = null)
     }
 
     private fun canGoBack(index: Int): Boolean =
-        index > 0 && steps[index - 1].screen == steps[index].screen
+        index > 0 && backNav(steps[index].screen, steps[index - 1].screen) != null
+
+    /**
+     * What Back from a [from] card onto a [to] card must navigate (issue #788): nothing within
+     * a screen; across one, whatever brings back the screen the previous card points at. Null
+     * for a pair of screens the script never puts next to each other, which leaves Back off
+     * rather than guessing.
+     */
+    private fun backNav(from: TourScreen, to: TourScreen): List<TourNav>? {
+        if (from == to) return emptyList()
+        val toTab = tabRouteFor(to)
+        if (tabRouteFor(from) != null && toTab != null) return listOf(TourNav.GoToTab(toTab))
+        val pair = pairId
+        return when {
+            from == TourScreen.Sheet && to == TourScreen.Library -> listOf(TourNav.CloseSheet)
+            // Popping Details lands on the Library; the sheet itself reopens from
+            // TourState.Running.sheetRequest once the Library is composed to see it.
+            from == TourScreen.Details && to == TourScreen.Sheet -> listOf(TourNav.PopToMain)
+            from == TourScreen.Reader && to == TourScreen.Details -> listOf(TourNav.CloseReader)
+            (from == TourScreen.Player || from == TourScreen.Library) && to == TourScreen.Reader ->
+                pair?.let { listOf(TourNav.OpenReader(it)) }
+            from == TourScreen.Reader && to == TourScreen.Player -> pair?.let { listOf(TourNav.OpenPlayer(it)) }
+            else -> null
+        }
+    }
 
     /** Quits the tour from wherever it is right now. */
     fun quit() = finish()
@@ -283,6 +336,12 @@ class TourController(
         val running = _state.value as? TourState.Running ?: return
         val advance = running.step.advance
         if (advance !is Advance.WaitFor || !advance.skippable) return
+        if (advance.event == TourEvent.ReaderBarsShown) {
+            // "Tap the page", skipped (issue #788): raise the bars the tap would have, so the
+            // next steps' toolbar controls are there to spotlight. The ReaderBarsShown this
+            // produces lands on the next step, which is not waiting for it.
+            _nav.tryEmit(TourNav.ShowReaderBars)
+        }
         if (isSelectionStep(running.step.id)) {
             // Either selection step: Skip does the page-level sync and leaves both behind.
             _nav.tryEmit(TourNav.SkipToToolbarSync)
@@ -345,26 +404,26 @@ class TourController(
         enter(nextIndex)
     }
 
-    private fun enter(index: Int, preparing: Boolean = false) {
+    private fun enter(
+        index: Int,
+        preparing: Boolean = false,
+        viaBack: Boolean = false,
+        sheetRequest: Int? = null,
+    ) {
         anchorWatchJob?.cancel()
-        barsGraceJob?.cancel()
+        revealJob?.cancel()
         val step = steps[index]
         registry.setWanted(step.anchor)
         emitEnterNav(step, isFirstOccurrenceOfScreen(step.screen, index))
 
-        // The "tap the page" step waits for the reader's bars; a user who never
-        // taps would be stuck, so after a grace period — counted from the
-        // reader actually settling, not from step entry (issue #642: the old
-        // 4 s counted from Activity creation, before the book had loaded) —
-        // the tour raises them itself and the resulting ReaderBarsShown
-        // advances the step as if the user had tapped.
-        val waitsForBars = (step.advance as? Advance.WaitFor)?.event == TourEvent.ReaderBarsShown
-        if (waitsForBars) {
-            barsGraceJob = scope.launch {
-                registry.settled.first { TourScreen.Reader in it }
-                delay(READER_BARS_GRACE_MS)
+        // Hold the card back for a moment on the way forward (issue #788). Stepping Back onto
+        // the step shows it at once: the screen has been looked at already.
+        val revealing = step.revealDelayMs > 0 && !viaBack
+        if (revealing) {
+            revealJob = scope.launch {
+                delay(step.revealDelayMs)
                 val current = _state.value as? TourState.Running ?: return@launch
-                if (current.index == index) _nav.tryEmit(TourNav.ShowReaderBars)
+                if (current.index == index) _state.value = current.copy(revealing = false)
             }
         }
 
@@ -394,6 +453,8 @@ class TourController(
             canGoBack = canGoBack(index),
             willCleanUp = willCleanUp,
             preparing = preparing,
+            revealing = revealing,
+            sheetRequest = sheetRequest,
         )
 
         if (step.anchor != null) {
@@ -568,7 +629,7 @@ class TourController(
             _nav.tryEmit(TourNav.CleanUp(running.pairId, progressModeRestored))
         }
         anchorWatchJob?.cancel()
-        barsGraceJob?.cancel()
+        revealJob?.cancel()
         startJob?.cancel()
         registry.setWanted(null)
         _state.value = TourState.Finished

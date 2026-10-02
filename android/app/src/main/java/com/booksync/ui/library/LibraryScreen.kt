@@ -221,6 +221,18 @@ fun LibraryScreen(
     var overflowTarget by remember { mutableStateOf<OverflowTarget?>(null) }
     var overflowSeriesItems by remember { mutableStateOf<List<LibraryItem>>(emptyList()) }
 
+    // Back from the first Details card onto the sheet steps (issue #788): the tour asks for
+    // this pair's sheet once the Library is showing again. Marked handled even when the pair
+    // is not in the list, so a request never lingers into a later step.
+    val sheetRequest = (tourState as? TourState.Running)?.sheetRequest
+    LaunchedEffect(sheetRequest) {
+        val requested = sheetRequest ?: return@LaunchedEffect
+        items.firstOrNull { it.pair?.id == requested }?.let { item ->
+            overflowTarget = item.toOverflowTarget(activeTxPairIds, viewModel.progressSummary(item))
+        }
+        tour.controller.sheetRequestHandled()
+    }
+
     Scaffold(
         topBar = {
             LibraryTopBar(

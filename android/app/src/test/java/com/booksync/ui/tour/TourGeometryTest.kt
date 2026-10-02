@@ -84,4 +84,38 @@ class TourGeometryTest {
         val fullPage = Rect(0f, 0f, 1000f, 2000f)
         assertNull(spotlightRing(fullPage, blockNothing = true, strokePx = 6f, holeCornerPx = 12f))
     }
+
+    @Test
+    fun `preferring above places the card above whenever it fits there, even with room below`() {
+        // Issue #788: on the sheet, the rows under the spotlit one are what the card talks
+        // about next (Read or Listen), so the card takes the room above when it has it.
+        val hole = Rect(0f, 1300f, 1000f, 1420f)
+        val tall = Size(1000f, 2400f)
+        assertEquals(Placement.Below, cardPlacement(hole, tall, cardHeight = 600f))
+        assertEquals(Placement.Above, cardPlacement(hole, tall, cardHeight = 600f, preferAbove = true))
+        // Without the room above, it still falls back to below.
+        val low = Rect(0f, 300f, 1000f, 420f)
+        assertEquals(Placement.Below, cardPlacement(low, tall, cardHeight = 600f, preferAbove = true))
+    }
+
+    @Test
+    fun `the room the sheet adds lets the Read or Listen card sit clear above its row`() {
+        // Issue #788, measured off a phone screenshot (1080 px wide, 2.625 px/dp): the sheet's
+        // content was 1123 px tall with the Read row 580 px down it, and the card 590 px tall.
+        // Neither side fitted, so the card took the top of the sheet and covered the row.
+        val density = 2.625f
+        val card = 590f
+        val row = Rect(0f, 580f, 1080f, 708f)
+        val bare = Size(1080f, 1123f)
+        val bareOffset = cardOffsetY(cardPlacement(row, bare, card), row, bare, card)!!
+        assertEquals("before: the card overlaps the row", true, bareOffset + card > row.top)
+
+        val room = SHEET_TOUR_CARD_ROOM.value * density
+        val roomy = Size(bare.width, bare.height + room)
+        val shifted = row.translate(0f, room)
+        val placement = cardPlacement(shifted, roomy, card, preferAbove = true)
+        assertEquals(Placement.Above, placement)
+        val offset = cardOffsetY(placement, shifted, roomy, card)!!
+        assertEquals("after: the card ends above the row", true, offset + card <= shifted.top)
+    }
 }
