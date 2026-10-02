@@ -40,8 +40,8 @@ import org.junit.Test
  * "read but never played, opened recently" pair that function existed to
  * catch must now never be enqueued, because it has nothing downloaded.
  *
- * `fetchMissingSyncMaps` (the #537 sweep, download-gated) is untouched and
- * still covered by `SyncMapAutoFetchTest`.
+ * The #537 sweep (download-gated) is untouched in its rules but now lives in `LibraryLoader`
+ * (issue #786); it is covered by `SyncMapAutoFetchTest` and `LibraryLoaderTest`.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class LibrarySyncMapPrefetchTest {

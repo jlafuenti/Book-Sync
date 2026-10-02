@@ -2,6 +2,8 @@ package com.booksync.di
 
 import com.booksync.data.repository.BookSyncRepository
 import com.booksync.data.repository.LibraryLoader
+import com.booksync.data.repository.SyncMapFetchScheduler
+import com.booksync.data.repository.SyncMapRemovalStore
 import com.booksync.ui.tour.ReaderProgressModeStore
 import com.booksync.ui.tour.TourAnchorRegistry
 import com.booksync.ui.tour.TourPairPicker
@@ -38,7 +40,13 @@ class TourLibraryWiringTest {
         val pairsGate = CompletableDeferred<Unit>()
         val repository = mockk<BookSyncRepository>(relaxed = true)
         coEvery { repository.refreshPairs() } coAnswers { pairsGate.await() }
-        val loader = LibraryLoader(repository = repository, scope = scope, signedIn = MutableStateFlow(true))
+        val loader = LibraryLoader(
+            repository = repository,
+            scope = scope,
+            signedIn = MutableStateFlow(true),
+            syncMapRemovalStore = mockk<SyncMapRemovalStore>(relaxed = true),
+            syncMapFetchScheduler = SyncMapFetchScheduler { },
+        )
         val picker = mockk<TourPairPicker>()
         coEvery { picker.pick() } returns 42
         coEvery { picker.isUntouched(any()) } returns false

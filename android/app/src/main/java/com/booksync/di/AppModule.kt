@@ -413,6 +413,18 @@ object AppModule {
         tokenManager.getAccessToken().map { !it.isNullOrEmpty() }
 
     /**
+     * How [com.booksync.data.repository.LibraryLoader]'s missing-sync-map sweep asks for a fetch
+     * (issue #786): a WorkManager `SYNC_MAP` download. Behind an interface so the loader stays
+     * free of WorkManager and its tests can record the calls.
+     */
+    @Provides
+    @Singleton
+    fun provideSyncMapFetchScheduler(
+        @ApplicationContext context: Context,
+    ): com.booksync.data.repository.SyncMapFetchScheduler =
+        com.booksync.data.repository.WorkManagerSyncMapFetchScheduler(context)
+
+    /**
      * The guided-walkthrough engine (issue #597, revised by #642). A plain
      * `@Provides` rather than an `@Inject constructor` on
      * [com.booksync.ui.tour.TourController]: that class's `clock`/`settleMs`/

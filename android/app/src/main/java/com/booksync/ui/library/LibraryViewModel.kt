@@ -376,12 +376,13 @@ class LibraryViewModel @Inject constructor(
      * in [LibraryLoader] rather than here (issue #641) — it is the one place both
      * this screen and Home's own `init` can trigger (or await) the same run,
      * rather than each kicking off its own on a fresh sign-in. This still owns
-     * everything that used to run alongside them: `fetchMissingSyncMaps`, the
-     * pending-sync/bookmark catch-up, and the exact snackbar message a given
+     * the pruning of unused sync maps and the exact snackbar message a given
      * failure produces — read from [LibraryLoader.lastError] once the shared run
-     * finishes, so a caller of this screen sees identical wording to before.
+     * finishes, so a caller of this screen sees identical wording to before. The
+     * missing-sync-map sweep and the pending-sync/bookmark catch-up live in the
+     * loader too (issues #786 and #652), so they run whichever screen started the refresh.
      *
-     * Everything after the join — reading Room, [fetchMissingSyncMaps] — used to
+     * Everything after the join — reading Room, [pruneUnusedSyncMaps] — used to
      * sit inside the same try/catch as the fetches themselves, so a failure there
      * became "Refresh failed: …" like any other. That safety net has to stay even
      * though the fetches moved out: an exception here escaping [viewModelScope]
@@ -396,11 +397,11 @@ class LibraryViewModel @Inject constructor(
                 val error = loader.lastError.value
                 if (error == null) {
                     val pairs = repository.getPairsFlow().first()
-                    fetchMissingSyncMaps(pairs)
                     pruneUnusedSyncMaps(pairs)
-                    // The pending-write drain and the position pull moved into
-                    // LibraryLoader with the fetches (issue #652): run from here they only
-                    // ever started once this tab had been opened.
+                    // The pending-write drain, the position pull (issue #652) and the
+                    // missing-sync-map sweep (issue #786) moved into LibraryLoader with the
+                    // fetches: run from here they only ever started once this tab had been
+                    // opened.
                     if (!silent) _refreshMessage.value = "Library refreshed"
                 } else {
                     _refreshMessage.value = refreshErrorMessage(error)
@@ -423,28 +424,6 @@ class LibraryViewModel @Inject constructor(
         is SocketTimeoutException -> "Server unreachable (timeout)"
         is HttpException -> "Server error: HTTP ${error.code()}"
         else -> "Refresh failed: ${error.message ?: "unknown error"}"
-    }
-
-    /**
-     * Queue the `SYNC_MAP` download for every pair [SyncMapAutoFetch.needsSyncMapFetch]
-     * (issue #537), once per successful [refresh].
-     *
-     * `KEEP` rather than [refreshSyncData]'s `REPLACE`: [refresh] runs on app start,
-     * pull-to-refresh, and now on every queue exit (see [observeQueueExits]) — often
-     * seconds apart — and restarting a fetch already in flight would only waste
-     * bytes and delay it. This is the only sweep: Downloaded/Home read the same
-     * Room cache this call populates, so neither needs its own.
-     *
-     * [SyncMapRemovalStore.removedIds] is consulted so a map the user removed
-     * by hand (Book Details / card menu "Remove sync data", or Account →
-     * Storage's "Clear") is not immediately re-fetched (issue #678) — without
-     * it, "removed" and "never fetched" look identical to this sweep.
-     */
-    private suspend fun fetchMissingSyncMaps(pairs: List<BookPairEntity>) {
-        val removedIds = syncMapRemovalStore.removedIds().first()
-        SyncMapAutoFetch.pairsToFetch(pairs, removedIds).forEach { pairId ->
-            enqueue(pairId, "SYNC_MAP", "download_sync_$pairId", policy = ExistingWorkPolicy.KEEP)
-        }
     }
 
     /**
@@ -484,7 +463,7 @@ class LibraryViewModel @Inject constructor(
 
     /**
      * Silently re-[refresh] whenever a pair leaves [activeTranscribingPairIds]
-     * (issue #537), so [fetchMissingSyncMaps] runs within seconds of a
+     * (issue #537), so the loader's missing-sync-map sweep runs within seconds of a
      * transcription finishing while the app is open, rather than waiting for
      * the next app start or pull-to-refresh.
      *

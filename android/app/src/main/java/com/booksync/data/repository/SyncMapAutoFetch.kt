@@ -10,14 +10,37 @@ import com.booksync.data.local.entity.BookPairEntity
  * for it later — switching formats stayed broken until the user found
  * "Refresh sync data" by hand.
  *
- * Pure decisions only, so [LibraryViewModel] can call them in one-liners and
- * they're testable without Hilt/WorkManager.
+ * Pure decisions only, so [LibraryLoader] (the sweep) and the screens can call them in
+ * one-liners and they're testable without Hilt/WorkManager.
  */
 object SyncMapAutoFetch {
 
     /** A synced pair with a local ebook or audiobook and no cached sync map should fetch it (issue #537). */
     fun needsSyncMapFetch(pair: BookPairEntity): Boolean =
-        pair.status == "synced" && (pair.ebookDownloaded || pair.audiobookDownloaded) && !pair.syncMapDownloaded
+        isSyncMapMissing(
+            synced = pair.status == "synced",
+            anythingDownloaded = pair.ebookDownloaded || pair.audiobookDownloaded,
+            mapCached = pair.syncMapDownloaded,
+        )
+
+    /**
+     * The one rule behind both the automatic sweep and the manual "Download sync data" row:
+     * the server has the map (the pair is synced), the device holds a book that needs it, and
+     * no map is cached. [needsSyncMapFetch] applies it to a pair; the card overflow sheet applies
+     * it to the fields its `OverflowTarget.Pair` carries, so the two cannot drift apart.
+     */
+    fun isSyncMapMissing(synced: Boolean, anythingDownloaded: Boolean, mapCached: Boolean): Boolean =
+        synced && anythingDownloaded && !mapCached
+
+    /**
+     * Whether Book Details (and the card menu) should show "Download sync data" (issue #786).
+     *
+     * Same condition as [needsSyncMapFetch], and deliberately **without** a hand-removed
+     * exclusion: the sweep stays away from a map the user removed ([pairsToFetch]'s `removedIds`,
+     * issue #678), but the user must be able to undo that, and this row is the way back. It is
+     * also the only action available for a map the server replaced while the sweep could not run.
+     */
+    fun offersSyncMapDownload(pair: BookPairEntity): Boolean = needsSyncMapFetch(pair)
 
     /**
      * IDs of the pairs in [pairs] that [needsSyncMapFetch], excluding any id in
