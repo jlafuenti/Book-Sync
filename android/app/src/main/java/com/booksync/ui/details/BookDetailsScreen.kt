@@ -68,6 +68,7 @@ import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.booksync.BuildConfig
 import com.booksync.data.remote.coverImageUrl
+import com.booksync.data.repository.SyncMapAutoFetch
 import com.booksync.ui.components.ActionRow
 import com.booksync.ui.theme.Tandem
 import com.booksync.ui.tour.TourAnchor
@@ -283,6 +284,18 @@ fun BookDetailsScreen(
                                 description = "Delete the cached sync map from this device.",
                                 destructive = true,
                                 onClick = { viewModel.removeSyncData() },
+                            )
+                        }
+                        // The way back when the map is gone: dropped because the server
+                        // replaced it, or removed by hand above (issue #786). Same explicit
+                        // fetch as "Refresh sync data", so it ignores the Wi-Fi-only setting.
+                        // No tour anchor: the walkthrough's Refresh step has its own anchor.
+                        if (SyncMapAutoFetch.offersSyncMapDownload(pair)) {
+                            ActionRow(
+                                title = "Download sync data",
+                                description = "Fetch the sync map so your place carries between the ebook and audiobook.",
+                                trailingIcon = Icons.Default.Download,
+                                onClick = { viewModel.refreshSyncData() },
                             )
                         }
                         if (pair.ebookDownloaded) {

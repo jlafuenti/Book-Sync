@@ -260,4 +260,48 @@ class SyncMapAutoFetchTest {
         assertEquals(false, SyncMapAutoFetch.blockedByMeteredConnection("SYNC_MAP_EXPLICIT", wifiOnlyEnabled = true, isMetered = false))
         assertEquals(false, SyncMapAutoFetch.blockedByMeteredConnection("SYNC_MAP_EXPLICIT", wifiOnlyEnabled = false, isMetered = true))
     }
+
+    // ---- offersSyncMapDownload: the "Download sync data" row (issue #786) ----
+
+    @Test
+    fun `a synced pair with the ebook downloaded and no map offers the download`() {
+        assertEquals(true, SyncMapAutoFetch.offersSyncMapDownload(pair(status = "synced", ebookDownloaded = true)))
+    }
+
+    @Test
+    fun `a synced pair with the audiobook downloaded and no map offers the download`() {
+        assertEquals(true, SyncMapAutoFetch.offersSyncMapDownload(pair(status = "synced", audiobookDownloaded = true)))
+    }
+
+    @Test
+    fun `a pair whose map is cached does not offer the download`() {
+        assertEquals(
+            false,
+            SyncMapAutoFetch.offersSyncMapDownload(
+                pair(status = "synced", ebookDownloaded = true, syncMapDownloaded = true),
+            ),
+        )
+    }
+
+    @Test
+    fun `a synced pair with nothing downloaded does not offer the download`() {
+        assertEquals(false, SyncMapAutoFetch.offersSyncMapDownload(pair(status = "synced")))
+    }
+
+    @Test
+    fun `a pair that is not synced does not offer the download`() {
+        assertEquals(
+            false,
+            SyncMapAutoFetch.offersSyncMapDownload(pair(status = "transcribing", ebookDownloaded = true)),
+        )
+    }
+
+    @Test
+    fun `a hand-removed map still offers the download, because that is the way back`() {
+        // offersSyncMapDownload takes no removed-ids set on purpose: the sweep stays away from a
+        // map the user removed (issue #678), but the user must be able to undo that by hand.
+        val removed = pair(id = 5, status = "synced", ebookDownloaded = true)
+        assertEquals(emptyList<Int>(), SyncMapAutoFetch.pairsToFetch(listOf(removed), removedIds = setOf(5)))
+        assertEquals(true, SyncMapAutoFetch.offersSyncMapDownload(removed))
+    }
 }

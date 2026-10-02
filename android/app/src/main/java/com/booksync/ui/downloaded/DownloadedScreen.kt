@@ -351,7 +351,10 @@ private sealed class OverflowSelection {
             // the Book Details screen.
             onDeletePair       = if (pair.ebookDownloaded || pair.audiobookDownloaded)
                                      ({ vm.deletePair(pair) }) else null,
-            onRefreshSyncData  = if (pair.syncMapDownloaded)   ({ vm.refreshSyncData(pair) })  else null,
+            // Not gated on the cache: the sheet's pairMenuActions decides between "Refresh sync
+            // data" (map cached) and "Download sync data" (map missing, issue #786) and both ride
+            // this callback. With it null here, a pair whose map was dropped had no action.
+            onRefreshSyncData  = { vm.refreshSyncData(pair) },
             onRemoveSyncData   = if (pair.syncMapDownloaded)   ({ vm.removeSyncData(pair) })   else null,
             onMarkComplete     = { vm.markComplete(pair) },
             onResetProgress    = { vm.resetProgress(pair) },

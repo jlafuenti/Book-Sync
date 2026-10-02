@@ -51,6 +51,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.booksync.data.repository.SyncMapAutoFetch
 import com.booksync.ui.theme.Tandem
 import androidx.compose.runtime.collectAsState
 import com.booksync.ui.tour.TourOverlay
@@ -147,6 +148,8 @@ enum class PairAction {
     Listen,
     DeletePair,
     RefreshSyncData,
+    /** No map is cached but a downloaded, synced pair needs one (issue #786); the way back after "Remove sync data". */
+    DownloadSyncData,
     RemoveSyncData,
     CancelTranscription,
     Transcribe,
@@ -196,12 +199,21 @@ fun pairMenuActions(
         // nothing at all. It must still claim the `when`, or the `else` below
         // would offer to re-transcribe (issue #484).
         target.isTranscribed -> {
-            // A downloaded pair offers Refresh even with no map cached: after
-            // "Remove sync data" it is one of the two ways back, beside a fresh
-            // download (issue #678). A streamed pair with no map has nothing
-            // to refresh — its map is fetched when it is opened.
-            if (target.syncMapCached || target.hasEbookDownloaded || target.hasAudiobookDownloaded) {
+            // With a map cached the row is "Refresh sync data". A downloaded pair with no map
+            // (removed by hand, issue #678, or replaced by the server, issue #786) gets "Download
+            // sync data" instead, the same wording and rule as Book Details: it is one of the
+            // two ways back, beside a fresh download. A streamed pair with no map has neither —
+            // its map is fetched when it is opened.
+            if (target.syncMapCached) {
                 add(PairAction.RefreshSyncData)
+            } else if (
+                SyncMapAutoFetch.isSyncMapMissing(
+                    synced = target.isTranscribed,
+                    anythingDownloaded = target.hasEbookDownloaded || target.hasAudiobookDownloaded,
+                    mapCached = false,
+                )
+            ) {
+                add(PairAction.DownloadSyncData)
             }
             // Remove needs a cache to act on.
             if (target.syncMapCached) add(PairAction.RemoveSyncData)
@@ -627,6 +639,11 @@ private fun PairActions(
             }
             PairAction.RefreshSyncData -> actions.onRefreshSyncData?.let {
                 ActionRow(Icons.Default.Sync, "Refresh sync data", onClick = it)
+            }
+            // The same explicit fetch as Refresh (bypasses the Wi-Fi-only setting), so it rides
+            // the same callback; the row only exists when no map is cached (issue #786).
+            PairAction.DownloadSyncData -> actions.onRefreshSyncData?.let {
+                ActionRow(Icons.Default.CloudDownload, "Download sync data", onClick = it)
             }
             // No confirmation, same as Refresh above (issue #678): this only
             // clears a small, freely re-fetchable local cache, not user content.

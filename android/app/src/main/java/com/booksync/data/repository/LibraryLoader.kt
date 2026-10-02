@@ -1,5 +1,6 @@
 package com.booksync.data.repository
 
+import android.util.Log
 import com.booksync.di.ApplicationScope
 import javax.inject.Inject
 import javax.inject.Named
@@ -17,6 +18,8 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
+
+private const val TAG = "LibraryLoader"
 
 /** `@Named` key for the injected "is a session signed in" flow — see [SIGNED_IN_FLOW_QUALIFIER] below. */
 const val SIGNED_IN_FLOW_QUALIFIER = "librarySignedIn"
@@ -55,6 +58,8 @@ class LibraryLoader @Inject constructor(
     private val repository: BookSyncRepository,
     @ApplicationScope private val scope: CoroutineScope,
     @Named(SIGNED_IN_FLOW_QUALIFIER) signedIn: Flow<Boolean>,
+    private val syncMapRemovalStore: SyncMapRemovalStore,
+    private val syncMapFetchScheduler: SyncMapFetchScheduler,
 ) {
     private val _state = MutableStateFlow(LibraryLoadState.Idle)
     val state: StateFlow<LibraryLoadState> = _state.asStateFlow()
@@ -141,6 +146,7 @@ class LibraryLoader @Inject constructor(
             currentCoroutineContext().ensureActive()
             _state.value = LibraryLoadState.Loaded
             startPositionSync()
+            scheduleMissingSyncMaps()
         } catch (e: CancellationException) {
             throw e
         } catch (e: Throwable) {
@@ -178,6 +184,43 @@ class LibraryLoader @Inject constructor(
                 throw e
             } catch (_: Exception) {
             }
+        }
+    }
+
+    /**
+     * Re-fetches the sync map of every pair [SyncMapAutoFetch.pairsToFetch] names, after every
+     * successful run (issues #537 and #786).
+     *
+     * `refreshPairs` drops a pair's cached map when the server reports a newer version, and it
+     * runs from Home's `init` as well as the Library screen. This sweep used to live in
+     * `LibraryViewModel.refresh`, which only exists once the Library tab is opened, so a map
+     * dropped on a Home start was not re-fetched until then. Same move as the position sync
+     * (issue #652).
+     *
+     * [SyncMapRemovalStore.removedIds] keeps a map the user removed by hand from coming straight
+     * back (issue #678). The scheduler uses `KEEP`, so running this after every refresh does not
+     * restart a fetch already in flight, and the worker applies the Wi-Fi-only gate.
+     *
+     * Best-effort, like the position sync: nothing here may turn a loaded library into a failed
+     * one or crash the run. One pair failing to schedule does not stop the others.
+     */
+    private suspend fun scheduleMissingSyncMaps() {
+        try {
+            val pairs = repository.getPairsFlow().first()
+            val removedIds = syncMapRemovalStore.removedIds().first()
+            SyncMapAutoFetch.pairsToFetch(pairs, removedIds).forEach { pairId ->
+                try {
+                    syncMapFetchScheduler.schedule(pairId)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    Log.w(TAG, "Could not schedule the sync map fetch for pair $pairId", e)
+                }
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.w(TAG, "Missing sync map sweep failed", e)
         }
     }
 

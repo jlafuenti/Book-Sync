@@ -1,7 +1,9 @@
 package com.booksync.data.repository
 
+import com.booksync.data.local.entity.BookPairEntity
 import io.mockk.coEvery
 import io.mockk.coVerify
+import io.mockk.every
 import io.mockk.mockk
 import java.io.IOException
 import kotlinx.coroutines.CompletableDeferred
@@ -9,6 +11,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.advanceUntilIdle
@@ -45,10 +48,48 @@ class LibraryLoaderTest {
      * `state.value` is current the instant a call returns, while `withTimeoutOrNull`
      * still obeys virtual time rather than the real wall clock.
      */
+    private val removalStore = mockk<SyncMapRemovalStore>(relaxed = true)
+
+    /** Records every pair id the sweep asks to have fetched (issue #786). */
+    private val scheduled = mutableListOf<Int>()
+    private var scheduler = SyncMapFetchScheduler { scheduled += it }
+
     private fun TestScope.newLoader(signedIn: MutableStateFlow<Boolean> = MutableStateFlow(true)): LibraryLoader {
         val scope = CoroutineScope(UnconfinedTestDispatcher(testScheduler))
-        return LibraryLoader(repository = repository, scope = scope, signedIn = signedIn)
+        every { removalStore.removedIds() } returns flowOf(emptySet())
+        return LibraryLoader(
+            repository = repository,
+            scope = scope,
+            signedIn = signedIn,
+            syncMapRemovalStore = removalStore,
+            syncMapFetchScheduler = { scheduler.schedule(it) },
+        )
     }
+
+    private fun pair(
+        id: Int,
+        status: String = "synced",
+        ebookDownloaded: Boolean = true,
+        audiobookDownloaded: Boolean = false,
+        syncMapDownloaded: Boolean = false,
+    ) = BookPairEntity(
+        id = id,
+        ebookId = 7,
+        ebookTitle = "Axis Test",
+        ebookAuthor = "Author",
+        ebookFilename = "axis.epub",
+        ebookFormat = "epub",
+        audiobookId = 9,
+        audiobookTitle = "Axis Test",
+        audiobookAuthor = "Author",
+        audiobookFilename = "axis.m4b",
+        audiobookFormat = "m4b",
+        audiobookDurationSeconds = 1_000,
+        status = status,
+        ebookDownloaded = ebookDownloaded,
+        audiobookDownloaded = audiobookDownloaded,
+        syncMapDownloaded = syncMapDownloaded,
+    )
 
     @Test
     fun `refresh moves through Loading then PairsLoaded then Loaded in order`() = runTest {
@@ -278,5 +319,89 @@ class LibraryLoaderTest {
         advanceUntilIdle()
 
         coVerify(exactly = 0) { repository.syncAllBookmarksAndProgress(any()) }
+    }
+
+    // ---- re-fetching a dropped sync map (issue #786) ----
+
+    @Test
+    fun `a successful load schedules a fetch for each synced pair that has a download and no map`() = runTest {
+        coEvery { repository.getPairsFlow() } returns flowOf(
+            listOf(
+                pair(id = 1),
+                pair(id = 2, syncMapDownloaded = true),
+                pair(id = 3, ebookDownloaded = false),
+                pair(id = 4, status = "transcribing"),
+                pair(id = 5, ebookDownloaded = false, audiobookDownloaded = true),
+            ),
+        )
+
+        newLoader().refresh().join()
+
+        assertEquals(listOf(1, 5), scheduled)
+    }
+
+    @Test
+    fun `the sweep leaves alone a map the user removed by hand`() = runTest {
+        coEvery { repository.getPairsFlow() } returns flowOf(listOf(pair(id = 1), pair(id = 2)))
+        val loader = newLoader()
+        every { removalStore.removedIds() } returns flowOf(setOf(1))
+
+        loader.refresh().join()
+
+        assertEquals(listOf(2), scheduled)
+    }
+
+    @Test
+    fun `a failed load schedules nothing`() = runTest {
+        coEvery { repository.getPairsFlow() } returns flowOf(listOf(pair(id = 1)))
+        coEvery { repository.refreshPairs() } throws IOException("offline")
+
+        newLoader().refresh().join()
+
+        assertTrue(scheduled.isEmpty())
+    }
+
+    @Test
+    fun `a scheduler that throws does not fail the refresh or stop the rest of the sweep`() = runTest {
+        coEvery { repository.getPairsFlow() } returns flowOf(listOf(pair(id = 1), pair(id = 2)))
+        scheduler = SyncMapFetchScheduler {
+            if (it == 1) throw IllegalStateException("WorkManager is not initialised")
+            scheduled += it
+        }
+
+        val loader = newLoader()
+        loader.refresh().join()
+
+        assertEquals(LibraryLoadState.Loaded, loader.state.value)
+        assertNull(loader.lastError.value)
+        assertEquals(listOf(2), scheduled)
+    }
+
+    @Test
+    fun `an unreadable removal store does not fail the refresh`() = runTest {
+        coEvery { repository.getPairsFlow() } returns flowOf(listOf(pair(id = 1)))
+        val loader = newLoader()
+        every { removalStore.removedIds() } returns kotlinx.coroutines.flow.flow { throw IOException("datastore") }
+
+        loader.refresh().join()
+
+        assertEquals(LibraryLoadState.Loaded, loader.state.value)
+        assertNull(loader.lastError.value)
+        assertTrue(scheduled.isEmpty())
+    }
+
+    @Test
+    fun `every successful refresh sweeps again, not just the first`() = runTest {
+        // The map is dropped by a *later* refresh (the server bumped its version), so a sweep that
+        // only ran on the first load would never catch it.
+        coEvery { repository.getPairsFlow() } returns flowOf(listOf(pair(id = 1, syncMapDownloaded = true)))
+        val loader = newLoader()
+        loader.refresh().join()
+        assertTrue(scheduled.isEmpty())
+
+        coEvery { repository.getPairsFlow() } returns flowOf(listOf(pair(id = 1, syncMapDownloaded = false)))
+        loader.refresh().join()
+
+        assertEquals(listOf(1), scheduled)
     }
 }

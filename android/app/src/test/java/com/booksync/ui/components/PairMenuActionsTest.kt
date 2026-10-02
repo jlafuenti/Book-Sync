@@ -200,16 +200,40 @@ class PairMenuActionsTest {
      * Transcribe` and offers to transcribe a pair that already is transcribed.
      */
     /**
-     * A downloaded pair whose map the user removed by hand (issue #678) must
-     * still offer Refresh — it is one of the two ways back, alongside a fresh
-     * download. Gating it on the cache alone hid the way back exactly when it
-     * was needed. Remove stays cache-gated: there is nothing to remove.
+     * A downloaded pair whose map the user removed by hand (issue #678), or whose map the server
+     * replaced (issue #786), must still offer a way to fetch it back. That row is "Download sync
+     * data" (the same wording as Book Details), not "Refresh sync data": there is no cached map
+     * to refresh, and the two never appear together. Remove stays cache-gated.
      */
     @Test
-    fun `a downloaded pair with no cached map still offers refresh but not remove`() {
+    fun `a downloaded pair with no cached map offers download sync data, not refresh or remove`() {
         val actions = pairMenuActions(pair(ebook = true, audio = false, syncMapCached = false), true, true)
-        assertTrue(actions.contains(PairAction.RefreshSyncData))
+        assertTrue(actions.contains(PairAction.DownloadSyncData))
+        assertFalse(actions.contains(PairAction.RefreshSyncData))
         assertFalse(actions.contains(PairAction.RemoveSyncData))
+    }
+
+    @Test
+    fun `a pair with a cached map offers refresh and remove, not download sync data`() {
+        val actions = pairMenuActions(pair(syncMapCached = true), true, true)
+        assertTrue(actions.contains(PairAction.RefreshSyncData))
+        assertTrue(actions.contains(PairAction.RemoveSyncData))
+        assertFalse(actions.contains(PairAction.DownloadSyncData))
+    }
+
+    @Test
+    fun `a streamed pair with no cached map is not offered download sync data`() {
+        // Nothing downloaded: the map is fetched when the book is opened, same rule as the sweep.
+        val actions = pairMenuActions(pair(ebook = false, audio = false, syncMapCached = false), true, true)
+        assertFalse(actions.contains(PairAction.DownloadSyncData))
+    }
+
+    @Test
+    fun `a pair that is not transcribed is not offered download sync data`() {
+        val actions = pairMenuActions(
+            pair(ebook = true, audio = true, transcribed = false, syncMapCached = false), true, true,
+        )
+        assertFalse(actions.contains(PairAction.DownloadSyncData))
     }
 
     @Test
