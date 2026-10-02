@@ -279,6 +279,23 @@ describe('TroubleshootPage confirmations are dialogs', () => {
         fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
         expect(screen.queryByRole('dialog')).toBeNull()
     })
+
+    it('the bulk-delete confirmation is a panelled dialog that Escape closes without deleting', async () => {
+        // Issue #783: it passed an undefined `modal-dialog` class and drew with no panel.
+        const row = { item_type: 'audiobook', item_id: 1538, title: 'Antiagon Fire', detail: 'gone', file_size: 100 }
+        getLibraryIssuesMock.mockResolvedValue(issuesWithChapterEncodingBad([], { missing: [row] }))
+        renderPage()
+
+        fireEvent.click(await screen.findByText(/Missing files/))
+        fireEvent.click((await screen.findAllByRole('checkbox'))[0])
+        fireEvent.click(await screen.findByRole('button', { name: 'Delete Selected' }))
+
+        expect(screen.getByRole('dialog')).toHaveClass('modal')
+        fireEvent.keyDown(document, { key: 'Escape' })
+        expect(screen.queryByRole('dialog')).toBeNull()
+        const { bulkDeleteIssues } = await import('../api')
+        expect(bulkDeleteIssues).not.toHaveBeenCalled()
+    })
 })
 
 // Issue #586: out-of-order audio stays invisible to the hash/text drift
