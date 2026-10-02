@@ -2151,6 +2151,7 @@ class ReaderActivity : AppCompatActivity() {
                 override fun onDefine(dismiss: () -> Unit) = defineSelectedWord(dismiss)
                 override fun onSyncToAudio(dismiss: () -> Unit) = syncSelectedTextToAudio(dismiss)
                 override fun onReadAlong(dismiss: () -> Unit) = readAlongFromSelection(dismiss)
+                override fun onSelectionStarted() = tourController.onEvent(TourEvent.ReaderSelectionStarted)
             },
         )
     }

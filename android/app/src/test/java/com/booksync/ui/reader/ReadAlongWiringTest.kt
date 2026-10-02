@@ -149,6 +149,22 @@ class ReadAlongWiringTest {
         assertTrue(destroy.contains("tourRegistry.clear(TourAnchor.ReaderFollowAudio)"))
     }
 
+    @Test
+    fun `a selection starting is reported through a neutral host callback to the tour`() {
+        val host = selectionController.substringAfter("interface Host {").substringBefore("private var hasInstalledInterceptor")
+        assertTrue(host.contains("fun onSelectionStarted()"))
+        val create = selectionController.substringAfter("override fun onCreateActionMode(mode: ActionMode, menu: Menu): Boolean {")
+            .substringBefore("override fun onPrepareActionMode")
+        assertTrue(create.contains("host.onSelectionStarted()"))
+        assertTrue(
+            "ReaderSelectionController stays plain reader code, with no tour imports",
+            !selectionController.contains("com.booksync.ui.tour"),
+        )
+        assertTrue(
+            activity.contains("override fun onSelectionStarted() = tourController.onEvent(TourEvent.ReaderSelectionStarted)"),
+        )
+    }
+
     // ============ Read along from a selection (issue #772) ============
 
     private val selectionController by lazy { source("com/booksync/ui/reader/ReaderSelectionController.kt") }

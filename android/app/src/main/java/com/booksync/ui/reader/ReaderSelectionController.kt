@@ -90,6 +90,13 @@ class ReaderSelectionController(
          * [syncToAudioAvailable] condition as Sync to Audio.
          */
         fun onReadAlong(dismiss: () -> Unit)
+
+        /**
+         * A text selection's floating menu just came up (issue #764). The WebView only
+         * starts it over a selection, so this is "the user has selected something"; it
+         * fires once per menu, not on the repeated prepare passes.
+         */
+        fun onSelectionStarted()
     }
 
     private var hasInstalledInterceptor: Boolean = false
@@ -226,6 +233,7 @@ class ReaderSelectionController(
             isSelectionActive = true
             trimSelectionMenu(menu)
             injectCustomItems(mode, menu)
+            host.onSelectionStarted()
             return keep || true
         }
 

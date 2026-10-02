@@ -92,6 +92,7 @@ class TourControllerTest {
         is TourEvent.ReaderOpened -> TourEvent.ReaderOpened(42)
         TourEvent.ReaderBarsShown -> TourEvent.ReaderBarsShown
         TourEvent.ReaderSyncedSelection -> TourEvent.ReaderSyncedSelection
+        TourEvent.ReaderSelectionStarted -> TourEvent.ReaderSelectionStarted
         TourEvent.ReaderProgressModeChanged -> TourEvent.ReaderProgressModeChanged
         TourEvent.SheetClosed -> TourEvent.SheetClosed
         is TourEvent.PlayerOpened -> TourEvent.PlayerOpened(42)
@@ -399,6 +400,60 @@ class TourControllerTest {
         controller.start()
         advanceUntilIdle()
         controller.advanceUntil(READER_SELECTION_STEP_ID)
+
+        controller.skip()
+
+        assertEquals("player_paused", running(controller).step.id)
+        assertTrue(navLog.contains(TourNav.SkipToToolbarSync))
+    }
+
+    // ---- the two selection steps (issue #764) ----
+
+    @Test
+    fun `a selection starting advances the select step to the menu step, which waits for the sync`() = runTest {
+        val controller = newController()
+        controller.start()
+        advanceUntilIdle()
+        controller.advanceUntil(READER_SELECTION_STEP_ID)
+
+        controller.onEvent(TourEvent.ReaderBarsShown) // wrong event
+        assertEquals(READER_SELECTION_STEP_ID, running(controller).step.id)
+
+        controller.onEvent(TourEvent.ReaderSelectionStarted)
+        assertEquals("reader_selection_menu", running(controller).step.id)
+
+        // A second selection event does not move the menu step on.
+        controller.onEvent(TourEvent.ReaderSelectionStarted)
+        assertEquals("reader_selection_menu", running(controller).step.id)
+
+        controller.onEvent(TourEvent.ReaderSyncedSelection)
+        assertEquals("player_paused", running(controller).step.id)
+    }
+
+    @Test
+    fun `a sync during the select step moves past both selection steps`() = runTest {
+        // The user can tap Sync to Audio before the selection event has advanced
+        // the first step: the event belongs to the step after it, and must not
+        // leave the tour stuck on a card that waits for a selection that is gone.
+        val controller = newController()
+        controller.start()
+        advanceUntilIdle()
+        controller.advanceUntil(READER_SELECTION_STEP_ID)
+
+        controller.onEvent(TourEvent.ReaderSyncedSelection)
+
+        assertEquals("player_paused", running(controller).step.id)
+    }
+
+    @Test
+    fun `skip on the menu step advances and asks for the toolbar sync`() = runTest {
+        val scope = unconfinedScope()
+        val controller = newController(scope = scope)
+        val navLog = mutableListOf<TourNav>()
+        scope.launch { controller.nav.collect { navLog.add(it) } }
+        controller.start()
+        advanceUntilIdle()
+        controller.advanceUntil("reader_selection_menu")
 
         controller.skip()
 

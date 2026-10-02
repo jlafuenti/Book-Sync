@@ -283,10 +283,20 @@ class TourController(
         val running = _state.value as? TourState.Running ?: return
         val advance = running.step.advance
         if (advance !is Advance.WaitFor || !advance.skippable) return
-        if (advance.event is TourEvent.ReaderSyncedSelection) {
+        if (isSelectionStep(running.step.id)) {
+            // Either selection step: Skip does the page-level sync and leaves both behind.
             _nav.tryEmit(TourNav.SkipToToolbarSync)
+            advanceFrom(lastSelectionStepIndex(running.index))
+            return
         }
         advanceFrom(running.index)
+    }
+
+    /** The index of the last step in the run of selection steps that [index] belongs to (issue #764). */
+    private fun lastSelectionStepIndex(index: Int): Int {
+        var last = index
+        while (last + 1 < steps.size && isSelectionStep(steps[last + 1].id)) last++
+        return last
     }
 
     /** Advances a [Advance.TapAnchor] or [Advance.WaitFor] step whose expected event just fired. */
@@ -311,7 +321,14 @@ class TourController(
             is Advance.WaitFor -> advance.event.matchesKind(event)
             Advance.Next -> false
         }
-        if (matched) advanceFrom(running.index)
+        if (matched) {
+            advanceFrom(running.index)
+        } else if (event is TourEvent.ReaderSyncedSelection && isSelectionStep(running.step.id)) {
+            // Sync to Audio tapped while the first selection step was still up (issue #764): the
+            // event belongs to the step after it, and the reader is about to leave for the
+            // player, so go past every selection step rather than strand on one.
+            advanceFrom(lastSelectionStepIndex(running.index))
+        }
     }
 
     private fun advanceFrom(currentIndex: Int) {

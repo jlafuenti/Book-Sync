@@ -96,7 +96,10 @@ fun TourOverlay(
     // it is teaching, so it blocks nothing and the "hole" is the full page —
     // but only once its anchor has actually resolved (issue #642); while
     // still Pending there is nothing to teach against yet.
-    val blockNothing = state.step.id == READER_SELECTION_STEP_ID && state.resolution == AnchorResolution.Found
+    val blockNothing = isSelectionStep(state.step.id) && state.resolution == AnchorResolution.Found
+    // The card's own accent (the Next / Skip buttons): the outline that keeps the spotlight
+    // visible when the control sits on a dark theme (issue #764).
+    val ringColor = colors.accent
     val blockEverything = state.step.advance is Advance.Next && !blockNothing
 
     // The compact "One moment…" card only appears after the step has sat in
@@ -132,6 +135,15 @@ fun TourOverlay(
                         cornerRadius = androidx.compose.ui.geometry.CornerRadius(12.dp.toPx(), 12.dp.toPx()),
                         blendMode = BlendMode.Clear,
                     )
+                    spotlightRing(hole, blockNothing, strokePx = 2.dp.toPx(), holeCornerPx = 12.dp.toPx())?.let { ring ->
+                        drawRoundRect(
+                            color = ringColor,
+                            topLeft = Offset(ring.rect.left, ring.rect.top),
+                            size = Size(ring.rect.width, ring.rect.height),
+                            cornerRadius = androidx.compose.ui.geometry.CornerRadius(ring.cornerRadiusPx, ring.cornerRadiusPx),
+                            style = Stroke(width = ring.strokePx),
+                        )
+                    }
                 }
             }
         }
