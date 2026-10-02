@@ -937,9 +937,11 @@ class ReaderActivity : AppCompatActivity() {
         if (visible) {
             tourController.onEvent(TourEvent.ReaderBarsShown)
             registerSwitchToAudioAnchor()
+            registerFollowAudioAnchor()
             registerReaderProgressAnchor()
         } else {
             tourRegistry.clear(TourAnchor.ReaderSwitchToAudio)
+            tourRegistry.clear(TourAnchor.ReaderFollowAudio)
             // progress_text lives in bottom_bar (issue #743): hidden, it has no bounds
             // worth spotlighting, same reasoning as ReaderSwitchToAudio above.
             tourRegistry.clear(TourAnchor.ReaderProgress)
@@ -962,6 +964,20 @@ class ReaderActivity : AppCompatActivity() {
         toolbar.post {
             val itemView = toolbar.findViewById<View>(R.id.action_switch_audio) ?: return@post
             tourRegistry.set(TourAnchor.ReaderSwitchToAudio, itemView.windowRect())
+        }
+    }
+
+    /**
+     * Publishes the toolbar's "Follow audio" action as [TourAnchor.ReaderFollowAudio]
+     * (issue #764), built the same way as [registerSwitchToAudioAnchor]. A standalone
+     * open hides the item (`initViews`), so `findViewById` returns null and this is a
+     * no-op: the anchor never registers and the tour's step degrades as it does for
+     * Switch to Audio.
+     */
+    private fun registerFollowAudioAnchor() {
+        toolbar.post {
+            val itemView = toolbar.findViewById<View>(R.id.action_read_along) ?: return@post
+            tourRegistry.set(TourAnchor.ReaderFollowAudio, itemView.windowRect())
         }
     }
 
@@ -2866,6 +2882,7 @@ class ReaderActivity : AppCompatActivity() {
         // on telling the tour the Reader screen is ready.
         tourRegistry.clear(TourAnchor.ReaderPage)
         tourRegistry.clear(TourAnchor.ReaderSwitchToAudio)
+        tourRegistry.clear(TourAnchor.ReaderFollowAudio)
         tourRegistry.clear(TourAnchor.ReaderProgress)
         tourRegistry.clearScreen(TourScreen.Reader)
         publication?.close()

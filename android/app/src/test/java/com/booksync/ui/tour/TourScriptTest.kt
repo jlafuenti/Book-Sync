@@ -41,8 +41,41 @@ class TourScriptTest {
     }
 
     @Test
-    fun `total step count is at most 28`() {
-        assertTrue(TOUR.size <= 28)
+    fun `total step count is at most 29`() {
+        assertTrue(TOUR.size <= 29)
+    }
+
+    @Test
+    fun `reader_follow_audio sits right after reader_switch_to_audio and advances on Next`() {
+        // Issue #764: the reader's Follow audio toolbar action (read-along, #762)
+        // gets a look-don't-tap step. Tapping it would start playback inside the
+        // tour, so the step advances on the card's own Next, like its neighbour.
+        val ids = TOUR.map { it.id }
+        val idx = ids.indexOf("reader_follow_audio")
+        assertTrue("reader_follow_audio is missing", idx >= 0)
+        assertEquals(ids.indexOf("reader_switch_to_audio") + 1, idx)
+
+        val step = TOUR[idx]
+        assertEquals(TourScreen.Reader, step.screen)
+        assertEquals(TourAnchor.ReaderFollowAudio, step.anchor)
+        assertEquals(Advance.Next, step.advance)
+        assertTrue(step.needsPair)
+        assertTrue(step.title.contains("Follow audio"))
+        assertTrue(step.body.contains("Follow audio"))
+        assertTrue(step.body.contains("Back to audio"))
+        assertFalse("no em-dashes in tour copy", step.title.contains('\u2014') || step.body.contains('\u2014'))
+    }
+
+    @Test
+    fun `reader_follow_audio handles a missing anchor exactly as reader_switch_to_audio does`() {
+        // The item is hidden for a standalone book (no usable audio), so its
+        // anchor never registers; both steps then degrade the same way.
+        val switch = TOUR.first { it.id == "reader_switch_to_audio" }
+        val follow = TOUR.first { it.id == "reader_follow_audio" }
+        assertEquals(switch.emptyBody, follow.emptyBody)
+        assertEquals(switch.altAnchors, follow.altAnchors)
+        assertEquals(switch.advance, follow.advance)
+        assertEquals(switch.needsPair, follow.needsPair)
     }
 
     @Test

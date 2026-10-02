@@ -127,6 +127,28 @@ class ReadAlongWiringTest {
         assertTrue(!start.contains("if (!ctrl.isPlaying) ctrl.play()"))
     }
 
+    // ============ Walkthrough anchor for Follow audio (issue #764) ============
+
+    @Test
+    fun `the Follow audio tour anchor is published from the toolbar item and tracks the bars`() {
+        val register = activity.substringAfter("private fun registerFollowAudioAnchor()").substringBefore("\n    }")
+        assertTrue(register.contains("toolbar.post {"))
+        assertTrue(register.contains("toolbar.findViewById<View>(R.id.action_read_along) ?: return@post"))
+        assertTrue(register.contains("tourRegistry.set(TourAnchor.ReaderFollowAudio, itemView.windowRect())"))
+
+        val bars = activity.substringAfter("private fun setBarsVisible(visible: Boolean)").substringBefore("\n    }")
+        val shown = bars.substringBefore("} else {")
+        val hidden = bars.substringAfter("} else {")
+        assertTrue("shown bars publish the anchor", shown.contains("registerFollowAudioAnchor()"))
+        assertTrue("hidden bars clear it", hidden.contains("tourRegistry.clear(TourAnchor.ReaderFollowAudio)"))
+    }
+
+    @Test
+    fun `the Follow audio tour anchor is cleared when the reader is destroyed`() {
+        val destroy = activity.substringAfter("override fun onDestroy()")
+        assertTrue(destroy.contains("tourRegistry.clear(TourAnchor.ReaderFollowAudio)"))
+    }
+
     // ============ Read along from a selection (issue #772) ============
 
     private val selectionController by lazy { source("com/booksync/ui/reader/ReaderSelectionController.kt") }
