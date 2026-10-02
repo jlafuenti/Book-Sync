@@ -16,6 +16,8 @@ operator must do by hand rather than read about afterwards.
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-10-02
+
 ### Added
 
 - Every sync map now records which version of the EPUB sentence splitter built it (#774), and an
@@ -26,6 +28,11 @@ operator must do by hand rather than read about afterwards.
   pairs that are queued for transcription, and never starts on its own. While it runs, the
   per-pair realign endpoint answers 409.
 - System page card to dry-run and rebuild outdated sync maps (issue #774).
+
+### Changed
+
+- Dependency updates from Dependabot: SQLAlchemy 2.1, Starlette 1.7 and PyJWT 2.15 on the
+  server; jsdom 30.1.1 and brace-expansion, both development-only, in the web app.
 
 ### Fixed
 
