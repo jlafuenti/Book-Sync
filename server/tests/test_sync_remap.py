@@ -804,3 +804,41 @@ async def test_origin_row_that_attested_a_map_is_still_remapped(db):
     await db.refresh(bookmark)
     assert bookmark.epub_sentence_index == 2
     assert bookmark.sync_map_version == sm.version
+
+
+async def test_remap_logs_a_chapter_move_without_any_text(db, caplog):
+    """A dry-run rebuild is read from the log: each position that would change
+    chapter is named there, by ids and coordinates only (issue #774)."""
+    moved = [
+        ("filler sentence one for chapter zero", 0, 0, 0),
+        ("pack my box with five dozen liquor jugs", 1, 4, 9_000),
+    ]
+    pair, bookmark = await _seed(
+        db, source=BookmarkSource.EBOOK,
+        epub_chapter=0, epub_sentence_index=1,
+        epub_text_preview="pack my box with five dozen liquor jugs",
+        audio_position_ms=5_000,
+    )
+
+    with caplog.at_level("INFO", logger="services.sync_engine"):
+        await _retranscribe(db, pair.id, points=moved)
+
+    lines = [r.getMessage() for r in caplog.records if "changes chapter" in r.getMessage()]
+    assert len(lines) == 1
+    assert f"bookmark {bookmark.id}" in lines[0]
+    assert "ch 0 -> 1" in lines[0]
+    assert "liquor" not in lines[0]
+
+
+async def test_remap_within_a_chapter_logs_no_chapter_move(db, caplog):
+    pair, _bookmark = await _seed(
+        db, source=BookmarkSource.EBOOK,
+        epub_chapter=0, epub_sentence_index=1,
+        epub_text_preview="pack my box with five dozen liquor jugs",
+        audio_position_ms=5_000,
+    )
+
+    with caplog.at_level("INFO", logger="services.sync_engine"):
+        await _retranscribe(db, pair.id)
+
+    assert not [r for r in caplog.records if "changes chapter" in r.getMessage()]
