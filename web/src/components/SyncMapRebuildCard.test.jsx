@@ -119,6 +119,9 @@ describe('starting a run', () => {
         render(<SyncMapRebuildCard />)
         fireEvent.click(await screen.findByRole('button', { name: 'Rebuild 3 sync maps' }))
         const dialog = await screen.findByRole('dialog')
+        // Issue #783: the panel comes from `.modal`; the old `modal-dialog` class was
+        // never defined, so the dialog drew as a bare strip across the page.
+        expect(dialog).toHaveClass('modal')
         expect(startMock).not.toHaveBeenCalled()
         expect(within(dialog).getByText(/Rebuild 3 sync maps\?/)).toBeInTheDocument()
         fireEvent.click(within(dialog).getByRole('button', { name: 'Rebuild' }))

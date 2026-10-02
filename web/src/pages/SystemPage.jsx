@@ -996,7 +996,7 @@ export function UnsupportedFilesTab({ canAdmin }) {
             )}
 
             {forceDeleteConfirm && (
-                <Modal onClose={() => setForceDeleteConfirm(null)} labelledBy="force-delete-title" className="modal-dialog">
+                <Modal onClose={() => setForceDeleteConfirm(null)} labelledBy="force-delete-title">
                         <h3 id="force-delete-title" style={{ marginTop: 0 }}>Confirm Force Delete</h3>
                         <p>
                             {forceDeleteConfirm === 'all'
