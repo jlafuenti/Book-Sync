@@ -79,6 +79,12 @@ class ReadAlongController(
 ) {
     enum class State { Off, Following, Paused }
 
+    /**
+     * Quote context for each sentence, indexed once per following session
+     * rather than per poll tick (issue #793).
+     */
+    val quotes = SentenceQuoteIndex(points)
+
     sealed interface Action {
         data class Decorate(val point: SyncPointEntity) : Action
         data class Jump(val point: SyncPointEntity) : Action
