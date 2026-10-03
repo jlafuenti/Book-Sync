@@ -42,6 +42,14 @@ operator must do by hand rather than read about afterwards.
 
 ### Fixed
 
+- Auto-match no longer lets a weaker ebook take an audiobook that belongs to a better one (#803).
+  It used to give each ebook only its single best-scoring audiobook: if the plausibility check
+  rejected that pair (audio far too short for the ebook's word count), the ebook got nothing and
+  its next candidate was never tried, so a later, weaker ebook, such as a short companion work,
+  could claim the audiobook that was meant for the full novel. A scan now scores every
+  ebook/audiobook combination and pairs them best score first, trying the next candidate when
+  one fails plausibility. A rejected audiobook stays free for another ebook. Pairs already made
+  are not touched, and each ebook is still parsed at most once per scan.
 - Transcription no longer drifts on audiobooks merged from many parts (#795). Such an m4b can
   hold frames whose timestamps overlap at the joins. The transcriber decoded each 15-minute
   chunk straight to raw samples, keeping every one, so a chunk came back seconds too long and
