@@ -88,6 +88,17 @@ operator must do by hand rather than read about afterwards.
   places: a sentence that only reached three words because of a stray space now counts as a
   short fragment and joins its neighbour, so a few chapters end up one or two sentences shorter
   and every later `sentence_index` in that chapter moves with them.
+- The sync-map drift audit and the plausibility word count now read inline text the way stored
+  sentences do (#810). They still used the older extraction, which broke a line at every tag, so
+  `<i>W</i>ord` read as "W" and "ord" there while the stored sentence says "Word". An audit
+  needle that crossed such a word could not be found in its own chapter, and the word was counted
+  twice. Both now share the sentence parser's rule: inline markup adds nothing, block elements
+  and `<br>` still separate. Word counts shift slightly for books with split words: about 0.2%
+  and 0.6% lower on two real books. Stored plausibility verdicts are not re-evaluated by this
+  change, only as Library verify already does when it re-checks a pair. Stored sentences,
+  `sentence_index` and sync maps are unchanged, so no rebuild is needed. The one-time chapter
+  re-basing in migration 0004 keeps the old extraction exactly, so a fresh install replays it
+  as before.
 
 ### Upgrade notes
 

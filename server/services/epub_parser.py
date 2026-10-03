@@ -40,9 +40,17 @@ class EpubSentence:
     chapter_title: str = ""  # Optional chapter title
 
 
-def _extract_text_from_html(html_content: str) -> str:
+def _legacy_extract_text_from_html(html_content: str) -> str:
     """
-    Extract readable text from HTML content, preserving paragraph breaks.
+    The pre-#799 text extraction: a line break at EVERY tag boundary, so
+    `<i>W</i>ord` reads `W` and `ord` on two lines.
+
+    **Do not change this, and do not route it through `_extract_blocks_from_html`.**
+    Only `old_chapter_to_spine_index` calls it, for Alembic migration 0004's
+    chapter re-basing. That migration already ran in production and a fresh
+    install replays it, so what it decides counts as "a document that produced
+    sentences" must stay exactly what it was. Everything else uses
+    `_extract_text_from_html` (issue #810).
     """
     soup = BeautifulSoup(html_content, "html.parser")
 
@@ -61,6 +69,20 @@ def _extract_text_from_html(html_content: str) -> str:
             lines.append(line)
 
     return "\n".join(lines)
+
+
+def _extract_text_from_html(html_content: str) -> str:
+    """
+    A document's readable text, one line per block, read the way the stored
+    sentences are (issue #810).
+
+    This is `_extract_blocks_from_html` joined with newlines, so inline element
+    boundaries add nothing (`<i>W</i>ord` is `Word`) while block elements and
+    `<br>` separate. The sync-map drift audit searches stored sentences in this
+    text and the plausibility word count counts it, so both must see the same
+    words the sentences do.
+    """
+    return "\n".join(_extract_blocks_from_html(html_content))
 
 
 _BLOCK_TAGS = frozenset({
@@ -137,8 +159,9 @@ def _extract_blocks_from_html(html_content: str) -> List[str]:
 def _split_into_sentences(text: str) -> List[str]:
     """Split text into sentences using NLTK.
 
-    Kept for Alembic migration 0004 and the sync-map audit; sentence building
-    uses `_extract_blocks_from_html` and `_split_block_into_sentences`.
+    Kept for Alembic migration 0004 (via `old_chapter_to_spine_index`, on the
+    legacy extraction); sentence building uses `_extract_blocks_from_html` and
+    `_split_block_into_sentences`.
     """
     # Lazily, not at import: this used to run at module scope and could
     # block the whole app lifespan on a slow CDN (issue #322).
@@ -193,8 +216,9 @@ def _build_sentences_from_documents(documents: List[str]) -> List[EpubSentence]:
     itemref, in spine order, with "" for anything unreadable. The list index
     IS the chapter number.
 
-    That alignment is the whole point: both readers position themselves by
-    spine index (epub.js `book.spine.items`, Readium `publication.readingOrder`),
+    That alignment is the whole point: the web reader positions itself by
+    spine index (epub.js `book.spine.items`), and Android translates to and from
+    it because Readium's `readingOrder` omits `linear="no"` items (issue #804),
     so a chapter number only means something to them if it is one. An earlier
     version incremented its own counter and skipped documents that produced no
     sentences, which silently shifted every chapter after the first blank page.
@@ -239,10 +263,13 @@ def old_chapter_to_spine_index(documents: List[str]) -> List[int]:
     Old chapter N was "the Nth document that produced sentences", so entry N of
     the returned list is that document's true spine index. Used by the
     migration to re-base stored sync points without re-running alignment.
+
+    Deliberately on `_legacy_extract_text_from_html`: this reproduces the old
+    numbering exactly as it was when the migration's data was written.
     """
     mapping: List[int] = []
     for spine_index, content in enumerate(documents):
-        text = _extract_text_from_html(content)
+        text = _legacy_extract_text_from_html(content)
         if not text.strip():
             continue
         if not _split_into_sentences(text):
