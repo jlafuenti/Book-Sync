@@ -62,10 +62,20 @@ from blanking a real position.
 > this stops the canonical record holding it, which is what the other devices
 > actually read.
 
-`epub_chapter` is the spine index because that is what `book.spine.items`
-(epub.js) and `publication.readingOrder` (Readium) both use. The parser emits it
-directly (`services/epub_parser.py`); it used to build its own ordinal by
-counting only documents that produced sentences, which matched neither reader.
+`epub_chapter` is the index into the **full OPF spine**: one slot per
+`<itemref>`, `linear="no"` ones included. That is what `book.spine.items`
+(epub.js) uses. The parser emits it directly (`services/epub_parser.py`); it
+used to build its own ordinal by counting only documents that produced
+sentences, which matched neither reader.
+
+Readium's `publication.readingOrder` is **not** the same axis: it leaves out
+`linear="no"` items (typically covers), so on such a book its index is lower
+by the number of them before the chapter. Android translates at the boundary
+with `ui/reader/SpineChapterMap.kt`, read from the EPUB's OPF (issue #804):
+every chapter it saves, sends as a match hint or reads from a sync point or a
+stored position is in spine numbering, and reading-order indexes never leave
+the reader. A stored chapter that names a non-linear item opens at the next
+linear one; read-along marks nothing for a sentence in one.
 
 **Hints** are precise but reader-specific, and live in `position_hints`, one row
 per `(bookmark, device, kind)`:

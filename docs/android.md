@@ -736,6 +736,14 @@ Before changing anything in the reader's save/restore path, read
 [docs/position-sync-contract.md](position-sync-contract.md); the failure mode (reopening at the
 wrong page) is silent.
 
+Two chapter numberings meet in the reader (issue #804). The server's `epub_chapter` counts every
+OPF spine item; Readium's `readingOrder` leaves out `linear="no"` ones. `SpineChapterMap` maps
+between them, and `ReaderActivity` applies it only where a chapter crosses to or from something
+server-shaped: `serverChapterOf(locator)` for saves, match hints and handoffs, and
+`chapterNumbering` for the restore ladder and the read-along locator. Inside the reader, indexes
+stay reading-order indexes (`readingOrderIndexOf`). A book that cannot be mapped gets the identity,
+which is the behaviour from before the map existed.
+
 Sync-matching logic is duplicated on server and Android on purpose and pinned by shared golden
 vectors in `server/tests/fixtures/sync_parity/`. Never change matcher behavior on one platform
 alone.
