@@ -2542,9 +2542,9 @@ class ReaderActivity : AppCompatActivity() {
     private fun onReadAlongDecorate(point: SyncPointEntity) {
         applyReadAlongDecoration(point)
         lifecycleScope.launch {
-            val preview = ReadAlongController.quoteFor(point.epubTextPreview) ?: return@launch
+            val quote = readAlong.quotes.quoteFor(point) ?: return@launch
             val visible = isSentenceVisible(
-                preview, "chapter ${point.epubChapter} sentence ${point.epubSentenceIndex}",
+                quote, "chapter ${point.epubChapter} sentence ${point.epubSentenceIndex}",
             )
             readAlong.onSentenceVisibility(point, visible, System.currentTimeMillis())
                 ?.let { jumpToSentence(it.point) }
@@ -2599,8 +2599,13 @@ class ReaderActivity : AppCompatActivity() {
     private fun sentenceLocator(point: SyncPointEntity): Locator? {
         val pub = publication ?: return null
         val link = pub.readingOrder.getOrNull(point.epubChapter) ?: return null
-        val preview = ReadAlongController.quoteFor(point.epubTextPreview) ?: return null
-        return pub.locatorFromLink(link)?.copy(text = Locator.Text(highlight = preview))
+        val quote = readAlong.quotes.quoteFor(point) ?: return null
+        // The neighbours disambiguate a line the chapter repeats: with the
+        // highlight alone Readium settles a tie on the first occurrence, so
+        // the mark (and the jump) landed on the wrong copy (issue #793).
+        return pub.locatorFromLink(link)?.copy(
+            text = Locator.Text(before = quote.before, highlight = quote.highlight, after = quote.after),
+        )
     }
 
     private fun jumpToSentence(point: SyncPointEntity) {
@@ -2623,45 +2628,11 @@ class ReaderActivity : AppCompatActivity() {
      * jump harmlessly. [where] names the sentence for the log; the text itself
      * is never logged.
      */
-    private suspend fun isSentenceVisible(preview: String, where: String = ""): Boolean {
+    private suspend fun isSentenceVisible(quote: SentenceQuote, where: String = ""): Boolean {
         val nav = navigator ?: return true
-        val js = """
-                (function(quote) {
-                    var want = quote.replace(/\s+/g, ' ').trim().substring(0, 60);
-                    if (!want) return 'missing';
-                    var walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null);
-                    var chars = [], owners = [], offsets = [], lastSpace = true, node;
-                    while ((node = walker.nextNode())) {
-                        var v = node.nodeValue;
-                        for (var i = 0; i < v.length; i++) {
-                            var ch = v.charAt(i);
-                            if (/\s/.test(ch)) {
-                                if (lastSpace) continue;
-                                ch = ' ';
-                                lastSpace = true;
-                            } else {
-                                lastSpace = false;
-                            }
-                            chars.push(ch);
-                            owners.push(node);
-                            offsets.push(i);
-                        }
-                    }
-                    var at = chars.join('').indexOf(want);
-                    if (at < 0) return 'missing';
-                    var last = at + want.length - 1;
-                    var range = document.createRange();
-                    range.setStart(owners[at], offsets[at]);
-                    range.setEnd(owners[last], offsets[last] + 1);
-                    var rects = range.getClientRects();
-                    var vpW = window.innerWidth;
-                    for (var r = 0; r < rects.length; r++) {
-                        // The current column's fragments sit in [0, vpW).
-                        if (rects[r].width > 0 && rects[r].left >= -1 && rects[r].left < vpW) return 'visible';
-                    }
-                    return 'hidden';
-                })(${org.json.JSONObject.quote(preview)})
-            """.trimIndent()
+        // Picks among repeated copies by their surroundings, like the locator
+        // does (issue #793); the script is in SentenceQuote.kt.
+        val js = sentenceVisibilityScript(quote.highlight, quote.before, quote.after)
         val answer = nav.evaluateJavascript(js).orEmpty()
         if (answer.contains("missing")) Log.w(TAG, "read-along: sentence not found in page ($where)")
         return answer.contains("visible")
@@ -2681,7 +2652,7 @@ class ReaderActivity : AppCompatActivity() {
         suspectVerifyJob = lifecycleScope.launch {
             delay(READ_ALONG_SETTLE_MS)
             val point = readAlong.currentPoint ?: return@launch
-            val quote = ReadAlongController.quoteFor(point.epubTextPreview) ?: return@launch
+            val quote = readAlong.quotes.quoteFor(point) ?: return@launch
             val visible = isSentenceVisible(
                 quote, "chapter ${point.epubChapter} sentence ${point.epubSentenceIndex}",
             )

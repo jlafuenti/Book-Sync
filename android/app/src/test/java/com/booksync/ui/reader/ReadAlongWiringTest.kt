@@ -99,11 +99,24 @@ class ReadAlongWiringTest {
     }
 
     @Test
-    fun `the page is asked for the preview's first line only`() {
+    fun `the locator, the decoration and the visibility probe all quote the sentence with its neighbours`() {
+        // Issue #793: a bare highlight resolves a repeated line to its first
+        // occurrence; the before/after context is what tells the copies apart.
         val locator = activity.substringAfter("private fun sentenceLocator(").substringBefore("\n    }")
-        assertTrue(locator.contains("ReadAlongController.quoteFor(point.epubTextPreview)"))
+        assertTrue(locator.contains("readAlong.quotes.quoteFor(point)"))
+        assertTrue(locator.contains("Locator.Text(before = quote.before, highlight = quote.highlight, after = quote.after)"))
         val decorate = activity.substringAfter("private fun onReadAlongDecorate(").substringBefore("\n    }")
-        assertTrue(decorate.contains("ReadAlongController.quoteFor(point.epubTextPreview)"))
+        assertTrue(decorate.contains("readAlong.quotes.quoteFor(point)"))
+        val verify = activity.substringAfter("private fun verifySuspectedTurn()").substringBefore("\n    }")
+        assertTrue(verify.contains("readAlong.quotes.quoteFor(point)"))
+        val probe = activity.substringAfter("private suspend fun isSentenceVisible(").substringBefore("\n    }")
+        assertTrue(probe.contains("sentenceVisibilityScript(quote.highlight, quote.before, quote.after)"))
+    }
+
+    @Test
+    fun `the quote index is built once per controller, not per tick`() {
+        val controller = source("com/booksync/ui/reader/ReadAlongController.kt")
+        assertTrue(controller.contains("val quotes = SentenceQuoteIndex(points)"))
     }
 
     @Test
