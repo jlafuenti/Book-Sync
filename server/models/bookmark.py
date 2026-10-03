@@ -69,8 +69,11 @@ class Bookmark(Base):
         Enum(BookmarkSource), nullable=False, default=BookmarkSource.EBOOK
     )
 
-    # EBook position. epub_chapter is the EPUB **spine index** — the same axis
-    # both readers use (epub.js `book.spine.items`, Readium `readingOrder`).
+    # EBook position. epub_chapter is the EPUB **spine index**: one slot per OPF
+    # `<itemref>`, `linear="no"` ones included — epub.js `book.spine.items`. Readium's
+    # `readingOrder` is NOT the same axis (it leaves out `linear="no"` items), so
+    # Android translates at the boundary (issue #804,
+    # docs/position-sync-contract.md).
     epub_chapter: Mapped[int] = mapped_column(Integer, nullable=True)
     epub_sentence_index: Mapped[int] = mapped_column(Integer, nullable=True)
 

@@ -17,7 +17,7 @@ from services import epub_parser
 from services.epub_parser import (
     _build_sentences_from_documents,
     _extract_blocks_from_html,
-    _extract_text_from_html,
+    _legacy_extract_text_from_html,
     _split_block_into_sentences,
     _split_into_sentences,
 )
@@ -310,7 +310,7 @@ def test_normalised_text_matches_the_legacy_extraction():
     )
 
     new = [s.text for s in _build_sentences_from_documents([doc])]
-    old = _split_into_sentences(_extract_text_from_html(doc))
+    old = _split_into_sentences(_legacy_extract_text_from_html(doc))
 
     assert normalize_for_search(" ".join(new)) == normalize_for_search(" ".join(old))
 
