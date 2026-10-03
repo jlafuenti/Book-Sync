@@ -210,7 +210,7 @@ class ReadAlongWiringTest {
         val body = activity.substringAfter("private fun readAlongFromSelection(").substringBefore("\n    }")
         assertTrue(body.contains("navigator?.currentSelection()"))
         assertTrue(body.contains("selectionTooShortToSync(selectedText)"))
-        assertTrue(body.contains("repository.epubToAudioText(pairId, chapterIndex, selectedText, rewindMs = 0)"))
+        assertTrue(body.contains("repository.epubToAudioText(pairId, serverChapter, selectedText, rewindMs = 0)"))
         assertTrue("no match keeps the existing toast", body.contains("No matching audio found"))
         assertTrue("a match goes through the readiness gate", body.contains("requestFollowing(FollowStart.AudioMs(audioMs))"))
         assertTrue(
@@ -268,7 +268,7 @@ class ReadAlongWiringTest {
         assertTrue(
             "epubToAudioText subtracts RESUME_REWIND_MS by default and the player's resume " +
                 "rewind would take another 5s off the same start",
-            start.contains("repository.epubToAudioText(pairId, chapterIndex, visible.text, rewindMs = 0)"),
+            start.contains("repository.epubToAudioText(pairId, serverChapter, visible.text, rewindMs = 0)"),
         )
     }
 
