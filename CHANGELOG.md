@@ -27,8 +27,11 @@ operator must do by hand rather than read about afterwards.
   highlight running ahead of the narrator. The check samples five 150-second windows per book,
   finds the pauses with ffmpeg, and measures the time shift that puts the transcript's sentence
   boundaries into them. Healthy books measure within about half a second of zero; a book is
-  flagged when at least three windows are 1.5 s or more out in the same direction. It adds a
-  few seconds per transcribed book to a verify run.
+  flagged when at least three windows are 1.5 s or more out in the same direction. Loudly
+  mastered recordings, whose gaps never drop below -35 dB, are retried at -30 dB and then
+  -25 dB. A book the check cannot judge (not enough speech, or too short) is not reported, and is
+  tried again on the next run rather than cached. It adds a few seconds per transcribed book to
+  a verify run.
 
 ### Fixed
 

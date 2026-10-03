@@ -60,7 +60,7 @@ def _sentences_json(starts, offset_s):
 def _detector(pauses):
     """A stand-in for the ffmpeg call: the pauses inside [start, start+length),
     relative to `start`, as `silencedetect` reports them for an input seek."""
-    def detect(path, start_s, length_s):
+    def detect(path, start_s, length_s, noise_db=tt.SILENCE_NOISE_DB):
         return [
             (a - start_s, b - start_s)
             for a, b in pauses
@@ -194,6 +194,25 @@ def test_a_book_too_short_to_sample_cannot_be_judged():
         "/fake.m4b", _sentences_json(starts, 4.9), 60, detect=_detector(pauses),
     )
     assert verdict.ok is None
+
+
+def test_a_loud_recording_is_judged_at_a_looser_noise_floor():
+    """Loudly mastered audio can keep its gaps between sentences above
+    -35 dB (seen on real books: no pauses at -35 dB, dozens at -30 dB).
+    A window that finds too few pauses retries at the looser floors."""
+    starts, pauses = _speech(17, DURATION_S)
+    inner = _detector(pauses)
+    floors = []
+
+    def detect(path, start_s, length_s, noise_db=tt.SILENCE_NOISE_DB):
+        floors.append(noise_db)
+        return inner(path, start_s, length_s) if noise_db >= -30 else []
+
+    verdict = tt.check_transcript_timing(
+        "/fake.m4b", _sentences_json(starts, 4.9), DURATION_S, detect=detect,
+    )
+    assert verdict.ok is False
+    assert -30 in floors and -35 in floors
 
 
 def test_windows_with_no_pauses_cannot_be_judged():

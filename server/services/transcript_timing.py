@@ -34,6 +34,10 @@ logger = logging.getLogger(__name__)
 
 CHECK_TYPE = "transcript_timing"
 
+#: How a passing verdict's detail starts. A stored row that passes without it
+#: is a "cannot judge", which Library verify retries rather than caches.
+IN_STEP_DETAIL_PREFIX = "In step"
+
 #: Length of each sampled window, and where in the book they sit. Five
 #: windows of 150 s each read about 12 minutes of audio per book, through an
 #: input seek, so even a 30-hour book costs a few seconds.
@@ -56,6 +60,13 @@ PAUSE_SLACK_SECONDS = 0.1
 #: inside words.
 SILENCE_NOISE_DB = -35
 SILENCE_MIN_SECONDS = 0.2
+
+#: Looser floors tried, in order, when a window finds too few pauses at
+#: `SILENCE_NOISE_DB`. Loudly mastered audio can keep the gap between
+#: sentences above -35 dB: seen on real books as no pauses at all at -35 dB
+#: and dozens at -30 dB. A window that already has enough pauses never
+#: retries, so books judged at -35 dB are judged exactly as before.
+SILENCE_FALLBACK_NOISE_DB = (-30, -25)
 
 #: A window needs at least this many transcript boundaries and pauses to say
 #: anything; fewer (music, a long silence, the closing credits) is skipped.
@@ -174,7 +185,9 @@ def window_starts(duration_s: float) -> List[int]:
     return [int(duration_s * f) for f in WINDOW_FRACTIONS]
 
 
-def detect_pauses(audio_path: str, start_s: float, length_s: float) -> List[Tuple[float, float]]:
+def detect_pauses(
+    audio_path: str, start_s: float, length_s: float, noise_db: float = SILENCE_NOISE_DB,
+) -> List[Tuple[float, float]]:
     """Pauses in [start_s, start_s + length_s) of `audio_path`, relative to
     `start_s`. An input seek (`-ss` before `-i`): measured on real books it
     lands within 0.1 s of a full decode from the start, at a tiny fraction of
@@ -183,7 +196,7 @@ def detect_pauses(audio_path: str, start_s: float, length_s: float) -> List[Tupl
         "ffmpeg", "-nostdin", "-hide_banner", "-nostats",
         "-ss", f"{start_s:.3f}", "-t", f"{length_s:.3f}", "-i", audio_path,
         "-vn", "-af",
-        f"silencedetect=noise={SILENCE_NOISE_DB}dB:d={SILENCE_MIN_SECONDS}",
+        f"silencedetect=noise={noise_db}dB:d={SILENCE_MIN_SECONDS}",
         "-f", "null", "-",
     ]
     try:
@@ -208,7 +221,7 @@ def check_transcript_timing(
     sentences_json: str,
     duration_s: Optional[float],
     *,
-    detect: Callable[[str, float, float], List[Tuple[float, float]]] = detect_pauses,
+    detect: Callable[..., List[Tuple[float, float]]] = detect_pauses,
 ) -> TimingVerdict:
     """Sample the book and decide whether its transcript is in step with
     `audio_path`. Blocking; see the module docstring."""
@@ -222,7 +235,11 @@ def check_transcript_timing(
     usable: List[OffsetEstimate] = []
     for w in window_starts(duration_s):
         bounds = [s - w for s in starts if w <= s < w + WINDOW_SECONDS]
-        pauses = detect(audio_path, w, WINDOW_SECONDS)
+        pauses = detect(audio_path, w, WINDOW_SECONDS, SILENCE_NOISE_DB)
+        for floor in SILENCE_FALLBACK_NOISE_DB:
+            if len(bounds) < MIN_BOUNDARIES_PER_WINDOW or len(pauses) >= MIN_PAUSES_PER_WINDOW:
+                break
+            pauses = detect(audio_path, w, WINDOW_SECONDS, floor)
         if len(bounds) < MIN_BOUNDARIES_PER_WINDOW or len(pauses) < MIN_PAUSES_PER_WINDOW:
             windows.append({"at_s": w, "boundaries": len(bounds), "pauses": len(pauses)})
             continue
@@ -244,7 +261,7 @@ def check_transcript_timing(
     median = shifts[len(shifts) // 2]
 
     if len(drifted) < MIN_DRIFTED_WINDOWS:
-        return TimingVerdict(True, f"In step (median shift {median:+.1f} s)", median, windows)
+        return TimingVerdict(True, f"{IN_STEP_DETAIL_PREFIX} (median shift {median:+.1f} s)", median, windows)
 
     typical = sorted(drifted)[len(drifted) // 2]
     direction = "early" if typical > 0 else "late"

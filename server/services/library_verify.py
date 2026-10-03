@@ -47,6 +47,7 @@ from services.pair_plausibility import (
 )
 from services.transcript_timing import (
     CHECK_TYPE as TRANSCRIPT_TIMING_CHECK_TYPE,
+    IN_STEP_DETAIL_PREFIX,
     check_transcript_timing,
 )
 from utils import utcnow
@@ -248,8 +249,9 @@ async def _check_transcript_timings() -> None:
     and a transcript newer than the verdict. Re-transcribing a flagged pair
     is the fix, and it leaves the file alone.
 
-    "Cannot judge" is stored as passing with its reason, so it is cached like
-    any other result but never reported as a problem.
+    "Cannot judge" is stored as passing with its reason, so it is never
+    reported as a problem, and is not cached: it is a gap in the check rather
+    than a fact about the book, so every run tries again (a few seconds each).
     """
     async with async_session() as db:
         targets = (await db.execute(
@@ -269,6 +271,9 @@ async def _check_transcript_timings() -> None:
         if size:
             cached = await _cached_ok("pair", pair_id, TRANSCRIPT_TIMING_CHECK_TYPE,
                                       size, mtime, not_before=transcribed_at)
+            if cached is not None and cached[0] and not (cached[1] or "").startswith(
+                    IN_STEP_DETAIL_PREFIX):
+                cached = None  # a stored "cannot judge" is retried, never trusted
             if cached is None:
                 async with async_session() as db:
                     sentences_json = (await db.execute(

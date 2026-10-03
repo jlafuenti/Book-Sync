@@ -99,6 +99,21 @@ async def test_cannot_judge_is_not_reported_as_a_problem(db, tmp_path, monkeypat
     assert "Not enough speech" in row.detail
 
 
+async def test_cannot_judge_is_retried_on_the_next_run(db, tmp_path, monkeypatch):
+    """"Cannot judge" is a gap in the check, not a fact about the book: a
+    later verify, perhaps with a better check, must try again rather than
+    trust a cached shrug."""
+    await _pair_with_transcript(db, tmp_path)
+    calls = []
+    monkeypatch.setattr(library_verify, "check_transcript_timing",
+                        _fake_check(TimingVerdict(None, "Not enough speech"), calls))
+
+    await library_verify._check_transcript_timings()
+    await library_verify._check_transcript_timings()
+
+    assert len(calls) == 2
+
+
 async def test_a_pair_without_a_transcript_is_skipped(db, tmp_path, monkeypatch):
     pair, _ = await _pair_with_transcript(db, tmp_path, transcript=False)
     calls = []
