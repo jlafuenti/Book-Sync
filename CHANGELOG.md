@@ -68,8 +68,8 @@ operator must do by hand rather than read about afterwards.
   of a longer sentence stayed unmarked; about 2% of sentences are that long, and every book has
   some. Sync points now store the whole sentence, which the Transcription Editor also shows in
   full. Matching and saved positions are unchanged in method; they now see the whole sentence
-  too. The cost is the extra text in each sync-map download: only the part of long sentences
-  past 200 characters.
+  too. The cost is the extra text in each sync-map download, only the part of long sentences
+  past 200 characters: measured on two rebuilt books, +2.1% and +2.4% raw, +3.8% gzipped.
 
 ### Upgrade notes
 
