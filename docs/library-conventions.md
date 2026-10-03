@@ -132,7 +132,10 @@ These rules only decide which **new** pairs a scan creates. `auto_match_books` l
 are not already in `book_pairs` and never deletes one, so tightening them cannot unpair anything
 that already exists; use the Pairs page to correct an old pair.
 
-Each ebook takes its single best-scoring audiobook, and each audiobook is claimed at most once.
+Pairs are assigned globally, best score first, and each ebook and each audiobook is used at most
+once per scan. A pair that fails the plausibility check (audio far too short or too long for the
+ebook's word count) is skipped and leaves both books free, so the ebook falls through to its next
+candidate and the audiobook can still go to a different ebook.
 Pairs created this way get status `AUTO_MATCHED` — review them; the scanner is deliberately
 conservative but not infallible. Anything it won't touch shows up on the Unpaired page for manual
 pairing.

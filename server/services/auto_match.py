@@ -42,7 +42,8 @@ logger = logging.getLogger(__name__)
 # novella), a missing author on either side raises the title bar instead of
 # silently skipping the author gate, the unpair exclusion is keyed by row id as
 # well as file hash, and an empty normalized title never pairs. Greedy
-# scan-order assignment was reviewed and deliberately kept.
+# scan-order assignment was kept then, and replaced in issue #803 by a global
+# best-pair-first assignment (see `auto_match_books`).
 # ---------------------------------------------------------------------------
 
 # A title similarity at or above this wins the pairing when nothing rejects it.
@@ -251,9 +252,12 @@ async def auto_match_books(db: AsyncSession) -> int:
     Uses fuzzy string matching on the extracted titles (`_score_candidate`).
     Returns the number of new pairs created.
 
-    Assignment is greedy in scan order: the first ebook to claim an audiobook
-    keeps it, and `matched_audiobook_ids` stops a second ebook taking it in the
-    same run.
+    Assignment is global, best pair first (issue #803): every viable
+    (ebook, audiobook) combination is scored, the list is walked from the
+    highest score down, and a pair is made when neither side is already taken in
+    this run and `check_pair_plausibility` accepts it. A rejected pair leaves
+    both sides free, so the ebook falls through to its next-best candidate and
+    the audiobook stays available to others.
     """
     # Check if auto-transcribe is enabled
     result = await db.execute(select(SystemSetting).where(SystemSetting.key == "auto_transcribe_enabled"))
@@ -276,79 +280,88 @@ async def auto_match_books(db: AsyncSession) -> int:
     )
     unpaired_audiobooks = result.scalars().all()
 
+    # Score every unpaired (ebook, audiobook) combination up front, then assign
+    # globally, best pair first (issue #803). Doing it per ebook, in scan order,
+    # let one ebook's top candidate fail plausibility and leave the ebook with
+    # nothing, while a weaker ebook later in the scan claimed the audiobook the
+    # first one should have had. Highest score first, with ties broken by ebook
+    # id then audiobook id, so the result never depends on query order.
+    candidates = []
+    for ebook in unpaired_ebooks:
+        for audiobook in unpaired_audiobooks:
+            score = _score_candidate(ebook, audiobook)
+            if score is not None:
+                candidates.append((score, ebook, audiobook))
+    candidates.sort(key=lambda c: (-c[0], c[1].id, c[2].id))
+
     matched = 0
+    matched_ebook_ids = set()
     matched_audiobook_ids = set()
     new_pair_ids = []
+    # `estimate_word_count` is an EPUB parse. Cached per ebook, so an ebook
+    # whose several candidates all reach the plausibility check is still parsed
+    # once, and an ebook none of whose candidates gets that far is never parsed.
+    word_counts = {}
 
-    for ebook in unpaired_ebooks:
-        best_match = None
-        best_score = 0
+    for _score, ebook, audiobook in candidates:
+        if ebook.id in matched_ebook_ids or audiobook.id in matched_audiobook_ids:
+            continue
 
-        for audiobook in unpaired_audiobooks:
-            if audiobook.id in matched_audiobook_ids:
-                continue
-
-            score = _score_candidate(ebook, audiobook)
-            if score is None:
-                continue
-
-            if score > best_score:
-                best_score = score
-                best_match = audiobook
-
-        if best_match:
-            # Issue #458/#620: is this pairing plausible at all, *before*
-            # creating it? This matters more for the auto-matcher than for the
-            # manual-pair endpoint: a truncated download or an abridgement
-            # paired with the wrong (full-length) ebook is usually
-            # auto-matched, not hand-paired, and if the pair is created it
-            # reaches `synced` — and, with auto-transcribe on, the
-            # transcription queue — before anything has asked whether the
-            # pairing made sense. `word_count` is only computed here, once per
-            # *winning* candidate (never per comparison in the scoring loop
-            # above, and only when `duration_seconds` is known — the check
-            # can't judge without it either way), which keeps the parse cost
-            # bounded to at most one EPUB per new pair a scan actually makes,
-            # not O(candidates²).
-            word_count = None
-            if best_match.duration_seconds:
-                word_count = await estimate_word_count(ebook.file_path)
-            ok, detail = check_pair_plausibility(
-                ebook_file_size=ebook.file_size,
-                duration_seconds=best_match.duration_seconds,
-                is_abridged=best_match.is_abridged,
-                word_count=word_count,
+        # Issue #458/#620: is this pairing plausible at all, *before*
+        # creating it? This matters more for the auto-matcher than for the
+        # manual-pair endpoint: a truncated download or an abridgement
+        # paired with the wrong (full-length) ebook is usually
+        # auto-matched, not hand-paired, and if the pair is created it
+        # reaches `synced` — and, with auto-transcribe on, the
+        # transcription queue — before anything has asked whether the
+        # pairing made sense. `word_count` is only computed for an ebook that
+        # actually reaches this check, once per ebook (`word_counts` above),
+        # never per comparison in the scoring loop, and only when
+        # `duration_seconds` is known — the check can't judge without it
+        # either way. That bounds the parse cost to at most one EPUB per
+        # ebook a scan considers, not O(candidates²).
+        word_count = None
+        if audiobook.duration_seconds:
+            if ebook.id not in word_counts:
+                word_counts[ebook.id] = await estimate_word_count(ebook.file_path)
+            word_count = word_counts[ebook.id]
+        ok, detail = check_pair_plausibility(
+            ebook_file_size=ebook.file_size,
+            duration_seconds=audiobook.duration_seconds,
+            is_abridged=audiobook.is_abridged,
+            word_count=word_count,
+        )
+        if not ok:
+            logger.warning(
+                "Skipping auto-match of ebook %s / audiobook %s: %s",
+                ebook.id, audiobook.id, detail,
             )
-            if not ok:
-                logger.warning(
-                    "Skipping auto-match of ebook %s / audiobook %s: %s",
-                    ebook.id, best_match.id, detail,
-                )
-                # Deliberately not added to `matched_audiobook_ids`: a
-                # different ebook may still be a plausible match for this
-                # audiobook, and nothing else has claimed it.
-                continue
+            # Neither side is marked taken: the audiobook stays available to a
+            # different ebook, and this ebook moves on to its next candidate
+            # (issue #803).
+            continue
 
-            pair = BookPair(
-                ebook_id=ebook.id,
-                audiobook_id=best_match.id,
-                status=PairStatus.AUTO_MATCHED,
-                matched_at=utcnow(),
-            )
-            db.add(pair)
-            matched_audiobook_ids.add(best_match.id)
-            matched += 1
-            await db.flush() # Flush to get the ID
-            new_pair_ids.append(pair.id)
-            # Records the same verdict just computed above as the persisted
-            # Troubleshoot Library finding — recomputed from `pair`/`ebook`/
-            # `best_match` rather than reusing `(ok, detail)` directly, since
-            # this is also every *other* call site's contract (manual pairing
-            # in routers/library.py) and re-running the same pure check here
-            # costs nothing (`word_count` itself, the only expensive part, was
-            # already computed once above and is passed through, not
-            # recomputed).
-            await record_pair_plausibility(db, pair, ebook, best_match, word_count=word_count)
+        pair = BookPair(
+            ebook_id=ebook.id,
+            audiobook_id=audiobook.id,
+            status=PairStatus.AUTO_MATCHED,
+            matched_at=utcnow(),
+        )
+        db.add(pair)
+        matched_ebook_ids.add(ebook.id)
+        matched_audiobook_ids.add(audiobook.id)
+        matched += 1
+        await db.flush() # Flush to get the ID
+        new_pair_ids.append(pair.id)
+        # Records the same verdict just computed above as the persisted
+        # Troubleshoot Library finding — recomputed from `pair`/`ebook`/
+        # `audiobook` rather than reusing `(ok, detail)` directly, since
+        # this is also every *other* call site's contract (manual pairing
+        # in routers/library.py) and re-running the same pure check here
+        # costs nothing (`word_count` itself, the only expensive part, was
+        # already computed once above and is passed through, not
+        # recomputed).
+        await record_pair_plausibility(db, pair, ebook, audiobook, word_count=word_count)
 
     if auto_transcribe and new_pair_ids:
         from services.queue_manager import add_to_queue
