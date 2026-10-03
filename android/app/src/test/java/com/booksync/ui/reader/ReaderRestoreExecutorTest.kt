@@ -46,9 +46,12 @@ class ReaderRestoreExecutorTest {
     private class FakeSpine(
         val chapters: List<String?>,
         private val lengths: LongArray? = null,
+        private val chapterMap: SpineChapterMap? = null,
     ) : SpineSource {
         val reads = mutableListOf<Int>()
         override val spineCount: Int get() = chapters.size
+        override val chapterNumbering: SpineChapterMap
+            get() = chapterMap ?: super.chapterNumbering
         override suspend fun plainTextAt(index: Int): String? {
             reads += index
             return chapters.getOrNull(index)
@@ -581,6 +584,81 @@ class ReaderRestoreExecutorTest {
 
         assertEquals(2, plan.size)
         assertEquals(RestoreStep.Audio(16_355_289), plan.first())
+    }
+
+    // ------------------------------------- non-linear spine items (issue #804)
+
+    /**
+     * A book whose OPF spine opens with two `linear="no"` covers: server
+     * chapter `c` is reading-order item `c - 2`. Every chapter a rung carries
+     * is in the server's numbering; the spine the executor searches is
+     * Readium's reading order.
+     */
+    private fun twoLeadingCovers(readingOrder: Int): SpineChapterMap {
+        val spine = listOf(SpineItem("cover.xhtml", false), SpineItem("title.xhtml", false)) +
+            (0 until readingOrder).map { SpineItem("c$it.xhtml", true) }
+        return SpineChapterMap.build(spine, (0 until readingOrder).map { "c$it.xhtml" })!!
+    }
+
+    private fun coveredSpineOf(count: Int, planted: Map<Int, String> = emptyMap()): FakeSpine {
+        val plain = spineOf(count, planted)
+        return FakeSpine(plain.chapters, chapterMap = twoLeadingCovers(count))
+    }
+
+    @Test
+    fun `chapter rung reads the stored chapter in the server's numbering`() = runTest {
+        val executor = ReaderRestoreExecutor(coveredSpineOf(6))
+
+        assertEquals(RestoreTarget.Spine(0, null), executor.executeStep(RestoreStep.Chapter(2)))
+        assertEquals(RestoreTarget.Spine(5, null), executor.executeStep(RestoreStep.Chapter(7)))
+        assertNull("past the end of the full spine", executor.executeStep(RestoreStep.Chapter(8)))
+    }
+
+    @Test
+    fun `a stored chapter on a non-linear item opens at the next linear one`() = runTest {
+        val executor = ReaderRestoreExecutor(coveredSpineOf(6))
+
+        assertEquals(RestoreTarget.Spine(0, null), executor.executeStep(RestoreStep.Chapter(0)))
+        assertEquals(RestoreTarget.Spine(0, null), executor.executeStep(RestoreStep.Chapter(1)))
+    }
+
+    @Test
+    fun `text rung seeds its search with the server chapter's reading-order item`() = runTest {
+        val sentence = "a sentence planted in two chapters of this book"
+        // Planted in reading-order items 5 and 8. Server chapter 7 is item 5;
+        // read unmapped, the seed would be item 7 and the search would land on
+        // item 8, one step away, instead.
+        val spine = coveredSpineOf(10, mapOf(5 to sentence, 8 to sentence))
+        val executor = ReaderRestoreExecutor(spine)
+
+        val target = executor.executeStep(RestoreStep.Text(sentence, seedChapter = 7)) as RestoreTarget.Spine
+
+        assertEquals(5, target.index)
+        assertEquals("the seed item is read first", 5, spine.reads.first())
+    }
+
+    @Test
+    fun `audio rung maps the sync map's chapter before searching and before falling back`() = runTest {
+        val sentence = "the sentence the sync map names for this second"
+        val spine = coveredSpineOf(10, mapOf(4 to sentence))
+        val executor = ReaderRestoreExecutor(spine, audio = AudioAnchorSource { 6 to sentence })
+
+        val target = executor.executeStep(RestoreStep.Audio(1_000)) as RestoreTarget.Spine
+        assertEquals(4, target.index)
+        assertEquals("searched from the mapped chapter", 4, spine.reads.first())
+
+        val missing = ReaderRestoreExecutor(
+            coveredSpineOf(10),
+            audio = AudioAnchorSource { 6 to "text the book does not contain anywhere" },
+        )
+        assertEquals(RestoreTarget.Spine(4, 0.0, 1_000), missing.executeStep(RestoreStep.Audio(1_000)))
+    }
+
+    @Test
+    fun `without a chapter map the numbering is the reading order, as before`() = runTest {
+        val spine = spineOf(4)
+        assertTrue(spine.chapterNumbering.isIdentity)
+        assertEquals(4, spine.chapterNumbering.spineSize)
     }
 
     // ---------------------------------------------------------------- errors

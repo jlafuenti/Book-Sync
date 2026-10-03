@@ -25,6 +25,19 @@ internal fun spineIndexForHref(readingOrderHrefs: List<String>, locatorHref: Str
 }
 
 /**
+ * The server's chapter number (`epub_chapter`, an index into the full OPF
+ * spine) for the reading-order item [locatorHref] refers to (issue #804).
+ *
+ * A locator that matches no reading-order item is read as the first one, as
+ * the reader always has — expressed in server numbering, so a book whose
+ * spine opens with non-linear covers reports the chapter after them, not 0.
+ */
+internal fun serverChapterForHref(map: SpineChapterMap, readingOrderHrefs: List<String>, locatorHref: String): Int {
+    val readingOrderIndex = spineIndexForHref(readingOrderHrefs, locatorHref).coerceAtLeast(0)
+    return map.spineIndexOf(readingOrderIndex) ?: readingOrderIndex
+}
+
+/**
  * Book-level reading progress as a percentage (0-100) for `UserProgress`.
  *
  * The web reader sends 0-100 (epub.js `percentage * 100`) while Readium's

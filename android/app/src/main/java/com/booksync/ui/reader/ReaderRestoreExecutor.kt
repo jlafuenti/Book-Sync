@@ -51,6 +51,15 @@ interface SpineSource {
     val spineCount: Int
 
     /**
+     * How the server numbers this book's chapters (issue #804). Every chapter
+     * a [RestoreStep] or the [AudioAnchorSource] carries is a server chapter —
+     * an index into the full OPF spine — while [spineCount] and [plainTextAt]
+     * are in reading-order indexes, which leave out `linear="no"` items. The
+     * default is the identity, the numbering before this existed.
+     */
+    val chapterNumbering: SpineChapterMap get() = SpineChapterMap.identity(spineCount)
+
+    /**
      * Plain text of spine item [index], or null when it is out of range or
      * could not be parsed. Called repeatedly during a text search, so the
      * implementation should cache.
@@ -175,14 +184,16 @@ class ReaderRestoreExecutor(
             if (hintDecodes(step.value)) RestoreTarget.Hint(step.value) else null
 
         is RestoreStep.Text -> {
-            val idx = findSpineIndexForText(step.text, step.seedChapter ?: 0)
+            // An unmappable seed searches from the middle, as an out-of-range one always has.
+            val seed = step.seedChapter?.let { readingOrderFor(it) ?: -1 } ?: 0
+            val idx = findSpineIndexForText(step.text, seed)
             if (idx != null && idx in 0 until spine.spineCount) {
                 RestoreTarget.Spine(idx, findTextProgressionInChapter(idx, step.text) ?: 0.0)
             } else null
         }
 
         is RestoreStep.Chapter ->
-            if (step.chapter in 0 until spine.spineCount) RestoreTarget.Spine(step.chapter, null) else null
+            readingOrderFor(step.chapter)?.let { RestoreTarget.Spine(it, null) }
 
         is RestoreStep.Percent -> targetForProgress(step.percent / 100.0)
 
@@ -195,8 +206,8 @@ class ReaderRestoreExecutor(
             if (source == null) null else {
                 // Audio -> sync map -> preview -> the same text search as above.
                 val (syncChapter, previewText) = source.audioToEpubText(step.audioPositionMs)
-                val idx = findSpineIndexForText(previewText, syncChapter)
-                    ?: syncChapter.takeIf { it in 0 until spine.spineCount }
+                val seed = readingOrderFor(syncChapter)
+                val idx = findSpineIndexForText(previewText, seed ?: -1) ?: seed
                 if (idx != null && idx in 0 until spine.spineCount && previewText.isNotEmpty()) {
                     RestoreTarget.Spine(
                         idx,
@@ -207,6 +218,15 @@ class ReaderRestoreExecutor(
             }
         }
     }
+
+    /**
+     * The reading-order item to open for server chapter [chapter]: the item
+     * itself, or for a non-linear one the next linear item
+     * ([SpineChapterMap.nearestReadingOrderIndex]). Null when the chapter is
+     * past either end of the book or names nothing this reader can show.
+     */
+    private fun readingOrderFor(chapter: Int): Int? =
+        spine.chapterNumbering.nearestReadingOrderIndex(chapter)?.takeIf { it in 0 until spine.spineCount }
 
     /**
      * Which spine index contains [previewText]. Searches outward from

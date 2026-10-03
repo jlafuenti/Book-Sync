@@ -191,6 +191,17 @@ class ReaderActivity : AppCompatActivity() {
     @Inject lateinit var tourRegistry: TourAnchorRegistry
 
     private var publication: Publication? = null
+
+    /**
+     * Server chapter numbering for the open book (issue #804): the server and
+     * the web count every OPF spine item, Readium's `readingOrder` leaves out
+     * `linear="no"` ones. Read from the EPUB once it is open; until then, or
+     * for a book that cannot be mapped, the identity. Used only where a chapter
+     * crosses to or from something server-shaped — see [serverChapterOf].
+     */
+    private var chapterMap: SpineChapterMap? = null
+    private val chapterNumbering: SpineChapterMap
+        get() = chapterMap ?: SpineChapterMap.identity(publication?.readingOrder?.size ?: 0)
     private var navigator: EpubNavigatorFragment? = null
     private var pair: BookPairEntity? = null
     private var pairId: Int = 0
@@ -226,7 +237,7 @@ class ReaderActivity : AppCompatActivity() {
     private var tourNavJob: Job? = null
     private var isBarVisible = false
     private var isSeeking = false
-    private val chapterTextCache = mutableMapOf<Int, String?>() // spine index → plain text cache
+    private val chapterTextCache = mutableMapOf<Int, String?>() // reading-order index → plain text cache
     // Precomputed content-weighted chapter lengths for accurate slider→position mapping
     private var chapterLengthsDeferred: Deferred<LongArray>? = null
     /** When true, savePosition skips overwriting the audio bookmark (preserves sentence sync). */
@@ -716,6 +727,12 @@ class ReaderActivity : AppCompatActivity() {
                 Log.d(TAG, "Publication opened: ${pub.metadata.title}, readingOrder=${pub.readingOrder.size} items")
                 publication = pub
                 ebookFileLength = withContext(Dispatchers.IO) { ebookFile.length() }
+                // Before the restore: its chapter rung and seeds are server
+                // chapters (issue #804).
+                chapterMap = withContext(Dispatchers.IO) {
+                    SpineChapterMap.forEpub(ebookFile, pub.readingOrder.map { it.href.toString() })
+                }
+                Log.d(TAG, "Chapter numbering: ${chapterMap}")
                 initProgressIndicator(pub)
 
                 // Pull the server's position before restoring (issue #40) —
@@ -852,6 +869,7 @@ class ReaderActivity : AppCompatActivity() {
      */
     private val spineSource = object : SpineSource {
         override val spineCount: Int get() = publication?.readingOrder?.size ?: 0
+        override val chapterNumbering: SpineChapterMap get() = this@ReaderActivity.chapterNumbering
         override suspend fun plainTextAt(index: Int): String? = getChapterPlainText(index)
         override suspend fun chapterLengths(): LongArray =
             chapterLengthsDeferred?.await() ?: super.chapterLengths()
@@ -1598,7 +1616,8 @@ class ReaderActivity : AppCompatActivity() {
             val steps = withHandoffAnchor(
                 planRestore(
                     canonicalPosition,
-                    spineCount = pub.readingOrder.size,
+                    // The stored chapter counts every spine item (issue #804).
+                    spineCount = chapterNumbering.spineSize,
                     deviceId = repository.deviceId,
                     hintKind = HINT_READIUM_LOCATOR,
                 ),
@@ -1725,9 +1744,20 @@ class ReaderActivity : AppCompatActivity() {
         return buildTextPreview(plainText, progression, pair?.ebookTitle)
     }
 
-    /** Spine index [locator] points at, or -1 if it matches no reading-order item. */
-    private fun Publication.spineIndexOf(locator: Locator): Int =
+    /**
+     * Reading-order index [locator] points at, or -1 if it matches none.
+     * Readium's numbering, for use inside the reader only — never sent.
+     */
+    private fun Publication.readingOrderIndexOf(locator: Locator): Int =
         spineIndexForHref(readingOrder.map { it.href.toString() }, locator.href.toString())
+
+    /**
+     * The server's chapter for [locator] (issue #804): what every save,
+     * page-to-audio match hint and handoff carries as `epub_chapter`. Differs
+     * from [readingOrderIndexOf] by the non-linear spine items before it.
+     */
+    private fun Publication.serverChapterOf(locator: Locator): Int =
+        serverChapterForHref(chapterNumbering, readingOrder.map { it.href.toString() }, locator.href.toString())
 
     /**
      * Book-level progress (0-100) for the UserProgress record, matching the
@@ -1772,7 +1802,10 @@ class ReaderActivity : AppCompatActivity() {
         // isStandalone instead (issue #169).
         if (!isStandalone && pair == null) return
         val pub = publication ?: return
-        val chapterIndex = pub.spineIndexOf(locator).coerceAtLeast(0)
+        // Reading-order index: the text cache, the percent and the start-of-book
+        // check are the reader's own. What is saved is [serverChapter].
+        val chapterIndex = pub.readingOrderIndexOf(locator).coerceAtLeast(0)
+        val serverChapter = pub.serverChapterOf(locator)
         val progression = locator.locations.progression ?: 0.0
         // The hard safety net (issue #61/#40 fix 1b): an Unresolved restore
         // sitting at spine 0 must not FullSave even if userNavigated was
@@ -1846,7 +1879,7 @@ class ReaderActivity : AppCompatActivity() {
             // back-press cancels this activity's scope mid-request.
             repository.saveReaderPositionStandaloneDetached(
                 ebookId = ebookId,
-                epubChapter = chapterIndex,
+                epubChapter = serverChapter,
                 epubTextPreview = textPreview,
                 epubProgressPercent = bookPercentFor(locator, chapterIndex),
                 epubLocator = locatorJson,
@@ -1856,7 +1889,7 @@ class ReaderActivity : AppCompatActivity() {
 
         val snapshot = ReaderPositionSnapshot(
             pairId = pairId,
-            chapterIndex = chapterIndex,
+            chapterIndex = serverChapter,
             locatorJson = locatorJson,
             textPreview = textPreview,
             progressPercent = bookPercentFor(locator, chapterIndex),
@@ -2075,13 +2108,12 @@ class ReaderActivity : AppCompatActivity() {
             return
         }
 
-        // Find chapter using robust matching
-        val rawChapterIndex = pub.spineIndexOf(locator)
-        val chapterIndex = rawChapterIndex.coerceAtLeast(0)
+        // The match hint and the handoff are server chapters (issue #804).
+        val serverChapter = pub.serverChapterOf(locator)
 
         val progression = locator.locations.progression ?: 0.0
         Log.d(TAG, "syncAudioToPage called! locator.href='${locator.href}', progression=$progression")
-        Log.d(TAG, "syncAudioToPage: rawChapterIndex=$rawChapterIndex => chapterIndex=$chapterIndex")
+        Log.d(TAG, "syncAudioToPage: serverChapter=$serverChapter")
 
         lifecycleScope.launch {
             // Only a real DOM read of the current column is worth seeking on.
@@ -2094,7 +2126,7 @@ class ReaderActivity : AppCompatActivity() {
                 "textPreview='${visible.text.take(80)}'")
 
             val audioMs = if (visible.isPrecise) {
-                repository.epubToAudioText(pairId, chapterIndex, visible.text)
+                repository.epubToAudioText(pairId, serverChapter, visible.text)
             } else 0
             // Set before the write, so a savePosition landing in between can't
             // resolve its own sync-point guess over this deliberate match (see
@@ -2104,7 +2136,7 @@ class ReaderActivity : AppCompatActivity() {
             val matched = PageAudioHandoff.apply(
                 repository = repository,
                 pairId = pairId,
-                chapterIndex = chapterIndex,
+                chapterIndex = serverChapter,
                 locatorJson = locator.toJSON().toString(),
                 audioMs = audioMs,
             )
@@ -2247,13 +2279,13 @@ class ReaderActivity : AppCompatActivity() {
 
             val locator = selection?.locator ?: return@launch
             val pub = publication ?: return@launch
-            val chapterIndex = pub.spineIndexOf(locator).coerceAtLeast(0)
-            Log.d(TAG, "syncSelectedText: chapterIndex=$chapterIndex, text='${selectedText.take(60)}'")
+            val serverChapter = pub.serverChapterOf(locator)
+            Log.d(TAG, "syncSelectedText: serverChapter=$serverChapter, text='${selectedText.take(60)}'")
 
             val outcome = syncSelectionToAudio(
                 repository = repository,
                 pairId = pairId,
-                chapterIndex = chapterIndex,
+                chapterIndex = serverChapter,
                 locatorJson = locator.toJSON().toString(),
                 selectedText = selectedText,
             ) { audioMs ->
@@ -2304,8 +2336,8 @@ class ReaderActivity : AppCompatActivity() {
 
             val locator = selection?.locator ?: return@launch
             val pub = publication ?: return@launch
-            val chapterIndex = pub.spineIndexOf(locator).coerceAtLeast(0)
-            val audioMs = repository.epubToAudioText(pairId, chapterIndex, selectedText, rewindMs = 0)
+            val serverChapter = pub.serverChapterOf(locator)
+            val audioMs = repository.epubToAudioText(pairId, serverChapter, selectedText, rewindMs = 0)
             if (audioMs <= 0) {
                 android.widget.Toast.makeText(this@ReaderActivity, "No matching audio found", android.widget.Toast.LENGTH_SHORT).show()
                 return@launch
@@ -2373,10 +2405,10 @@ class ReaderActivity : AppCompatActivity() {
                     // Start where the eye is, not where the audio was: the same
                     // page-to-audio match Switch to Audio performs (issue #114 / #131).
                     val visible = extractVisibleTextFromWebView()
-                    val chapterIndex = navigator?.currentLocator?.value
-                        ?.let { publication?.spineIndexOf(it) }?.coerceAtLeast(0) ?: 0
+                    val serverChapter = navigator?.currentLocator?.value
+                        ?.let { publication?.serverChapterOf(it) } ?: 0
                     if (visible.isPrecise) {
-                        repository.epubToAudioText(pairId, chapterIndex, visible.text, rewindMs = 0)
+                        repository.epubToAudioText(pairId, serverChapter, visible.text, rewindMs = 0)
                     } else 0
                 }
             }
@@ -2598,7 +2630,12 @@ class ReaderActivity : AppCompatActivity() {
 
     private fun sentenceLocator(point: SyncPointEntity): Locator? {
         val pub = publication ?: return null
-        val link = pub.readingOrder.getOrNull(point.epubChapter) ?: return null
+        // A sync point's chapter counts every spine item; Readium's reading
+        // order leaves out non-linear ones (issue #804). A point in a
+        // non-linear item has no page to mark here, so it marks nothing rather
+        // than a near-miss in the next chapter.
+        val index = chapterNumbering.readingOrderIndexOf(point.epubChapter) ?: return null
+        val link = pub.readingOrder.getOrNull(index) ?: return null
         val quote = readAlong.quotes.quoteFor(point) ?: return null
         // The neighbours disambiguate a line the chapter repeats: with the
         // highlight alone Readium settles a tie on the first occurrence, so
