@@ -670,7 +670,13 @@ def load_audio_chunk(file: str, start_sec: int, duration_sec: int, sr: int = 160
             base += ["-ss", str(start_sec), "-i", file]
         else:
             base += ["-i", file, "-ss", str(start_sec)]
-        return base + ["-t", str(duration_sec), "-f", "s16le", "-ac", "1",
+        # aresample=async=1: follow the file's timestamps, not its sample
+        # count. A merged m4b can hold frames whose timestamps overlap at the
+        # part joins; written straight to raw PCM, every decoded sample was
+        # kept, a 900 s chunk came back as 904 s, and every Whisper timestamp
+        # in it drifted late, up to the chunk's whole excess (issue #795).
+        return base + ["-t", str(duration_sec), "-af", "aresample=async=1",
+                       "-f", "s16le", "-ac", "1",
                        "-acodec", "pcm_s16le", "-ar", str(sr), "-"]
 
     try:

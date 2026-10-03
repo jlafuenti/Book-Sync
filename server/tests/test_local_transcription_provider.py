@@ -100,3 +100,24 @@ async def test_local_provider_defaults_to_auto_detect(fake_whisper):
     await LocalWhisperProvider().transcribe("book.m4b")
 
     assert model.languages == [None, "pt"]
+
+
+def test_chunk_decode_follows_the_file_timestamps(monkeypatch):
+    """Issue #795: decoded straight to raw PCM, a merged m4b whose frame
+    timestamps overlap at the part joins yields more samples than its
+    timeline (904 s for a 900 s chunk), so every timestamp in the chunk
+    drifts late. The resampler's async mode makes ffmpeg follow the
+    timestamps. Same fix as the Jetson worker's decode."""
+    import subprocess
+
+    calls = []
+
+    def fake_run(cmd, capture_output=False, check=False, **kwargs):
+        calls.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0, stdout=b"\x00\x00" * 16, stderr=b"")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    transcription_service.load_audio_chunk("/x/book.m4b", 900, 900)
+    assert len(calls) == 1
+    cmd = calls[0]
+    assert "-af" in cmd and cmd[cmd.index("-af") + 1] == "aresample=async=1"

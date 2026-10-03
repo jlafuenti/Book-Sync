@@ -1042,3 +1042,45 @@ def test_health_reports_the_worker_version(clean_state, client):
 def test_the_app_advertises_the_same_version(clean_state, client):
     """OpenAPI's `version` and /v1/health's `worker_version` come from one literal."""
     assert jetson_server.app.version == jetson_server.WORKER_VERSION
+
+
+# ---------------------------------------------------------------------------
+# Issue #795: decode chunks on the file's timeline, not by sample count
+# ---------------------------------------------------------------------------
+
+
+def _capture_ffmpeg(monkeypatch, fail_first=False):
+    """Record every ffmpeg command `load_audio_chunk` runs; optionally fail the
+    first (fast-seek) attempt so the slow-seek fallback runs too."""
+    import subprocess
+
+    calls = []
+
+    def fake_run(cmd, capture_output=False, check=False, **kwargs):
+        calls.append(cmd)
+        if fail_first and len(calls) == 1:
+            raise subprocess.CalledProcessError(1, cmd, stderr=b"seek failed")
+        return subprocess.CompletedProcess(cmd, 0, stdout=b"\x00\x00" * 16, stderr=b"")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    return calls
+
+
+def test_chunk_decode_follows_the_file_timestamps(monkeypatch):
+    """A merged m4b can hold frames whose timestamps overlap at the part
+    joins. Decoded straight to raw PCM, every sample is kept, so a 900 s chunk
+    came back as 904 s and each Whisper timestamp in it drifted late. The
+    resampler's async mode makes ffmpeg follow the timestamps instead."""
+    calls = _capture_ffmpeg(monkeypatch)
+    jetson_server.load_audio_chunk("/x/book.m4b", 900, 900)
+    assert len(calls) == 1
+    cmd = calls[0]
+    assert "-af" in cmd and cmd[cmd.index("-af") + 1] == "aresample=async=1"
+
+
+def test_slow_seek_fallback_also_follows_the_file_timestamps(monkeypatch):
+    calls = _capture_ffmpeg(monkeypatch, fail_first=True)
+    jetson_server.load_audio_chunk("/x/book.m4b", 900, 900)
+    assert len(calls) == 2
+    for cmd in calls:
+        assert "-af" in cmd and cmd[cmd.index("-af") + 1] == "aresample=async=1"

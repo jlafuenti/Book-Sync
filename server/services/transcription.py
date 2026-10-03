@@ -182,6 +182,10 @@ def load_audio_chunk(file: str, start_sec: int, duration_sec: int, sr: int = 160
         "-ss", str(start_sec),
         "-i", file,
         "-t", str(duration_sec),
+        # Follow the file's timestamps, not its sample count: overlapping
+        # frame timestamps at a merged m4b's part joins otherwise add samples
+        # and drift every timestamp in the chunk late (issue #795).
+        "-af", "aresample=async=1",
         "-f", "s16le",
         "-ac", "1",
         "-acodec", "pcm_s16le",
