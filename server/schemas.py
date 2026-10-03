@@ -1001,9 +1001,23 @@ class TroubleshootIssues(StrictResponse):
     total: int
 
 
+class PlausibilityRecheckSummary(StrictResponse):
+    """What a verify run's pair-plausibility phase did (issues #693, #798).
+    `evaluated` is the never-checked pairs that were given a first verdict and
+    `failed` how many of those verdicts were failures, so they now appear in
+    Troubleshoot's implausible-pair list. `cleared` is stored failures that now
+    pass; `orphans_removed` is stored rows whose pair no longer exists."""
+
+    cleared: int
+    orphans_removed: int
+    evaluated: int
+    failed: int
+
+
 class LibraryScanProgress(StrictResponse):
     """`services.library_verify` state as `GET /api/troubleshoot/scan/progress`
-    reports it. Timestamps are ISO-8601 strings."""
+    reports it. Timestamps are ISO-8601 strings. `plausibility_recheck` is null
+    until the current or last run's final phase has finished its pass."""
 
     running: bool
     phase_index: int
@@ -1015,6 +1029,7 @@ class LibraryScanProgress(StrictResponse):
     finished_at: Optional[str]
     cancel_requested: bool
     last_error: Optional[str]
+    plausibility_recheck: Optional[PlausibilityRecheckSummary] = None
 
 
 class PrintPagesProgress(StrictResponse):

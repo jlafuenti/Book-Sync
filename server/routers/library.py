@@ -2131,6 +2131,19 @@ async def _relink_or_cleanup_pairs(eb_id: int, epub_eb: Optional[EBook], db: Asy
             pair.ebook_id = epub_eb.id
             db.add(pair)
             relinked.append(pair.id)
+            # The pair now has a different ebook, so any stored plausibility
+            # verdict describes the source file, and a pair that never had one
+            # still has none (issue #798). Take it for the converted EPUB. Not
+            # a commit: the caller owns the transaction (flush only).
+            from services.pair_plausibility import (
+                estimate_word_count, record_pair_plausibility)
+            audio_obj = await db.get(AudioBook, pair.audiobook_id)
+            if audio_obj is not None:
+                word_count = None
+                if audio_obj.duration_seconds:
+                    word_count = await estimate_word_count(epub_eb.file_path)
+                await record_pair_plausibility(
+                    db, pair, epub_eb, audio_obj, word_count=word_count)
         else:
             # No replacement EPUB: the pair dies, but each user's position is
             # demoted onto the surviving audiobook first (issue #155).

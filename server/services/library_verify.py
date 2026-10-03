@@ -11,28 +11,37 @@ transcriptions, failed ACSM imports) are computed live by the troubleshoot
 router and don't need the scan — but the scan still ticks a "file checks" phase
 for progress feedback.
 
-Pair-plausibility re-check (issue #693). `pair_plausibility.check_pair_plausibility`
-is recorded once, at pair creation (`record_pair_plausibility`, called from
-`routers/library.py`'s manual-pair endpoint and `services/auto_match.py`) —
-nothing else ever re-evaluates that stored verdict, so fixing a bug in the check
-itself (like #693, where a passing word count used to be overruled by the
-imprecise byte check) does not clear an old false positive already sitting on a
-running server. This scan is the one place already walking the whole library on
-an operator's request, so its last phase re-runs the check for pairs whose
-stored row currently says `ok == False`, and only those: a passing pair's row is
-left untouched, because re-checking it with a freshly computed word count could
-newly flag an old pair that has synced fine for months, which is a behaviour
-change nobody asked for. A stored row whose pair has since been deleted is
-removed in the same pass, since it would otherwise sit there forever.
+Pair-plausibility phase (issues #693 and #798).
+`pair_plausibility.check_pair_plausibility` is recorded once, at pair creation
+(`record_pair_plausibility`, called from `routers/library.py`'s manual-pair
+endpoint and `services/auto_match.py`) — nothing else ever re-evaluates that
+stored verdict, so fixing a bug in the check itself (like #693, where a passing
+word count used to be overruled by the imprecise byte check) does not clear an
+old false positive already sitting on a running server. This scan is the one
+place already walking the whole library on an operator's request, so its last
+phase, `_recheck_pair_plausibility`, does two things:
+
+* It re-runs the check for pairs whose stored row currently says `ok == False`.
+  A passing pair's row is never touched, because re-checking it with a freshly
+  computed word count could newly flag an old pair that has synced fine for
+  months, which is a behaviour change nobody asked for. A stored row whose pair
+  has since been deleted is removed in the same pass, since it would otherwise
+  sit there forever.
+* It evaluates pairs with **no** stored row at all (issue #798). The check
+  shipped long after the first pairs were made, so every older pair has no
+  verdict, and so would a pair from any path that never recorded one;
+  Troubleshoot can only list what has a row, so a never-checked pair could never
+  be listed. A pair with no verdict has no "has synced fine" history to protect,
+  only an absence of evidence, so it is judged the way a new pair is.
 """
 
 import asyncio
 import datetime
 import logging
 import os
-from typing import Optional
+from typing import NamedTuple, Optional
 
-from sqlalchemy import delete as sa_delete, select
+from sqlalchemy import delete as sa_delete, exists, select
 
 from database import async_session
 from models.book import AudioBook, BookPair, EBook
@@ -63,7 +72,7 @@ _PHASES = [
     "Checking audio integrity",
     "Checking ebook integrity",
     "Checking transcript timing",
-    "Re-checking flagged pairs",
+    "Checking pair plausibility",
 ]
 _RECHECK_PHASE = len(_PHASES) - 1
 
@@ -78,6 +87,9 @@ _state = {
     "finished_at": None,
     "cancel_requested": False,
     "last_error": None,
+    # What the last run's pair-plausibility phase did (`PlausibilityRecheck`
+    # as a dict); None until that phase has finished its pass.
+    "plausibility_recheck": None,
 }
 _task: Optional[asyncio.Task] = None
 
@@ -97,7 +109,7 @@ async def start_scan() -> bool:
         return False
     _set(running=True, phase_index=0, phase_label=_PHASES[0], current=0, total=0,
          started_at=utcnow().isoformat(), finished_at=None,
-         cancel_requested=False, last_error=None)
+         cancel_requested=False, last_error=None, plausibility_recheck=None)
     _task = asyncio.create_task(_run_scan())
     return True
 
@@ -165,17 +177,37 @@ def _stat(path: str):
         return None, None
 
 
-async def _recheck_flagged_pairs() -> tuple[int, int]:
-    """Re-run `pair_plausibility` for pairs whose stored verdict is `ok == False`.
+class PlausibilityRecheck(NamedTuple):
+    """What the pair-plausibility phase did. `cleared` and `orphans_removed` are
+    the stored-row work (#693); `evaluated` is how many never-checked pairs were
+    given a first verdict (#798) and `failed` how many of those verdicts were
+    failures."""
 
-    Passing rows are never touched — see the module docstring for why. Opens
-    its own session per row and commits itself (this is background work, not a
-    helper: `docs/request-transactions.md`), the same pattern `_upsert_result`
-    above already uses, so a crash partway through leaves the rows already
-    re-checked persisted rather than losing the whole pass.
+    cleared: int = 0
+    orphans_removed: int = 0
+    evaluated: int = 0
+    failed: int = 0
 
-    Returns `(cleared, orphans_removed)` — pairs that flipped from failing to
-    passing, and stored rows deleted because their pair no longer exists.
+
+async def _recheck_pair_plausibility() -> PlausibilityRecheck:
+    """Re-check stored failing pair-plausibility rows; evaluate never-checked pairs.
+
+    Two kinds of target, both judged by `record_pair_plausibility` with a word
+    count taken only when the audiobook has a duration (the rule at pair
+    creation): pairs whose stored verdict is `ok == False`, and pairs with no
+    stored verdict at all (issue #798). Stored passing rows are never touched —
+    see the module docstring for why.
+
+    Opens its own session per pair and commits itself (this is background work,
+    not a helper: `docs/request-transactions.md`), the same pattern
+    `_upsert_result` above already uses, so a crash partway through leaves the
+    pairs already handled persisted rather than losing the whole pass.
+
+    Returns a `PlausibilityRecheck`: pairs that flipped from failing to passing,
+    stored rows deleted because their pair no longer exists, never-checked pairs
+    that were given a verdict, and how many of those failed. The same numbers
+    are published as `plausibility_recheck` in the scan's progress state, and
+    the caller logs them.
     """
     async with async_session() as db:
         failing_rows = (await db.execute(
@@ -185,15 +217,24 @@ async def _recheck_flagged_pairs() -> tuple[int, int]:
                 LibraryCheckResult.ok == False,  # noqa: E712
             )
         )).scalars().all()
-        # Snapshot the (row id, pair id) pairs now — each row below opens its
-        # own session, so the ORM objects here would be stale by the time it
-        # runs.
+        unchecked_pair_ids = (await db.execute(
+            select(BookPair.id).where(
+                ~exists().where(
+                    LibraryCheckResult.item_type == "pair",
+                    LibraryCheckResult.item_id == BookPair.id,
+                    LibraryCheckResult.check_type == PAIR_PLAUSIBILITY_CHECK_TYPE,
+                )
+            ).order_by(BookPair.id)
+        )).scalars().all()
+        # Snapshot the ids now — each target below opens its own session, so
+        # the ORM objects here would be stale by the time it runs. A row id of
+        # None marks a never-checked pair.
         targets = [(row.id, row.item_id) for row in failing_rows]
+        targets += [(None, pair_id) for pair_id in unchecked_pair_ids]
 
     _set(phase_index=_RECHECK_PHASE, phase_label=_PHASES[_RECHECK_PHASE],
          current=0, total=len(targets))
-    cleared = 0
-    orphans_removed = 0
+    cleared = orphans_removed = evaluated = failed = 0
     for i, (row_id, pair_id) in enumerate(targets, start=1):
         if _cancelled():
             break
@@ -202,15 +243,33 @@ async def _recheck_flagged_pairs() -> tuple[int, int]:
                 select(BookPair).where(BookPair.id == pair_id)
             )).scalar_one_or_none()
             if pair is None:
-                # The pair was deleted since this row was recorded; the row is
-                # already invisible to Troubleshoot (it joins against live
-                # pairs), this just stops it accumulating forever.
-                await db.execute(sa_delete(LibraryCheckResult).where(
-                    LibraryCheckResult.id == row_id))
-                await db.commit()
-                orphans_removed += 1
+                if row_id is not None:
+                    # The pair was deleted since this row was recorded; the row
+                    # is already invisible to Troubleshoot (it joins against
+                    # live pairs), this just stops it accumulating forever.
+                    await db.execute(sa_delete(LibraryCheckResult).where(
+                        LibraryCheckResult.id == row_id))
+                    await db.commit()
+                    orphans_removed += 1
+                # A never-checked pair deleted since the snapshot has nothing
+                # to evaluate and no row to remove.
                 _set(current=i)
                 continue
+
+            if row_id is None:
+                # A verdict may have been recorded between the snapshot and now
+                # (a re-link, a re-created pair). That is a stored verdict, and
+                # stored verdicts are not this branch's to re-judge.
+                already = (await db.execute(
+                    select(LibraryCheckResult.id).where(
+                        LibraryCheckResult.item_type == "pair",
+                        LibraryCheckResult.item_id == pair_id,
+                        LibraryCheckResult.check_type == PAIR_PLAUSIBILITY_CHECK_TYPE,
+                    )
+                )).first()
+                if already is not None:
+                    _set(current=i)
+                    continue
 
             ebook = (await db.execute(
                 select(EBook).where(EBook.id == pair.ebook_id)
@@ -233,11 +292,17 @@ async def _recheck_flagged_pairs() -> tuple[int, int]:
             ok = await record_pair_plausibility(
                 db, pair, ebook, audiobook, word_count=word_count)
             await db.commit()
-            if ok:
+            if row_id is None:
+                evaluated += 1
+                if not ok:
+                    failed += 1
+            elif ok:
                 cleared += 1
         _set(current=i)
 
-    return cleared, orphans_removed
+    result = PlausibilityRecheck(cleared, orphans_removed, evaluated, failed)
+    _set(plausibility_recheck=result._asdict())
+    return result
 
 
 async def _check_transcript_timings() -> None:
@@ -339,14 +404,17 @@ async def _run_scan() -> None:
             return
         await _check_transcript_timings()
 
-        # ── Phase 5: re-check previously flagged pairs (issue #693) ──
+        # ── Phase 5: pair plausibility — re-check flagged pairs (issue #693)
+        # and evaluate never-checked ones (issue #798) ──
         if _cancelled():
             return
-        cleared, orphans_removed = await _recheck_flagged_pairs()
-        if cleared or orphans_removed:
+        recheck = await _recheck_pair_plausibility()
+        if any(recheck):
             logger.info(
-                "[verify] pair_plausibility re-check: cleared %d, removed %d orphan row(s)",
-                cleared, orphans_removed,
+                "[verify] pair_plausibility: evaluated %d never-checked pair(s), "
+                "%d failed; re-check cleared %d, removed %d orphan row(s)",
+                recheck.evaluated, recheck.failed,
+                recheck.cleared, recheck.orphans_removed,
             )
 
     except Exception as e:

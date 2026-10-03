@@ -66,6 +66,7 @@ CATEGORY_KEYS = {
 SCAN_PROGRESS_KEYS = {
     "running", "phase_index", "phase_count", "phase_label", "current", "total",
     "started_at", "finished_at", "cancel_requested", "last_error",
+    "plausibility_recheck",
 }
 
 AUDIT_KEYS = {"sample_size", "checked", "flagged", "realign_endpoint", "pairs"}

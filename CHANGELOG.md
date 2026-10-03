@@ -99,8 +99,27 @@ operator must do by hand rather than read about afterwards.
   `sentence_index` and sync maps are unchanged, so no rebuild is needed. The one-time chapter
   re-basing in migration 0004 keeps the old extraction exactly, so a fresh install replays it
   as before.
+- Library verify now checks pairs that were never checked for plausibility (#798). The check
+  (audio length against the ebook's text) was only recorded when a pair was created, and the
+  verify phase only re-ran it for pairs already stored as failing, so a pair with no stored result
+  was never judged. Troubleshoot's implausible-pair list can only show pairs with a result, so
+  every pair made before the check existed (and any pair from a path that did not record one)
+  stayed invisible, even a two-minute audio file paired with a full-length ebook. The last verify
+  phase, renamed "Checking pair plausibility", now gives each such pair a first verdict, taking
+  a word count only when the audiobook has a duration, as at pair creation. A stored passing
+  result is still never re-judged, so a pair that has synced fine is not newly flagged. A pair
+  re-pointed at a converted EPUB also gets a fresh verdict for the new file, instead of keeping
+  the one for the source. `GET /api/troubleshoot/scan/progress` has a new `plausibility_recheck`
+  field with `evaluated`, `failed`, `cleared` and `orphans_removed`, and the server log carries
+  the same counts.
 
 ### Upgrade notes
+
+- Run Library verify (System → Troubleshoot) once after deploying (#798), so pairs that have
+  never been checked get a verdict. Pairs it finds implausible appear in Troubleshoot's
+  implausible-pair list; expect some on a long-standing library. They are findings to look at,
+  not blocks: nothing is unpaired or re-queued for you. The phase parses one EPUB per such pair,
+  so the first run is slower than later ones, which find nothing new to evaluate.
 
 - Deploy the transcription worker (`jetson/`) as well as the server for the drift fix (#795).
   Do it between jobs: a job resumed across the deploy keeps its earlier, drifted chunks.

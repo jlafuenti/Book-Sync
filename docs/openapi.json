@@ -2526,7 +2526,7 @@
       },
       "LibraryScanProgress": {
         "additionalProperties": false,
-        "description": "`services.library_verify` state as `GET /api/troubleshoot/scan/progress`\nreports it. Timestamps are ISO-8601 strings.",
+        "description": "`services.library_verify` state as `GET /api/troubleshoot/scan/progress`\nreports it. Timestamps are ISO-8601 strings. `plausibility_recheck` is null\nuntil the current or last run's final phase has finished its pass.",
         "properties": {
           "cancel_requested": {
             "title": "Cancel Requested",
@@ -2569,6 +2569,16 @@
           "phase_label": {
             "title": "Phase Label",
             "type": "string"
+          },
+          "plausibility_recheck": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PlausibilityRecheckSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "running": {
             "title": "Running",
@@ -3551,6 +3561,36 @@
           "new_password"
         ],
         "title": "PasswordChange",
+        "type": "object"
+      },
+      "PlausibilityRecheckSummary": {
+        "additionalProperties": false,
+        "description": "What a verify run's pair-plausibility phase did (issues #693, #798).\n`evaluated` is the never-checked pairs that were given a first verdict and\n`failed` how many of those verdicts were failures, so they now appear in\nTroubleshoot's implausible-pair list. `cleared` is stored failures that now\npass; `orphans_removed` is stored rows whose pair no longer exists.",
+        "properties": {
+          "cleared": {
+            "title": "Cleared",
+            "type": "integer"
+          },
+          "evaluated": {
+            "title": "Evaluated",
+            "type": "integer"
+          },
+          "failed": {
+            "title": "Failed",
+            "type": "integer"
+          },
+          "orphans_removed": {
+            "title": "Orphans Removed",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "cleared",
+          "orphans_removed",
+          "evaluated",
+          "failed"
+        ],
+        "title": "PlausibilityRecheckSummary",
         "type": "object"
       },
       "PositionHintPayload": {
