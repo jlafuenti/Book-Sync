@@ -250,7 +250,8 @@ def check_transcript_timing(
     direction = "early" if typical > 0 else "late"
     detail = (
         f"Transcript runs about {abs(typical):.1f} s {direction} against this audio file "
-        f"({len(drifted)} of {len(usable)} sampled windows); the file has likely been "
-        f"replaced or re-encoded since it was transcribed. Re-transcribe this pair."
+        f"({len(drifted)} of {len(usable)} sampled windows), so its sync map is off by "
+        f"about that much. Usually the file was replaced or re-encoded after it was "
+        f"transcribed. Re-transcribe this pair."
     )
     return TimingVerdict(False, detail, typical, windows)
