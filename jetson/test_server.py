@@ -1049,38 +1049,21 @@ def test_the_app_advertises_the_same_version(clean_state, client):
 # ---------------------------------------------------------------------------
 
 
-def _capture_ffmpeg(monkeypatch, fail_first=False):
-    """Record every ffmpeg command `load_audio_chunk` runs; optionally fail the
-    first (fast-seek) attempt so the slow-seek fallback runs too."""
-    import subprocess
-
-    calls = []
-
-    def fake_run(cmd, capture_output=False, check=False, **kwargs):
-        calls.append(cmd)
-        if fail_first and len(calls) == 1:
-            raise subprocess.CalledProcessError(1, cmd, stderr=b"seek failed")
-        return subprocess.CompletedProcess(cmd, 0, stdout=b"\x00\x00" * 16, stderr=b"")
-
-    monkeypatch.setattr(subprocess, "run", fake_run)
-    return calls
+def _af(cmd):
+    return cmd[cmd.index("-af") + 1] if "-af" in cmd else None
 
 
-def test_chunk_decode_follows_the_file_timestamps(monkeypatch):
+def test_chunk_decode_follows_the_file_timestamps():
     """A merged m4b can hold frames whose timestamps overlap at the part
     joins. Decoded straight to raw PCM, every sample is kept, so a 900 s chunk
     came back as 904 s and each Whisper timestamp in it drifted late. The
     resampler's async mode makes ffmpeg follow the timestamps instead."""
-    calls = _capture_ffmpeg(monkeypatch)
-    jetson_server.load_audio_chunk("/x/book.m4b", 900, 900)
-    assert len(calls) == 1
-    cmd = calls[0]
-    assert "-af" in cmd and cmd[cmd.index("-af") + 1] == "aresample=async=1"
+    cmd = jetson_server._chunk_decode_cmd("/x/book.m4b", 900, 900, 16000, fast_seek=True)
+    assert _af(cmd) == "aresample=async=1"
+    assert cmd.index("-ss") < cmd.index("-i")  # input seek, as before
 
 
-def test_slow_seek_fallback_also_follows_the_file_timestamps(monkeypatch):
-    calls = _capture_ffmpeg(monkeypatch, fail_first=True)
-    jetson_server.load_audio_chunk("/x/book.m4b", 900, 900)
-    assert len(calls) == 2
-    for cmd in calls:
-        assert "-af" in cmd and cmd[cmd.index("-af") + 1] == "aresample=async=1"
+def test_slow_seek_fallback_also_follows_the_file_timestamps():
+    cmd = jetson_server._chunk_decode_cmd("/x/book.m4b", 900, 900, 16000, fast_seek=False)
+    assert _af(cmd) == "aresample=async=1"
+    assert cmd.index("-i") < cmd.index("-ss")

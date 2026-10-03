@@ -659,25 +659,31 @@ def _group_segments_into_sentences(segments_list: list) -> List[TranscribedSente
     return sentences
 
 
+def _chunk_decode_cmd(file: str, start_sec: int, duration_sec: int, sr: int,
+                      fast_seek: bool) -> list:
+    """The ffmpeg command that decodes one chunk to 16-bit mono PCM."""
+    base = ["ffmpeg", "-nostdin", "-threads", "0"]
+    if fast_seek:
+        base += ["-ss", str(start_sec), "-i", file]
+    else:
+        base += ["-i", file, "-ss", str(start_sec)]
+    # aresample=async=1: follow the file's timestamps, not its sample
+    # count. A merged m4b can hold frames whose timestamps overlap at the
+    # part joins; written straight to raw PCM, every decoded sample was
+    # kept, a 900 s chunk came back as 904 s, and every Whisper timestamp
+    # in it drifted late, up to the chunk's whole excess (issue #795).
+    return base + ["-t", str(duration_sec), "-af", "aresample=async=1",
+                   "-f", "s16le", "-ac", "1",
+                   "-acodec", "pcm_s16le", "-ar", str(sr), "-"]
+
+
 def load_audio_chunk(file: str, start_sec: int, duration_sec: int, sr: int = 16000):
     """Load a specific time chunk of audio as a numpy array using ffmpeg."""
     import subprocess
     import numpy as np
 
     def _build_cmd(fast_seek: bool) -> list:
-        base = ["ffmpeg", "-nostdin", "-threads", "0"]
-        if fast_seek:
-            base += ["-ss", str(start_sec), "-i", file]
-        else:
-            base += ["-i", file, "-ss", str(start_sec)]
-        # aresample=async=1: follow the file's timestamps, not its sample
-        # count. A merged m4b can hold frames whose timestamps overlap at the
-        # part joins; written straight to raw PCM, every decoded sample was
-        # kept, a 900 s chunk came back as 904 s, and every Whisper timestamp
-        # in it drifted late, up to the chunk's whole excess (issue #795).
-        return base + ["-t", str(duration_sec), "-af", "aresample=async=1",
-                       "-f", "s16le", "-ac", "1",
-                       "-acodec", "pcm_s16le", "-ar", str(sr), "-"]
+        return _chunk_decode_cmd(file, start_sec, duration_sec, sr, fast_seek)
 
     try:
         out = subprocess.run(_build_cmd(fast_seek=True), capture_output=True, check=True).stdout
