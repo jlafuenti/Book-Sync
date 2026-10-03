@@ -59,6 +59,8 @@ CATEGORY_KEYS = {
     # Issue #458 — the pair is the finding, not either file on its own, so this
     # carries PAIR_KEYS like failed_transcription rather than an item row.
     "implausible_pair",
+    # Library verify's transcript timing check: also a pair row.
+    "transcript_out_of_step",
 }
 
 SCAN_PROGRESS_KEYS = {

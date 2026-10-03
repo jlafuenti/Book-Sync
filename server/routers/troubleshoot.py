@@ -43,7 +43,7 @@ from schemas import (
     ReplaceFileResult, RequeueResult, SyncMapAuditResponse, SyncMapRebuildStart,
     SyncMapRebuildStatus, TroubleshootIssues,
 )
-from services import chapter_repair, library_verify, pair_plausibility
+from services import chapter_repair, library_verify, pair_plausibility, transcript_timing
 from services import sync_map_audit as sync_map_audit_service
 from services import sync_map_rebuild
 from services.epub_parser import SENTENCE_SPLITTER_VERSION
@@ -716,6 +716,35 @@ async def get_issues(
             "detail": r.detail or "Audio length does not fit this ebook",
         })
 
+    # Transcripts out of step with their audio file (Library verify,
+    # `services.transcript_timing`). A verdict older than the pair's current
+    # transcript was about a transcript that re-transcribing has since
+    # replaced, so it is not reported even before verify re-checks it.
+    transcript_out_of_step = []
+    timing_rows = (await db.execute(
+        select(LibraryCheckResult, AudioTranscript.created_at)
+        .join(AudioTranscript, AudioTranscript.pair_id == LibraryCheckResult.item_id)
+        .where(
+            LibraryCheckResult.item_type == "pair",
+            LibraryCheckResult.check_type == transcript_timing.CHECK_TYPE,
+            LibraryCheckResult.ok == False,  # noqa: E712
+        )
+    )).all()
+    for r, transcribed_at in timing_rows:
+        pair = pair_by_id.get(r.item_id)
+        if pair is None or (transcribed_at and r.checked_at < transcribed_at):
+            continue
+        eb = eb_by_id.get(pair.ebook_id)
+        ab = ab_by_id.get(pair.audiobook_id)
+        transcript_out_of_step.append({
+            "pair_id": pair.id,
+            "ebook_id": pair.ebook_id,
+            "audiobook_id": pair.audiobook_id,
+            "title": (eb.title if eb else None) or (ab.title if ab else f"Pair {pair.id}"),
+            "author": (eb.author if eb else None) or (ab.author if ab else None),
+            "detail": r.detail or "Transcript is out of step with the audio file",
+        })
+
     # Duplicate files (same content hash) within each media type.
     duplicate = []
     by_hash = defaultdict(list)
@@ -807,6 +836,7 @@ async def get_issues(
         "multi_file_audiobook": multi_file,
         "sync_map_missing": sync_map_missing,
         "implausible_pair": implausible_pair,
+        "transcript_out_of_step": transcript_out_of_step,
         "duplicate": duplicate,
         "possible_duplicate": possible_duplicate,
         "missing_cover": missing_cover,

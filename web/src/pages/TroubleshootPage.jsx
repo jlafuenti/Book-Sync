@@ -37,6 +37,12 @@ const CATEGORIES = [
     // `transcription` kind renders them non-selectable, since the fix is to
     // replace the file and rescan rather than to delete anything from here.
     { key: 'implausible_pair', label: 'Pairs whose audio length does not fit the ebook', kind: 'transcription', tone: 'warning' },
+    // Library verify measured the transcript's timestamps seconds off the
+    // audio file now on disk (a file replaced or re-encoded after it was
+    // transcribed), so the sync map is a sentence or two off everywhere.
+    // Re-queue transcribes afresh: the server discards a transcript verify
+    // flagged instead of reusing it.
+    { key: 'transcript_out_of_step', label: 'Transcripts out of step with their audio', kind: 'transcription', tone: 'warning' },
     { key: 'duplicate', label: 'Duplicate files', kind: 'dup', tone: 'warning' },
     // Issue #692: content-similarity candidates (audio duration / ebook file
     // size, corroborated by title/author/narrator/ASIN/ISBN) — never a

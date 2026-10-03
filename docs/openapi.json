@@ -5642,6 +5642,13 @@
             "title": "Sync Map Missing",
             "type": "array"
           },
+          "transcript_out_of_step": {
+            "items": {
+              "$ref": "#/components/schemas/TroubleshootPairItem"
+            },
+            "title": "Transcript Out Of Step",
+            "type": "array"
+          },
           "unsupported_format": {
             "items": {
               "$ref": "#/components/schemas/TroubleshootItem"
@@ -5668,6 +5675,7 @@
           "multi_file_audiobook",
           "sync_map_missing",
           "implausible_pair",
+          "transcript_out_of_step",
           "duplicate",
           "possible_duplicate",
           "missing_cover",
