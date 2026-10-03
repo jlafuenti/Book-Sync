@@ -72,6 +72,16 @@ class NoCachedTranscript(RealignError):
     status_code = 404
 
 
+class TranscriptRejected(RealignError):
+    """The cached transcript is known to be wrong (issue #794): Library verify
+    measured it out of step with the audio file, or an admin asked for a fresh
+    transcription. Re-aligning would rebuild the same error into a map that
+    looks new; only a re-transcription fixes it.
+    """
+
+    status_code = 409
+
+
 @dataclass(frozen=True)
 class RealignResult:
     points: int
@@ -91,11 +101,14 @@ class RealignResult:
 
 
 async def realign_pair_from_cached_transcript(
-    db: AsyncSession, pair_id: int
+    db: AsyncSession, pair_id: int, *, allow_rejected: bool = False
 ) -> RealignResult:
     """Rebuild the sync map for `pair_id` from its cached transcript.
 
-    Raises `RealignError` (or `NoCachedTranscript`) with a user-facing `detail`.
+    Raises `RealignError` (or `NoCachedTranscript`, or `TranscriptRejected`)
+    with a user-facing `detail`. `allow_rejected` is for the Convert flow: a
+    converted ebook needs a map in its own coordinates even when the
+    transcript's timing is off, since the old map names the old file's text.
     """
     pair = (await db.execute(
         select(BookPair)
@@ -116,6 +129,15 @@ async def realign_pair_from_cached_transcript(
         raise NoCachedTranscript(
             "No cached transcript for this pair — run full transcription instead."
         )
+    if not allow_rejected:
+        from services.transcript_timing import current_rejection
+
+        rejection = await current_rejection(db, pair_id, transcript)
+        if rejection:
+            raise TranscriptRejected(
+                f"{rejection} Re-aligning would rebuild the same error; re-queue the "
+                f"pair to transcribe it afresh."
+            )
 
     whisper_sentences = [
         TranscribedSentence(**s) for s in json.loads(transcript.sentences_json)

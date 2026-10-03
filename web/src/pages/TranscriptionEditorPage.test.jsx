@@ -3,13 +3,14 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { MemoryRouter, Routes, Route } from 'react-router-dom'
 import TranscriptionEditorPage from './TranscriptionEditorPage'
 
-const { getSyncMapMock, getPairMock, getPairsMock, realignPairMock, getTranscriptMock, authRef } = vi.hoisted(() => ({
+const { getSyncMapMock, getPairMock, getPairsMock, realignPairMock, getTranscriptMock, retranscribePairMock, authRef } = vi.hoisted(() => ({
+    retranscribePairMock: vi.fn(),
     getSyncMapMock: vi.fn(),
     getTranscriptMock: vi.fn(),
     getPairMock: vi.fn(),
     getPairsMock: vi.fn(),
     realignPairMock: vi.fn(),
-    authRef: { editor: true },
+    authRef: { editor: true, admin: false },
 }))
 
 vi.mock('../api', () => ({
@@ -18,10 +19,11 @@ vi.mock('../api', () => ({
     getPairs: getPairsMock,
     realignPair: realignPairMock,
     getTranscript: getTranscriptMock,
+    retranscribePair: retranscribePairMock,
 }))
 
 vi.mock('../contexts/AuthContext', () => ({
-    useAuth: () => ({ hasMinRole: () => authRef.editor }),
+    useAuth: () => ({ hasMinRole: (role) => (role === 'admin' ? authRef.admin : authRef.editor) }),
 }))
 
 const POINTS = [
@@ -40,6 +42,8 @@ const TRANSCRIPT = { pair_id: 42, sentences: [{ text: 'ash fell from the sky', s
 
 beforeEach(() => {
     authRef.editor = true
+    authRef.admin = false
+    retranscribePairMock.mockReset()
     getSyncMapMock.mockReset()
     getPairMock.mockReset()
     getPairsMock.mockReset()
@@ -181,5 +185,52 @@ describe('TranscriptionEditorPage is a read-only alignment view (issue #713)', (
         await screen.findByText('Ash fell from the sky.')
 
         expect(screen.queryByRole('button', { name: 'Re-align' })).toBeNull()
+    })
+})
+
+// Issue #794: a transcript the checks cannot see is wrong (e.g. #795's drift)
+// can only be replaced by transcribing again, which Re-queue would not do.
+describe('TranscriptionEditorPage re-transcribe from scratch (issue #794)', () => {
+    it('is not offered below the admin role', async () => {
+        renderAt('42')
+        expect(await screen.findByText(/The Final Empire/)).toBeInTheDocument()
+        expect(screen.queryByRole('button', { name: /Re-transcribe/ })).not.toBeInTheDocument()
+    })
+
+    it('asks before queueing, then queues a fresh transcription', async () => {
+        authRef.admin = true
+        retranscribePairMock.mockResolvedValue({ status: 'queued', pair_id: 42 })
+        renderAt('42')
+
+        fireEvent.click(await screen.findByRole('button', { name: /Re-transcribe from scratch/ }))
+        const dialog = await screen.findByRole('dialog')
+        expect(dialog).toHaveTextContent(/hours/)
+        expect(retranscribePairMock).not.toHaveBeenCalled()
+
+        fireEvent.click(screen.getByRole('button', { name: 'Queue re-transcription' }))
+        await waitFor(() => expect(retranscribePairMock).toHaveBeenCalledWith('42'))
+        expect(await screen.findByText(/Queued for a fresh transcription/)).toBeInTheDocument()
+    })
+
+    it('does nothing when the confirmation is cancelled', async () => {
+        authRef.admin = true
+        renderAt('42')
+
+        fireEvent.click(await screen.findByRole('button', { name: /Re-transcribe from scratch/ }))
+        fireEvent.click(await screen.findByRole('button', { name: 'Cancel' }))
+
+        await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+        expect(retranscribePairMock).not.toHaveBeenCalled()
+    })
+
+    it('shows why queueing failed', async () => {
+        authRef.admin = true
+        retranscribePairMock.mockRejectedValue(new Error('Book pair not found'))
+        renderAt('42')
+
+        fireEvent.click(await screen.findByRole('button', { name: /Re-transcribe from scratch/ }))
+        fireEvent.click(await screen.findByRole('button', { name: 'Queue re-transcription' }))
+
+        expect(await screen.findByText(/Book pair not found/)).toBeInTheDocument()
     })
 })

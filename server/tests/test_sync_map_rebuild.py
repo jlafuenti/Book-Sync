@@ -330,6 +330,25 @@ async def test_queued_non_synced_and_untranscribed_pairs_are_skipped(db):
         assert (await _map(pid)).splitter_version == 1
 
 
+async def test_a_pair_whose_transcript_is_rejected_is_skipped(db):
+    """Issue #794: rebuilding from a transcript Library verify measured out of
+    step with its audio rebuilds the same error into a map that looks new."""
+    from models.library_issue import LibraryCheckResult
+    from services.transcript_timing import CHECK_TYPE
+
+    pid = await _seed(db)
+    db.add(LibraryCheckResult(item_type="pair", item_id=pid, check_type=CHECK_TYPE, ok=False,
+                              detail="Transcript runs about 4.8 s early", checked_at=utcnow()))
+    await db.commit()
+
+    snap = await _run(pair_ids=[pid])
+
+    row = snap["results"][0]
+    assert row["outcome"] == "skipped"
+    assert "re-queue" in row["detail"].lower()
+    assert (await _map(pid)).splitter_version == 1
+
+
 async def test_a_missing_pair_is_skipped(db):
     snap = await _run(pair_ids=[987_654])
     assert snap["results"][0]["outcome"] == "skipped"

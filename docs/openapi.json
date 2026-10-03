@@ -12111,6 +12111,54 @@
         ]
       }
     },
+    "/api/transcription/{pair_id}/retranscribe": {
+      "post": {
+        "description": "Queue the pair for a fresh transcription, never reusing its cached one.\n\nFor a transcript known to be wrong in a way the checks cannot see, such as\n#795's drift, which stretches only part of each chunk. It records an\nadmin rejection (`transcript_timing.REJECTED_CHECK_TYPE`), which the\npipeline, realign and the sync-map rebuild all honour until a newer\ntranscript replaces the old one (issue #794). The old transcript stays\nuntil then, so a failed or cancelled job leaves the pair no worse off.",
+        "operationId": "retranscribe_pair_api_transcription__pair_id__retranscribe_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pair_id",
+            "required": true,
+            "schema": {
+              "title": "Pair Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RequeueResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Retranscribe Pair",
+        "tags": [
+          "transcription"
+        ]
+      }
+    },
     "/api/transcription/{pair_id}/start": {
       "post": {
         "description": "Add a book pair to the transcription queue.\nReplaces the old direct-start approach with queue-based processing.",

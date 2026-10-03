@@ -34,6 +34,12 @@ logger = logging.getLogger(__name__)
 
 CHECK_TYPE = "transcript_timing"
 
+#: A pair-level verdict an admin sets with "Re-transcribe from scratch"
+#: (issue #794): the cached transcript is wrong in a way this check cannot
+#: see, e.g. drift on part of each chunk only (#795). Its own check type, so a
+#: Library verify run that finds the transcript in step cannot overwrite it.
+REJECTED_CHECK_TYPE = "transcript_rejected"
+
 #: How a passing verdict's detail starts. A stored row that passes without it
 #: is a "cannot judge", which Library verify retries rather than caches.
 IN_STEP_DETAIL_PREFIX = "In step"
@@ -272,3 +278,29 @@ def check_transcript_timing(
         f"transcribed. Re-transcribe this pair."
     )
     return TimingVerdict(False, detail, typical, windows)
+
+
+async def current_rejection(db, pair_id: int, transcript) -> Optional[str]:
+    """Why `transcript` must not be built from, or None if nothing says so.
+
+    A failed timing verdict (`CHECK_TYPE`) or an admin's re-transcription
+    request (`REJECTED_CHECK_TYPE`) counts only while it is at least as new as
+    the transcript: re-transcribing replaces the transcript and so retires the
+    verdict. Issue #794.
+    """
+    from sqlalchemy import select
+
+    from models.library_issue import LibraryCheckResult
+
+    rows = (await db.execute(
+        select(LibraryCheckResult).where(
+            LibraryCheckResult.item_type == "pair",
+            LibraryCheckResult.item_id == pair_id,
+            LibraryCheckResult.check_type.in_((CHECK_TYPE, REJECTED_CHECK_TYPE)),
+            LibraryCheckResult.ok == False,  # noqa: E712
+        )
+    )).scalars().all()
+    for row in rows:
+        if transcript.created_at is None or row.checked_at >= transcript.created_at:
+            return row.detail or "The cached transcript is out of step with the audio file"
+    return None

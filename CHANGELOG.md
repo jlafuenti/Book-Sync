@@ -18,6 +18,13 @@ operator must do by hand rather than read about afterwards.
 
 ### Added
 
+- "Re-transcribe from scratch" on the Transcription Editor page (admin only; API `POST
+  /api/transcription/{pair_id}/retranscribe`). It queues a fresh transcription that never
+  reuses the saved transcript, for one that is wrong in a way the checks cannot see. One case is
+  the transcriber drift fixed in #795, which stretches only part of each chunk. The saved
+  transcript stays until the new one is finished, so a failed or cancelled job loses nothing,
+  and Troubleshoot lists the pair under "Transcripts out of step with their audio" until then.
+  It costs a full transcription on the worker.
 - Library verify now checks every cached transcript against the audio file it is paired with,
   and Troubleshoot lists the pairs that fail under "Transcripts out of step with their audio".
   A transcript made before audio fingerprints existed (#588) could not tell that its file had
@@ -43,6 +50,15 @@ operator must do by hand rather than read about afterwards.
   Read-along highlights lagged the narrator by that much. Both the remote worker and the local
   fallback now decode on the file's own timestamps; on a file without overlaps the decoded
   audio is byte-for-byte unchanged.
+- A transcript known to be wrong is no longer built from again (#794). Before, Re-align and
+  the sync-map rebuild took a transcript that Library verify had found out of step with its
+  audio and rebuilt the same error into a map that looked new. Both now refuse it: Re-align
+  answers 409, and the rebuild lists the pair as skipped. Both point at Re-queue. Convert still
+  realigns such a pair, because a converted ebook needs a map in its own coordinates. And
+  when a re-queue is about to reuse an old transcript with no fingerprint, the timing check now
+  runs first (a few seconds of ffmpeg): if the transcript is out of step it is transcribed
+  afresh; if the check cannot judge it, it is reused as before but no longer stamped with the
+  current file's hash.
 - Re-queueing a pair whose transcript Library verify found out of step now transcribes it
   afresh. Before, the pipeline reused the cached transcript and stamped the current file's hash
   on it, so the bad timestamps looked verified from then on. A verdict older than the pair's

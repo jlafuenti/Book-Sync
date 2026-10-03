@@ -46,6 +46,7 @@ from services.epub_parser import SENTENCE_SPLITTER_VERSION
 from services.realign import (
     NoCachedTranscript,
     RealignError,
+    TranscriptRejected,
     realign_pair_from_cached_transcript,
 )
 from utils import utcnow
@@ -261,6 +262,11 @@ async def _process_one(pair_id: int, dry_run: bool) -> PairResult:
         except NoCachedTranscript:
             await db.rollback()
             return PairResult(pair_id, "skipped", "No cached transcript")
+        except TranscriptRejected:
+            # Issue #794: rebuilding would only repeat the transcript's error.
+            await db.rollback()
+            return PairResult(pair_id, "skipped",
+                              "Transcript is out of step with the audio; re-queue to re-transcribe")
         except RealignError as e:
             await db.rollback()
             return PairResult(pair_id, "failed", _clean_detail(e.detail))

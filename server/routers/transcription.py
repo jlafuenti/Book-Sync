@@ -36,6 +36,7 @@ from schemas import (
     QueueAddRequest,
     QueuePriorityUpdate,
     RealignResponse,
+    RequeueResult,
     TranscriptResponse,
 )
 from rate_limit import search_reads
@@ -528,6 +529,53 @@ async def realign_pair(
         "matched": result.matched,
         "interpolated": result.interpolated,
     }
+
+
+@router.post("/{pair_id}/retranscribe", response_model=RequeueResult)
+async def retranscribe_pair(
+    pair_id: int,
+    db: AsyncSession = Depends(get_db, scope="function"),
+    # Admin: it spends hours of worker time and discards a transcript that
+    # every check may still consider good.
+    _: User = Depends(get_admin_user),
+):
+    """Queue the pair for a fresh transcription, never reusing its cached one.
+
+    For a transcript known to be wrong in a way the checks cannot see, such as
+    #795's drift, which stretches only part of each chunk. It records an
+    admin rejection (`transcript_timing.REJECTED_CHECK_TYPE`), which the
+    pipeline, realign and the sync-map rebuild all honour until a newer
+    transcript replaces the old one (issue #794). The old transcript stays
+    until then, so a failed or cancelled job leaves the pair no worse off.
+    """
+    from models.library_issue import LibraryCheckResult
+    from services.queue_manager import add_to_queue
+    from services.transcript_timing import REJECTED_CHECK_TYPE
+
+    pair = await db.get(BookPair, pair_id)
+    if pair is None:
+        raise HTTPException(status_code=404, detail="Book pair not found")
+
+    row = (await db.execute(
+        select(LibraryCheckResult).where(
+            LibraryCheckResult.item_type == "pair",
+            LibraryCheckResult.item_id == pair_id,
+            LibraryCheckResult.check_type == REJECTED_CHECK_TYPE,
+        )
+    )).scalar_one_or_none()
+    if row is None:
+        row = LibraryCheckResult(item_type="pair", item_id=pair_id,
+                                 check_type=REJECTED_CHECK_TYPE)
+        db.add(row)
+    row.ok = False
+    row.detail = "Re-transcription requested"
+    row.checked_at = utcnow()
+    # Committed by hand before the side effect (docs/request-transactions.md):
+    # the worker can claim the job as soon as it is queued, and must already
+    # see the rejection, or it would reuse the old transcript.
+    await db.commit()
+    await add_to_queue([pair_id])
+    return {"status": "queued", "pair_id": pair_id}
 
 
 # ====================================================================

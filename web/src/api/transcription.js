@@ -41,6 +41,13 @@ export async function realignPair(pairId) {
     return jsonOrThrow(resp, 'Re-align failed');
 }
 
+// Queue a fresh transcription that never reuses the saved transcript (issue
+// #794). Admin only. Returns { status, pair_id }.
+export async function retranscribePair(pairId) {
+    const resp = await fetchWithAuth(`${API_BASE}/transcription/${pairId}/retranscribe`, { method: 'POST' });
+    return jsonOrThrow(resp, 'Re-transcription failed');
+}
+
 // ============ Transcription Queue ============
 
 export async function getTranscriptionQueue() {
