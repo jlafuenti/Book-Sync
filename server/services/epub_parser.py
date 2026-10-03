@@ -27,7 +27,8 @@ logger = logging.getLogger(__name__)
 # when what a sync map stores per sentence changes; sync maps stamped with a
 # lower value are outdated and the bulk rebuild realigns them (issue #774).
 # 3: sync points store the whole sentence, not its first 200 chars (issue #763).
-SENTENCE_SPLITTER_VERSION = 3
+# 4: inline element boundaries no longer insert a space (issue #799).
+SENTENCE_SPLITTER_VERSION = 4
 
 
 @dataclass
@@ -76,11 +77,13 @@ def _extract_blocks_from_html(html_content: str) -> List[str]:
 
     A block-level element flushes the running text both when it opens and when
     it closes, so loose text between two paragraphs is a block of its own and
-    nested blocks never merge. Inline elements do not flush. Text nodes within
-    one block are joined with a single space and whitespace is collapsed, which
-    keeps the normalised text identical to the old `get_text(separator="\\n")`
-    extraction the web client mirrors. A single `<br>` is only whitespace; two
-    or more in a row (nothing but whitespace between them) end the block.
+    nested blocks never merge. Inline elements do not flush, and they add no
+    whitespace of their own: a block's text nodes are concatenated exactly as
+    they are and runs of whitespace are then collapsed, so `<b>Name</b>: x` is
+    `Name: x` and `<i>W</i>ord` is `Word`, as on the rendered page (issue #799).
+    The web client's `extractSearchableText` mirrors this. A single `<br>` is
+    only whitespace; two or more in a row (nothing but whitespace between them)
+    end the block.
     """
     soup = BeautifulSoup(html_content, "html.parser")
 
@@ -91,7 +94,7 @@ def _extract_blocks_from_html(html_content: str) -> List[str]:
     buffer: List[str] = []
 
     def flush() -> None:
-        text = " ".join(" ".join(buffer).split())
+        text = " ".join("".join(buffer).split())
         buffer.clear()
         if text:
             blocks.append(text)
@@ -111,6 +114,7 @@ def _extract_blocks_from_html(html_content: str) -> List[str]:
             continue
         if isinstance(node, Tag):
             if node.name == "br":
+                buffer.append(" ")
                 consecutive_br += 1
                 if consecutive_br >= 2:
                     flush()
@@ -123,7 +127,9 @@ def _extract_blocks_from_html(html_content: str) -> List[str]:
             text = str(node)
             if text.strip():
                 consecutive_br = 0
-                buffer.append(text)
+            # Whitespace-only nodes are kept: between two inline elements they
+            # are the one real space the page shows.
+            buffer.append(text)
     flush()
     return blocks
 

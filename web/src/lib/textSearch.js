@@ -43,35 +43,110 @@ export function normalizeForSearch(text) {
 
 const SKIPPED_ELEMENTS = new Set(['script', 'style', 'head'])
 
+// Elements that separate words even though the markup carries no whitespace.
+// Mirrors `epub_parser._BLOCK_TAGS` (a block flushes the server's running text
+// when it opens and when it closes) plus `br`, which the server treats as
+// whitespace. Table cells are in the server's set too, so `<td>x</td><td>y</td>`
+// is two words, not "xy".
+const BLOCK_ELEMENTS = new Set([
+    'p', 'div', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'li', 'ul', 'ol', 'dl',
+    'dt', 'dd', 'blockquote', 'pre', 'section', 'article', 'aside', 'header',
+    'footer', 'nav', 'main', 'figure', 'figcaption', 'table', 'tr', 'td', 'th',
+    'caption', 'hr', 'address', 'body', 'html', 'br',
+])
+
 /**
- * Readable text of a DOM subtree, with a separator at EVERY text-node
- * boundary — mirroring the server parser's
- * `BeautifulSoup.get_text(separator="\n")`, which is what the stored
- * sync-point previews were extracted with. `textContent` inserts nothing at
- * tag boundaries, so a sentence spanning inline markup
- * (`<i>Gwendolyn</i>felt …`) glues into "Gwendolynfelt" and the
- * server-derived needle can never match it.
+ * Walk a DOM subtree the way the server's `_extract_blocks_from_html` reads a
+ * document: text nodes are concatenated exactly as they are, so an inline
+ * element boundary adds nothing (`<i>W</i>ord` is "Word", `<b>Name</b>: x` is
+ * "Name: x" — issue #799), while block-level elements and `<br>` contribute a
+ * space so words never glue across them. script/style/head are skipped.
  *
- * Falls back to `.textContent` for objects that aren't walkable DOM nodes
- * (test fakes, exotic loaders) — better glued text than none.
+ * Returns `{ raw, segments }`; each segment is a text node with the offset in
+ * `raw` where its text starts. `raw` is empty when the node isn't walkable DOM.
  */
-export function extractSearchableText(node) {
-    if (!node) return ''
-    const parts = []
+function collectSearchableText(root) {
+    let raw = ''
+    const segments = []
     const walk = (n) => {
         if (!n) return
-        // Text node: its literal value is one part.
         if (n.nodeType === 3) {
-            parts.push(n.nodeValue ?? '')
+            const value = n.nodeValue ?? ''
+            segments.push({ node: n, start: raw.length })
+            raw += value
             return
         }
         const name = String(n.nodeName || '').toLowerCase()
         if (SKIPPED_ELEMENTS.has(name)) return
         const children = n.childNodes
         if (!children) return
+        const separates = BLOCK_ELEMENTS.has(name)
+        if (separates) raw += ' '
         for (const child of children) walk(child)
+        if (separates) raw += ' '
     }
-    walk(node)
-    if (parts.length === 0) return String(node.textContent ?? '')
-    return parts.join('\n')
+    walk(root)
+    return { raw, segments }
+}
+
+/**
+ * Readable text of a DOM subtree, mirroring the server parser's block text
+ * (see `collectSearchableText`). The reader normalizes it with
+ * `normalizeForSearch` before comparing against server-derived previews.
+ *
+ * Falls back to `.textContent` for objects that aren't walkable DOM nodes
+ * (test fakes, exotic loaders) — better glued text than none.
+ */
+export function extractSearchableText(node) {
+    if (!node) return ''
+    const { raw, segments } = collectSearchableText(node)
+    if (segments.length === 0) return String(node.textContent ?? '')
+    return raw
+}
+
+const KEPT_CHAR_RE = /[a-z0-9 ]/
+
+/**
+ * `normalizeForSearch(raw)` plus, for every character of the result, the
+ * offset in `raw` it came from. Needed because normalization drops and
+ * collapses characters, so an index into the normalized text says nothing
+ * about where to put a DOM range.
+ */
+function normalizeWithMap(raw) {
+    let text = ''
+    const map = []
+    for (let i = 0; i < raw.length; i++) {
+        for (const lowered of raw[i].toLowerCase()) {
+            const ch = WHITESPACE_VARIANT_CHAR_RE.test(lowered) ? ' ' : lowered
+            if (!KEPT_CHAR_RE.test(ch)) continue
+            if (ch === ' ' && (text === '' || text.endsWith(' '))) continue
+            text += ch
+            map.push(i)
+        }
+    }
+    return { text, map }
+}
+
+/**
+ * Find the first occurrence of `needle` (already passed through
+ * `normalizeForSearch`) in the searchable text of `root`, and return the text
+ * node and character offset where it starts — `{ node, offset }` — or null.
+ * Uses the same walk as `extractSearchableText`, so it finds exactly the text
+ * the server-derived needle was cut from.
+ */
+export function findTextPosition(root, needle) {
+    if (!root || !needle) return null
+    const { raw, segments } = collectSearchableText(root)
+    if (segments.length === 0) return null
+    const { text, map } = normalizeWithMap(raw)
+    const idx = text.indexOf(needle)
+    if (idx < 0) return null
+    const rawIdx = map[idx]
+    for (const seg of segments) {
+        const length = (seg.node.nodeValue ?? '').length
+        if (rawIdx >= seg.start && rawIdx < seg.start + length) {
+            return { node: seg.node, offset: rawIdx - seg.start }
+        }
+    }
+    return null
 }

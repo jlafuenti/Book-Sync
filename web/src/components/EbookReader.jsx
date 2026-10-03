@@ -12,7 +12,7 @@ import {
 } from '../lib/restoreController'
 import { shouldReanchor } from '../lib/positionLadder'
 import {
-    normalizeForSearch, extractSearchableText, WHITESPACE_VARIANT_CHAR_RE,
+    normalizeForSearch, extractSearchableText, findTextPosition,
 } from '../lib/textSearch'
 import { getReaderPalette, READER_MODES, DEFAULT_THEME } from '../themes'
 import useEpubRendition, { paletteCss } from '../hooks/useEpubRendition'
@@ -665,43 +665,16 @@ function EbookReader({ ebookId, pairId, initialChapter, initialTextPreview, onCl
                             const doc = contents?.[0]?.document
                             if (!doc) return null
 
-                            const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT)
-                            const boundaries = []
-                            let accumulated = ''
-                            let n
-                            while ((n = walker.nextNode())) {
-                                const norm = normalizeForSearch(n.textContent)
-                                // Separator between text nodes — the server
-                                // extracts previews with a separator at every
-                                // tag boundary (get_text(separator="\n")), so
-                                // inline markup must not glue words here either.
-                                if (accumulated && !accumulated.endsWith(' ')) accumulated += ' '
-                                boundaries.push({ node: n, start: accumulated.length, len: norm.length })
-                                accumulated += norm
-                            }
-
-                            const idx = accumulated.indexOf(shortTarget)
-                            if (idx < 0) return null
-
-                            const boundary = boundaries.find(b => b.start <= idx && b.start + b.len > idx)
-                            if (!boundary) return null
-
-                            // Calculate the character offset within this text node
-                            const nodeOffset = idx - boundary.start
-                            // Map back to the original (un-normalized) text to get real offset
-                            const origText = boundary.node.textContent
-                            let realOffset = 0
-                            let normCount = 0
-                            for (let i = 0; i < origText.length && normCount < nodeOffset; i++) {
-                                const ch = origText[i].toLowerCase()
-                                const isKept = /[a-z0-9 ]/.test(ch) || WHITESPACE_VARIANT_CHAR_RE.test(ch)
-                                if (isKept) normCount++
-                                realOffset = i + 1
-                            }
+                            // The server cuts previews from a block's text
+                            // nodes joined exactly as they are (inline markup
+                            // adds nothing, blocks and <br> separate), so the
+                            // search walks the document the same way.
+                            const hit = findTextPosition(doc.body, shortTarget)
+                            if (!hit) return null
 
                             const range = doc.createRange()
-                            range.setStart(boundary.node, Math.min(realOffset, origText.length))
-                            range.setEnd(boundary.node, Math.min(realOffset, origText.length))
+                            range.setStart(hit.node, hit.offset)
+                            range.setEnd(hit.node, hit.offset)
 
                             const section = bookRef.current?.spine.get(spineHref)
                             if (!section) {
@@ -721,10 +694,11 @@ function EbookReader({ ebookId, pairId, initialChapter, initialTextPreview, onCl
                     // Load one spine document's text WITHOUT rendering
                     // it (epub.js Section.load), extracted and
                     // normalized exactly like the server built the
-                    // previews we search for (issue #305): a
-                    // separator at every tag boundary, then the
-                    // matcher-parity normalization. Null when the
-                    // section can't be loaded.
+                    // previews we search for (issues #305, #799):
+                    // inline markup adds nothing, blocks and <br>
+                    // separate, then the matcher-parity
+                    // normalization. Null when the section can't be
+                    // loaded.
                     const loadSectionText = async (idx) => {
                         const b = bookRef.current
                         const item = b?.spine?.items?.[idx]

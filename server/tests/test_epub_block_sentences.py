@@ -81,6 +81,54 @@ def test_inline_markup_stays_inside_one_sentence_with_single_spaces():
     assert _texts(html) == ["The quick brown fox jumped over the garden fence."]
 
 
+# --- inline boundaries add no space (issue #799) ----------------------------
+
+
+@pytest.mark.parametrize(
+    "markup, expected",
+    [
+        ("<p><b>Name</b>: some words follow here</p>", "Name: some words follow here"),
+        ("<p><i>W</i>ord by word it grew longer</p>", "Word by word it grew longer"),
+        ("<p>A <i>quiet</i>, <b>slow</b>; steady walk</p>", "A quiet, slow; steady walk"),
+        # real whitespace in the source still yields exactly one space
+        ("<p>one <i>two</i> three</p>", "one two three"),
+        ("<p>one<i> two</i> three</p>", "one two three"),
+        ("<p>one <i>two </i>three</p>", "one two three"),
+        # whitespace-only text between inline elements is one space, not none
+        ("<p><i>left</i> <i>right</i> side</p>", "left right side"),
+        ("<p><i>left</i>\n  \t<i>right</i> side</p>", "left right side"),
+        # directly adjacent inline elements add nothing
+        ("<p><i>left</i><i>right</i> side</p>", "leftright side"),
+        # nested inline elements
+        (
+            "<p><b><i>Na</i>me</b><span>: <em>nested</em></span> words</p>",
+            "Name: nested words",
+        ),
+        # a single <br> still separates words
+        ("<p>first line<br/>second line</p>", "first line second line"),
+        ("<p>first<br>second</p>", "first second"),
+        ("<p>first<br/>\nsecond</p>", "first second"),
+    ],
+)
+def test_inline_boundaries_add_no_space(markup, expected):
+    assert _extract_blocks_from_html(_doc(markup)) == [expected]
+
+
+def test_block_boundaries_still_separate_blocks():
+    html = _doc("<div>alpha<p>beta</p>gamma</div><p>delta</p>")
+
+    assert _extract_blocks_from_html(html) == ["alpha", "beta", "gamma", "delta"]
+
+
+def test_sentence_text_has_no_space_before_inline_punctuation():
+    html = _doc("<p><b>Speaker</b>: the harbour was quiet that night. <i>Wh</i>en it rained, nobody left.</p>")
+
+    assert _texts(html) == [
+        "Speaker: the harbour was quiet that night.",
+        "When it rained, nobody left.",
+    ]
+
+
 def test_no_sentence_contains_a_newline():
     html = _doc(
         "<p>First line of the verse<br/>second line of the verse<br/>third line "
