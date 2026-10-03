@@ -829,15 +829,22 @@ describe('EbookReader — spine search parity with the server matcher (issue #30
         await waitFor(() => expect(updatePositionMock).toHaveBeenCalled())
     })
 
-    it('finds a sentence spanning inline markup with no literal space at the tag boundary', async () => {
+    it('finds a sentence spanning inline markup, which adds no space at the tag boundary', async () => {
         audioOnlyRecordWithPreview()
         matchTextToAudioMock.mockResolvedValue(null)
-        // Server-side, get_text(separator="\n") puts whitespace at every tag
-        // boundary, so the stored preview reads "Gwendolyn felt herself smile
-        // slightly." — textContent of the same markup glues the words.
+        // The server concatenates a block's text nodes as they are (issue
+        // #799), so the stored preview reads "Gwendolyn felt herself smile:
+        // slightly." — a word split by <i> stays whole and no space appears
+        // before the colon. The page text must be read the same way.
+        audioToEpubMock.mockResolvedValue({
+            epub_chapter: 1,
+            epub_sentence_index: 69,
+            preview: 'Gwendolyn felt herself smile: slightly.',
+            sync_map_version: 1,
+        })
         const sectionEl = document.createElement('div')
         sectionEl.innerHTML =
-            '<p>And then <i>Gwendolyn</i>felt herself <em>smile</em>slightly. More of the chapter follows.</p>'
+            '<p>And then <i>Gwen</i>dolyn felt herself <b>smile</b>: slightly. More of the chapter follows.</p>'
         const { book, rendition, handlers } = makeSearchableFakeBook(LONG_TEXT, [
             'cover page', 'title page', 'copyright text', 'placeholder', 'another chapter',
         ])

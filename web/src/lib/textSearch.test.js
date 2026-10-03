@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
-import { normalizeForSearch, extractSearchableText } from './textSearch'
+import { normalizeForSearch, extractSearchableText, findTextPosition } from './textSearch'
 
 /**
  * Cross-platform parity (issue #305): the web reader's spine search must
@@ -41,11 +41,11 @@ describe('normalizeForSearch parity vectors', () => {
 })
 
 describe('extractSearchableText', () => {
-    // Server previews are extracted with BeautifulSoup get_text(separator="\n")
-    // — a separator at EVERY tag boundary. textContent inserts nothing, so a
-    // sentence spanning inline markup glued into "gwendolynfelt" and the
-    // server-derived needle could never match. The extractor must mirror the
-    // server's separator semantics.
+    // The server extracts sync-point previews by concatenating a block's text
+    // nodes exactly as they are, so inline markup adds nothing (issue #799:
+    // `<i>W</i>ord` is "Word", `<b>Name</b>: x` is "Name: x"). Block-level
+    // boundaries and <br> still separate words. This extractor mirrors that;
+    // plain `textContent` would glue words across blocks.
 
     function el(html) {
         const div = document.createElement('div')
@@ -53,10 +53,29 @@ describe('extractSearchableText', () => {
         return div
     }
 
-    it('separates text nodes at tag boundaries like the server parser', () => {
+    it('adds nothing at inline element boundaries', () => {
         const root = el('<p>And then <i>Gwendolyn</i>felt herself <em>smile</em>slightly. More.</p>')
         expect(normalizeForSearch(extractSearchableText(root)))
-            .toContain('gwendolyn felt herself smile slightly')
+            .toContain('gwendolynfelt herself smileslightly')
+    })
+
+    it('does not split a word or put a space before punctuation at inline boundaries', () => {
+        expect(normalizeForSearch(extractSearchableText(el('<p><i>W</i>ord by word</p>'))))
+            .toBe('word by word')
+        expect(extractSearchableText(el('<p><b>Name</b>: text</p>')).trim()).toBe('Name: text')
+    })
+
+    it('keeps whitespace-only text between inline elements as a space', () => {
+        const root = el('<p><i>left</i> <i>right</i> side</p>')
+        expect(normalizeForSearch(extractSearchableText(root))).toBe('left right side')
+    })
+
+    it('separates block elements, line breaks and table cells', () => {
+        expect(normalizeForSearch(extractSearchableText(el('<p>one</p><p>two</p>')))).toBe('one two')
+        expect(normalizeForSearch(extractSearchableText(el('<div>a<p>b</p>c</div>')))).toBe('a b c')
+        expect(normalizeForSearch(extractSearchableText(el('<p>first<br>second</p>')))).toBe('first second')
+        expect(normalizeForSearch(extractSearchableText(el('<table><tr><td>x</td><td>y</td></tr></table>'))))
+            .toBe('x y')
     })
 
     it('keeps ordinary spacing intact', () => {
@@ -75,5 +94,45 @@ describe('extractSearchableText', () => {
     it('falls back to textContent for non-DOM objects (test fakes, exotic loaders)', () => {
         expect(extractSearchableText({ textContent: 'plain text' })).toBe('plain text')
         expect(extractSearchableText(null)).toBe('')
+    })
+})
+
+describe('findTextPosition', () => {
+    function el(html) {
+        const div = document.createElement('div')
+        div.innerHTML = html
+        return div
+    }
+
+    it('finds a needle that spans inline markup and points into the right text node', () => {
+        const root = el('<p>Before. <b>Name</b>: the harbour <i>was</i>quiet tonight.</p>')
+        const hit = findTextPosition(root, 'name the harbour was')
+        expect(hit.node.nodeValue).toBe('Name')
+        expect(hit.offset).toBe(0)
+    })
+
+    it('maps an offset inside a node, through punctuation and case', () => {
+        const root = el('<p>The Old, Grey Ferryman waited.</p>')
+        const hit = findTextPosition(root, 'grey ferryman')
+        expect(hit.node.nodeValue).toBe('The Old, Grey Ferryman waited.')
+        expect(hit.offset).toBe(9)
+    })
+
+    it('does not glue words across a block boundary', () => {
+        const root = el('<p>ends here</p><p>starts there</p>')
+        expect(findTextPosition(root, 'endsstarts')).toBe(null)
+        expect(findTextPosition(root, 'here starts')).not.toBe(null)
+    })
+
+    it('returns null when the needle is absent or empty', () => {
+        const root = el('<p>nothing to see</p>')
+        expect(findTextPosition(root, 'absent words')).toBe(null)
+        expect(findTextPosition(root, '')).toBe(null)
+        expect(findTextPosition(null, 'x')).toBe(null)
+    })
+
+    it('ignores script and style text', () => {
+        const root = el('<script>secret words</script><p>plain</p>')
+        expect(findTextPosition(root, 'secret words')).toBe(null)
     })
 })

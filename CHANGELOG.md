@@ -70,6 +70,16 @@ operator must do by hand rather than read about afterwards.
   full. Matching and saved positions are unchanged in method; they now see the whole sentence
   too. The cost is the extra text in each sync-map download, only the part of long sentences
   past 200 characters: measured on two rebuilt books, +2.1% and +2.4% raw, +3.8% gzipped.
+- The EPUB parser no longer adds a space where an inline element starts or ends (#799). It
+  joined a block's text pieces with a space, so `<b>Name</b>: text` was stored as "Name : text"
+  and `<i>W</i>ord` as "W ord". Stored sentences, and so read-along marking and text matching,
+  disagreed with the page, and a split word could not match at all. Text is now joined exactly as
+  written, so inline markup adds nothing, while paragraphs, other block elements and `<br>` still
+  separate words. The reader's in-page text search reads the page the same way. Measured on two
+  rebuilt books, 3 to 4% of sentences change text. Sentence boundaries move in about 0.2% of
+  places: a sentence that only reached three words because of a stray space now counts as a
+  short fragment and joins its neighbour, so a few chapters end up one or two sentences shorter
+  and every later `sentence_index` in that chapter moves with them.
 
 ### Upgrade notes
 
@@ -87,6 +97,11 @@ operator must do by hand rather than read about afterwards.
   transcript, no re-transcription, saved positions carried over. Each rebuilt map gets a new
   version, so phones fetch it on their next sync. Rolling back past 0032 cuts long sentences back
   to 200 characters.
+- The #799 inline-spacing fix moves the splitter version to 4. After deploying, run System →
+  "Rebuild sync maps" (dry run first) to bring existing maps in line: same procedure and cost as
+  above, no re-transcription. One run covers both this and the #763 rebuild, so skip the
+  earlier run if it has not happened yet. Until a map is rebuilt it keeps the old spaced text
+  and still works as before.
 
 ## [0.9.0] - 2026-10-02
 
