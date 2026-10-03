@@ -37,12 +37,18 @@ from sqlalchemy import delete as sa_delete, select
 from database import async_session
 from models.book import AudioBook, BookPair, EBook
 from models.library_issue import LibraryCheckResult
+from models.transcript import AudioTranscript
 from services.audio_integrity import check_audio_integrity
 from services.ebook_integrity import check_ebook_integrity
 from services.pair_plausibility import (
     CHECK_TYPE as PAIR_PLAUSIBILITY_CHECK_TYPE,
     estimate_word_count,
     record_pair_plausibility,
+)
+from services.transcript_timing import (
+    CHECK_TYPE as TRANSCRIPT_TIMING_CHECK_TYPE,
+    IN_STEP_DETAIL_PREFIX,
+    check_transcript_timing,
 )
 from utils import utcnow
 
@@ -56,8 +62,10 @@ _PHASES = [
     "Verifying files present",
     "Checking audio integrity",
     "Checking ebook integrity",
+    "Checking transcript timing",
     "Re-checking flagged pairs",
 ]
+_RECHECK_PHASE = len(_PHASES) - 1
 
 _state = {
     "running": False,
@@ -127,9 +135,11 @@ async def _upsert_result(item_type: str, item_id: int, check_type: str,
 
 
 async def _cached_ok(item_type: str, item_id: int, check_type: str,
-                     size: Optional[int], mtime: Optional[float]):
+                     size: Optional[int], mtime: Optional[float],
+                     not_before: Optional[datetime.datetime] = None):
     """Return the cached (ok, detail) if a result exists for the same size+mtime,
-    else None (meaning the check must run)."""
+    else None (meaning the check must run). With `not_before`, a result
+    checked earlier than that is stale too, whatever the file looks like."""
     if size is None or mtime is None:
         return None
     async with async_session() as db:
@@ -141,6 +151,8 @@ async def _cached_ok(item_type: str, item_id: int, check_type: str,
             )
         )).scalar_one_or_none()
     if row and row.file_size == size and row.file_mtime == mtime:
+        if not_before is not None and row.checked_at < not_before:
+            return None
         return (row.ok, row.detail)
     return None
 
@@ -178,7 +190,8 @@ async def _recheck_flagged_pairs() -> tuple[int, int]:
         # runs.
         targets = [(row.id, row.item_id) for row in failing_rows]
 
-    _set(phase_index=3, phase_label=_PHASES[3], current=0, total=len(targets))
+    _set(phase_index=_RECHECK_PHASE, phase_label=_PHASES[_RECHECK_PHASE],
+         current=0, total=len(targets))
     cleared = 0
     orphans_removed = 0
     for i, (row_id, pair_id) in enumerate(targets, start=1):
@@ -227,6 +240,57 @@ async def _recheck_flagged_pairs() -> tuple[int, int]:
     return cleared, orphans_removed
 
 
+async def _check_transcript_timings() -> None:
+    """Check every cached transcript against the audio file it is paired with
+    (`services.transcript_timing`), storing a pair-level verdict.
+
+    A verdict is about one file *and* one transcript, so it is re-checked
+    when either changes: the file's size/mtime as for the integrity checks,
+    and a transcript newer than the verdict. Re-transcribing a flagged pair
+    is the fix, and it leaves the file alone.
+
+    "Cannot judge" is stored as passing with its reason, so it is never
+    reported as a problem, and is not cached: it is a gap in the check rather
+    than a fact about the book, so every run tries again (a few seconds each).
+    """
+    async with async_session() as db:
+        targets = (await db.execute(
+            select(BookPair.id, AudioBook.file_path, AudioBook.duration_seconds,
+                   AudioTranscript.created_at)
+            .join(AudioBook, AudioBook.id == BookPair.audiobook_id)
+            .join(AudioTranscript, AudioTranscript.pair_id == BookPair.id)
+            .order_by(BookPair.id)
+        )).all()
+
+    phase = _PHASES.index("Checking transcript timing")
+    _set(phase_index=phase, phase_label=_PHASES[phase], current=0, total=len(targets))
+    for i, (pair_id, path, duration, transcribed_at) in enumerate(targets, start=1):
+        if _cancelled():
+            return
+        size, mtime = await asyncio.to_thread(_stat, path or "")
+        if size:
+            cached = await _cached_ok("pair", pair_id, TRANSCRIPT_TIMING_CHECK_TYPE,
+                                      size, mtime, not_before=transcribed_at)
+            if cached is not None and cached[0] and not (cached[1] or "").startswith(
+                    IN_STEP_DETAIL_PREFIX):
+                cached = None  # a stored "cannot judge" is retried, never trusted
+            if cached is None:
+                async with async_session() as db:
+                    sentences_json = (await db.execute(
+                        select(AudioTranscript.sentences_json)
+                        .where(AudioTranscript.pair_id == pair_id)
+                    )).scalar_one_or_none()
+                if sentences_json is not None:
+                    verdict = await asyncio.to_thread(
+                        check_transcript_timing, path, sentences_json, duration)
+                    ok = verdict.ok is not False
+                    if verdict.ok is False:
+                        logger.info("[verify] pair %d: %s", pair_id, verdict.detail)
+                    await _upsert_result("pair", pair_id, TRANSCRIPT_TIMING_CHECK_TYPE,
+                                         path, size, mtime, ok, verdict.detail)
+        _set(current=i)
+
+
 async def _run_scan() -> None:
     try:
         # ── Phase 1: file presence (cheap; for progress feedback) ──
@@ -270,7 +334,12 @@ async def _run_scan() -> None:
                                          eb.file_path, size, mtime, ok, detail)
             _set(current=i)
 
-        # ── Phase 4: re-check previously flagged pairs (issue #693) ──
+        # ── Phase 4: transcript timing against the audio file ──
+        if _cancelled():
+            return
+        await _check_transcript_timings()
+
+        # ── Phase 5: re-check previously flagged pairs (issue #693) ──
         if _cancelled():
             return
         cleared, orphans_removed = await _recheck_flagged_pairs()

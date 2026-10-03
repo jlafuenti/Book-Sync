@@ -1620,6 +1620,79 @@ async def test_a_legacy_transcript_that_overshoots_the_current_duration_is_not_t
     assert provider.transcribe_calls == 1, "an implausible legacy transcript must not be trusted"
 
 
+async def _legacy_transcript_with_timing_verdict(db, *, ok, checked_offset):
+    """A legacy (NULL-fingerprint) transcript that passes the coverage check,
+    plus a stored Library verify timing verdict `checked_offset` after it was
+    written (negative: the verdict predates the transcript)."""
+    from models.library_issue import LibraryCheckResult
+    from services.transcript_timing import CHECK_TYPE
+
+    pair = await make_book_pair(db, status=PairStatus.SYNCED)
+    ab = await db.get(AudioBook, pair.audiobook_id)
+    ab.file_hash = "current-hash"
+    ab.duration_seconds = 3600
+    ab.file_path = "/x/legacy/book.m4b"
+    transcribed_at = datetime.datetime(2026, 1, 1)
+    db.add(AudioTranscript(
+        pair_id=pair.id, audiobook_path="/x/legacy/book.m4b", sentence_count=1,
+        sentences_json='[{"text": "a", "start_ms": 0, "end_ms": 3598000}]',
+        audio_file_hash=None, audio_duration_seconds=None, created_at=transcribed_at,
+    ))
+    db.add(LibraryCheckResult(
+        item_type="pair", item_id=pair.id, check_type=CHECK_TYPE, ok=ok,
+        detail="Transcript runs about 4.9 s early against this audio file",
+        checked_at=transcribed_at + checked_offset,
+    ))
+    await db.commit()
+    return pair
+
+
+async def test_a_transcript_verify_found_out_of_step_is_not_reused(db, monkeypatch):
+    """A legacy transcript of an earlier encode passes the coverage check
+    (the length moved by seconds, not minutes), so a re-queue used to reuse
+    it and stamp today's hash on it, blessing the bad timestamps for good.
+    Once Library verify has measured it out of step with the file, the
+    pipeline must transcribe afresh instead."""
+    pair = await _legacy_transcript_with_timing_verdict(
+        db, ok=False, checked_offset=datetime.timedelta(days=1))
+    await _seed_item(db, pair.id, status="pending")
+    provider = _PipelineProvider()
+    _install_pipeline(monkeypatch, provider)
+
+    await queue_manager._process_next_item()
+
+    assert provider.transcribe_calls == 1, "an out-of-step transcript must not be reused"
+    transcripts = await _transcripts_for(pair.id)
+    assert len(transcripts) == 1
+    assert transcripts[0].sentence_count == len(TRANSCRIPT)
+
+
+async def test_an_out_of_step_verdict_older_than_the_transcript_is_ignored(db, monkeypatch):
+    """The verdict was about the transcript that re-transcribing replaced;
+    it must not discard the new one."""
+    pair = await _legacy_transcript_with_timing_verdict(
+        db, ok=False, checked_offset=-datetime.timedelta(days=1))
+    await _seed_item(db, pair.id, status="pending")
+    provider = _PipelineProvider()
+    _install_pipeline(monkeypatch, provider)
+
+    await queue_manager._process_next_item()
+
+    assert provider.transcribe_calls == 0
+
+
+async def test_an_in_step_verdict_keeps_the_cache_hit(db, monkeypatch):
+    pair = await _legacy_transcript_with_timing_verdict(
+        db, ok=True, checked_offset=datetime.timedelta(days=1))
+    await _seed_item(db, pair.id, status="pending")
+    provider = _PipelineProvider()
+    _install_pipeline(monkeypatch, provider)
+
+    await queue_manager._process_next_item()
+
+    assert provider.transcribe_calls == 0
+
+
 async def test_rerun_bumps_the_sync_map_version_and_remaps_bookmarks(db, monkeypatch):
     """The re-map of issue #55, exercised through its real caller.
 

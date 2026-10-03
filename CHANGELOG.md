@@ -16,6 +16,36 @@ operator must do by hand rather than read about afterwards.
 
 ## [Unreleased]
 
+### Added
+
+- Library verify now checks every cached transcript against the audio file it is paired with,
+  and Troubleshoot lists the pairs that fail under "Transcripts out of step with their audio".
+  A transcript made before audio fingerprints existed (#588) could not tell that its file had
+  since been replaced or re-encoded in place. When the new file's length moved by only seconds,
+  every check passed, so the old transcript kept being reused, and each realign or sync-map
+  rebuild produced a map a sentence or two off everywhere. In read-along, that shows as the
+  highlight running ahead of the narrator. The check samples five 150-second windows per book,
+  finds the pauses with ffmpeg, and measures the time shift that puts the transcript's sentence
+  boundaries into them. Healthy books measure within about half a second of zero; a book is
+  flagged when at least three windows are 1.5 s or more out in the same direction. Loudly
+  mastered recordings, whose gaps never drop below -35 dB, are retried at -30 dB and then
+  -25 dB. A book the check cannot judge (not enough speech, or too short) is not reported, and is
+  tried again on the next run rather than cached. It adds a few seconds per transcribed book to
+  a verify run.
+
+### Fixed
+
+- Re-queueing a pair whose transcript Library verify found out of step now transcribes it
+  afresh. Before, the pipeline reused the cached transcript and stamped the current file's hash
+  on it, so the bad timestamps looked verified from then on. A verdict older than the pair's
+  current transcript is ignored, so a re-transcribed pair is never discarded a second time.
+
+### Upgrade notes
+
+- Run Library verify (System → Troubleshoot) after deploying. Re-queue each pair it lists under
+  "Transcripts out of step with their audio". That is a full re-transcription on the worker:
+  hours per book, not a realign, because a realign reuses the same transcript.
+
 ## [0.9.0] - 2026-10-02
 
 ### Added

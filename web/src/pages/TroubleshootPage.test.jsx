@@ -9,7 +9,9 @@ const {
     getLibraryIssuesMock, repairChapterEncodingMock, bulkRepairChapterEncodingMock,
     getLibraryScanProgressMock, dismissMultiFileFolderMock, removeMultiFileTracksMock,
     scanLibraryMock, getSyncMapAuditMock, startLibraryScanMock, getPrintPageFillStatusMock,
+    requeuePairMock,
 } = vi.hoisted(() => ({
+    requeuePairMock: vi.fn(),
     getPrintPageFillStatusMock: vi.fn(),
     getLibraryIssuesMock: vi.fn(),
     repairChapterEncodingMock: vi.fn(),
@@ -29,7 +31,7 @@ vi.mock('../api', () => ({
     cancelLibraryScan: vi.fn(),
     bulkDeleteIssues: vi.fn(),
     replaceLibraryFile: vi.fn(),
-    requeuePair: vi.fn(),
+    requeuePair: requeuePairMock,
     dismissFailedAcsm: vi.fn(),
     deleteEbook: vi.fn(),
     deleteAudiobook: vi.fn(),
@@ -58,7 +60,7 @@ function issuesWithChapterEncodingBad(rows, extra = {}) {
     const categories = {
         missing: [], zero_byte: [], chapter_encoding_bad: rows, audio_corrupt: [],
         ebook_drm: [], ebook_unreadable: [], unsupported_format: [], multi_file_audiobook: [],
-        sync_map_missing: [], implausible_pair: [],
+        sync_map_missing: [], implausible_pair: [], transcript_out_of_step: [],
         duplicate: [], possible_duplicate: [], missing_cover: [], orphaned_cover: [],
         failed_transcription: [], failed_acsm: [],
         ...extra,
@@ -553,5 +555,26 @@ describe('TroubleshootPage tour anchor and screen readiness (issue #598 Track B)
 
         expect(registry.screenState(TourScreens.Troubleshoot)).toBe('loading')
         await waitFor(() => expect(registry.screenState(TourScreens.Troubleshoot)).toBe('settled'))
+    })
+})
+
+describe('TroubleshootPage transcripts out of step with their audio', () => {
+    const row = {
+        pair_id: 7, ebook_id: 3, audiobook_id: 4, title: 'Axis Test', author: 'An Author',
+        detail: 'Transcript runs about 4.9 s early against this audio file (5 of 5 sampled windows); the file has likely been replaced or re-encoded since it was transcribed. Re-transcribe this pair.',
+    }
+
+    it('lists the pair with its detail and re-queues it for a fresh transcription', async () => {
+        requeuePairMock.mockReset().mockResolvedValue({ status: 'queued', pair_id: 7 })
+        getLibraryIssuesMock.mockResolvedValue(
+            issuesWithChapterEncodingBad([], { transcript_out_of_step: [row] })
+        )
+        renderPage()
+
+        fireEvent.click(await screen.findByText(/Transcripts out of step with their audio/))
+
+        expect(await screen.findByText(/4.9 s early against this audio file/)).toBeInTheDocument()
+        fireEvent.click(screen.getByRole('button', { name: 'Re-queue' }))
+        await waitFor(() => expect(requeuePairMock).toHaveBeenCalledWith(7))
     })
 })

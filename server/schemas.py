@@ -980,6 +980,10 @@ class TroubleshootCategories(StrictResponse):
     #: (a truncated download, or the wrong file matched). Keyed by pair, because
     #: the finding is the pairing rather than either file on its own.
     implausible_pair: List[TroubleshootPairItem]
+    #: The cached transcript's timestamps are out of step with the audio file
+    #: now on disk (Library verify, `services.transcript_timing`), so the sync
+    #: map is seconds off everywhere. Fixed by re-transcribing the pair.
+    transcript_out_of_step: List[TroubleshootPairItem]
     duplicate: List[TroubleshootItem]
     #: Issue #692 — content-similarity candidates the exact-hash check above
     #: cannot see (a remux, a re-tag, a metadata write-back). Report-only.

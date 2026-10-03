@@ -1050,6 +1050,27 @@ def _transcript_covers_duration(
     return True
 
 
+async def _timing_verdict_rejects(db, pair_id: int, cached) -> bool:
+    """Has Library verify measured `cached` out of step with its audio file?
+
+    Only a failed verdict at least as new as the transcript counts: an older
+    one was about a transcript that re-transcribing has since replaced.
+    """
+    from models.library_issue import LibraryCheckResult
+    from services.transcript_timing import CHECK_TYPE
+
+    row = (await db.execute(
+        select(LibraryCheckResult).where(
+            LibraryCheckResult.item_type == "pair",
+            LibraryCheckResult.item_id == pair_id,
+            LibraryCheckResult.check_type == CHECK_TYPE,
+        )
+    )).scalar_one_or_none()
+    if row is None or row.ok:
+        return False
+    return cached.created_at is None or row.checked_at >= cached.created_at
+
+
 async def _run_transcription_pipeline(item_id: int, pair_id: int):
     """
     The actual transcription + alignment pipeline, adapted from the old
@@ -1129,6 +1150,17 @@ async def _run_transcription_pipeline(item_id: int, pair_id: int):
                 cache_hit = False
             else:
                 cache_hit = True
+        if (cache_hit and cached_transcript is not None
+                and await _timing_verdict_rejects(db, pair_id, cached_transcript)):
+            # Library verify measured this transcript out of step with the
+            # file (`services.transcript_timing`). Checked before the backfill
+            # below, which would otherwise stamp today's hash on it and make
+            # the bad timestamps look verified for good.
+            logger.warning(
+                f"Pair {pair_id}: Library verify found the cached transcript out of "
+                f"step with the audio file — re-transcribing instead of reusing it"
+            )
+            cache_hit = False
         if cache_hit and cached_transcript is not None:
             # Lazy backfill (issue #588 migration note): a transcript with no
             # fingerprint yet (written before this column existed, or never
