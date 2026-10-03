@@ -72,3 +72,26 @@ async def test_a_passing_verdict_is_not_listed(db, make_client, editor, auth_hea
     rows = (await _issues(make_client, editor, auth_header))["transcript_out_of_step"]
 
     assert rows == []
+
+
+async def test_a_requested_retranscription_is_listed_until_it_is_done(
+    db, make_client, editor, auth_header
+):
+    """Issue #794: an admin's "Re-transcribe from scratch" shows here like a
+    failed timing check, so the pair is visibly waiting on the queue."""
+    from services.transcript_timing import REJECTED_CHECK_TYPE
+
+    pair = await make_book_pair(db)
+    db.add(AudioTranscript(pair_id=pair.id, audiobook_path="/audio/book.m4b",
+                           sentence_count=1, sentences_json="[]",
+                           created_at=datetime.datetime(2026, 1, 1)))
+    db.add(LibraryCheckResult(item_type="pair", item_id=pair.id,
+                              check_type=REJECTED_CHECK_TYPE, ok=False,
+                              detail="Re-transcription requested",
+                              checked_at=datetime.datetime(2026, 2, 1)))
+    await db.commit()
+
+    rows = (await _issues(make_client, editor, auth_header))["transcript_out_of_step"]
+
+    assert [r["pair_id"] for r in rows] == [pair.id]
+    assert rows[0]["detail"] == "Re-transcription requested"

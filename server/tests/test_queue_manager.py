@@ -1544,6 +1544,7 @@ async def test_a_legacy_transcript_that_plausibly_covers_the_duration_hits_the_c
     await _seed_item(db, pair.id, status="pending")
     provider = _PipelineProvider()
     _install_pipeline(monkeypatch, provider)
+    _timing_check_returns(monkeypatch, True)  # issue #794: checked before reuse
 
     await queue_manager._process_next_item()
 
@@ -1691,6 +1692,96 @@ async def test_an_in_step_verdict_keeps_the_cache_hit(db, monkeypatch):
     await queue_manager._process_next_item()
 
     assert provider.transcribe_calls == 0
+
+
+async def _legacy_cache_candidate(db):
+    """A legacy (NULL-fingerprint) transcript that passes the coverage check."""
+    pair = await make_book_pair(db, status=PairStatus.SYNCED)
+    ab = await db.get(AudioBook, pair.audiobook_id)
+    ab.file_hash = "current-hash"
+    ab.duration_seconds = 3600
+    ab.file_path = "/x/legacy/book.m4b"
+    db.add(AudioTranscript(
+        pair_id=pair.id, audiobook_path="/x/legacy/book.m4b", sentence_count=1,
+        sentences_json='[{"text": "a", "start_ms": 0, "end_ms": 3598000}]',
+        audio_file_hash=None, audio_duration_seconds=None,
+    ))
+    await db.commit()
+    return pair
+
+
+def _timing_check_returns(monkeypatch, ok, calls=None):
+    from services import transcript_timing
+
+    def check(path, sentences_json, duration_s):
+        if calls is not None:
+            calls.append(path)
+        return transcript_timing.TimingVerdict(ok, "stub verdict", 0.0)
+
+    monkeypatch.setattr(transcript_timing, "check_transcript_timing", check)
+
+
+async def test_a_legacy_transcript_that_fails_the_timing_check_is_not_reused(db, monkeypatch):
+    """Issue #794: a legacy transcript is about to be reused on a path match
+    and a coverage test, and then stamped with today's hash. The timing check
+    runs first, and a transcript it finds out of step is transcribed afresh."""
+    pair = await _legacy_cache_candidate(db)
+    calls = []
+    _timing_check_returns(monkeypatch, False, calls)
+    await _seed_item(db, pair.id, status="pending")
+    provider = _PipelineProvider()
+    _install_pipeline(monkeypatch, provider)
+
+    await queue_manager._process_next_item()
+
+    assert calls == ["/x/legacy/book.m4b"]
+    assert provider.transcribe_calls == 1
+
+
+async def test_a_legacy_transcript_the_check_cannot_judge_is_reused_but_not_blessed(
+    db, monkeypatch
+):
+    """No evidence either way: reuse it as before, but do not stamp today's
+    hash on it, so a later check can still catch it."""
+    pair = await _legacy_cache_candidate(db)
+    _timing_check_returns(monkeypatch, None)
+    await _seed_item(db, pair.id, status="pending")
+    provider = _PipelineProvider()
+    _install_pipeline(monkeypatch, provider)
+
+    await queue_manager._process_next_item()
+
+    assert provider.transcribe_calls == 0
+    transcripts = await _transcripts_for(pair.id)
+    assert transcripts[0].audio_file_hash is None
+
+
+async def test_a_retranscription_request_forces_a_fresh_transcript(db, monkeypatch):
+    """The admin's "Re-transcribe from scratch" verdict, newer than the
+    transcript, makes the cache a miss even when the fingerprint matches."""
+    from models.library_issue import LibraryCheckResult
+    from services.transcript_timing import REJECTED_CHECK_TYPE
+
+    pair = await make_book_pair(db, status=PairStatus.SYNCED)
+    ab = await db.get(AudioBook, pair.audiobook_id)
+    ab.file_hash = "current-hash"
+    ab.file_path = "/x/fp/book.m4b"
+    db.add(AudioTranscript(
+        pair_id=pair.id, audiobook_path="/x/fp/book.m4b", sentence_count=1,
+        sentences_json='[{"text": "a", "start_ms": 0, "end_ms": 1000}]',
+        audio_file_hash="current-hash", created_at=datetime.datetime(2026, 1, 1),
+    ))
+    db.add(LibraryCheckResult(item_type="pair", item_id=pair.id, check_type=REJECTED_CHECK_TYPE,
+                              ok=False, detail="Re-transcription requested",
+                              checked_at=datetime.datetime(2026, 1, 2)))
+    await db.commit()
+    await _seed_item(db, pair.id, status="pending")
+    provider = _PipelineProvider()
+    _install_pipeline(monkeypatch, provider)
+
+    await queue_manager._process_next_item()
+
+    assert provider.transcribe_calls == 1
 
 
 async def test_rerun_bumps_the_sync_map_version_and_remaps_bookmarks(db, monkeypatch):

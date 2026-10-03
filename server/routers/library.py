@@ -2176,7 +2176,10 @@ async def _realign_relinked_pairs(pair_ids: List[int], db: AsyncSession) -> List
     failures: List[dict] = []
     for pair_id in pair_ids:
         try:
-            await realign_pair_from_cached_transcript(db, pair_id)
+            # A converted ebook needs a map in its own coordinates even when
+            # the transcript's timing is off (issue #794): the old map names
+            # the old file's text.
+            await realign_pair_from_cached_transcript(db, pair_id, allow_rejected=True)
         except NoCachedTranscript as e:
             pair = await db.get(BookPair, pair_id)
             if pair is not None and pair.status == PairStatus.SYNCED:

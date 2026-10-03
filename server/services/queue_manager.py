@@ -1050,27 +1050,6 @@ def _transcript_covers_duration(
     return True
 
 
-async def _timing_verdict_rejects(db, pair_id: int, cached) -> bool:
-    """Has Library verify measured `cached` out of step with its audio file?
-
-    Only a failed verdict at least as new as the transcript counts: an older
-    one was about a transcript that re-transcribing has since replaced.
-    """
-    from models.library_issue import LibraryCheckResult
-    from services.transcript_timing import CHECK_TYPE
-
-    row = (await db.execute(
-        select(LibraryCheckResult).where(
-            LibraryCheckResult.item_type == "pair",
-            LibraryCheckResult.item_id == pair_id,
-            LibraryCheckResult.check_type == CHECK_TYPE,
-        )
-    )).scalar_one_or_none()
-    if row is None or row.ok:
-        return False
-    return cached.created_at is None or row.checked_at >= cached.created_at
-
-
 async def _run_transcription_pipeline(item_id: int, pair_id: int):
     """
     The actual transcription + alignment pipeline, adapted from the old
@@ -1130,6 +1109,7 @@ async def _run_transcription_pipeline(item_id: int, pair_id: int):
             cached_transcript, audiobook_path,
             audiobook_file_hash, audiobook_duration_seconds,
         )
+        legacy_hit = cache_hit is None and cached_transcript is not None
         if cache_hit is None and cached_transcript is not None:
             # Neither side has a fingerprint (a transcript written before
             # this column existed, or never verified) -- a path match alone
@@ -1150,18 +1130,44 @@ async def _run_transcription_pipeline(item_id: int, pair_id: int):
                 cache_hit = False
             else:
                 cache_hit = True
-        if (cache_hit and cached_transcript is not None
-                and await _timing_verdict_rejects(db, pair_id, cached_transcript)):
-            # Library verify measured this transcript out of step with the
-            # file (`services.transcript_timing`). Checked before the backfill
-            # below, which would otherwise stamp today's hash on it and make
-            # the bad timestamps look verified for good.
-            logger.warning(
-                f"Pair {pair_id}: Library verify found the cached transcript out of "
-                f"step with the audio file — re-transcribing instead of reusing it"
-            )
-            cache_hit = False
+        from services import transcript_timing as _transcript_timing
+
+        # Everything below runs before the backfill, which would otherwise
+        # stamp today's hash on a bad transcript and make its timestamps look
+        # verified for good.
+        bless = True
         if cache_hit and cached_transcript is not None:
+            # Library verify measured this transcript out of step with the
+            # file, or an admin asked for a fresh transcription (issue #794).
+            rejection = await _transcript_timing.current_rejection(
+                db, pair_id, cached_transcript)
+            if rejection:
+                logger.warning(
+                    f"Pair {pair_id}: cached transcript rejected ({rejection}) — "
+                    f"re-transcribing instead of reusing it"
+                )
+                cache_hit = False
+        if cache_hit and legacy_hit:
+            # A legacy transcript passed on a path match and a coverage test
+            # alone; a file re-encoded in place moves its length by seconds and
+            # passes both. Measure it against the audio before reusing it
+            # (issue #794): a few seconds of ffmpeg against hours of worker time.
+            verdict = await asyncio.to_thread(
+                _transcript_timing.check_transcript_timing,
+                audiobook_path, cached_transcript.sentences_json,
+                audiobook_duration_seconds,
+            )
+            if verdict.ok is False:
+                logger.warning(
+                    f"Pair {pair_id}: legacy cached transcript is out of step with "
+                    f"the audio ({verdict.detail}) — re-transcribing"
+                )
+                cache_hit = False
+            elif verdict.ok is None:
+                # No evidence either way: reuse it as before, but leave it
+                # unfingerprinted so a later check can still catch it.
+                bless = False
+        if cache_hit and cached_transcript is not None and bless:
             # Lazy backfill (issue #588 migration note): a transcript with no
             # fingerprint yet (written before this column existed, or never
             # verified) gets today's values stamped on it now that we trust

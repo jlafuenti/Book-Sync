@@ -726,7 +726,8 @@ async def get_issues(
         .join(AudioTranscript, AudioTranscript.pair_id == LibraryCheckResult.item_id)
         .where(
             LibraryCheckResult.item_type == "pair",
-            LibraryCheckResult.check_type == transcript_timing.CHECK_TYPE,
+            LibraryCheckResult.check_type.in_(
+                (transcript_timing.CHECK_TYPE, transcript_timing.REJECTED_CHECK_TYPE)),
             LibraryCheckResult.ok == False,  # noqa: E712
         )
     )).all()

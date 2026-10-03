@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react'
 import { useParams, Link } from 'react-router-dom'
-import { getSyncMap, getPair, realignPair, getTranscript } from '../api'
+import { getSyncMap, getPair, realignPair, getTranscript, retranscribePair } from '../api'
 import { heardTextByPoint } from '../lib/heardText'
 import { useAuth } from '../contexts/AuthContext'
+import Modal from '../components/Modal'
 import './TranscriptionPage.css'
 
 /**
@@ -21,10 +22,13 @@ function TranscriptionEditorPage() {
     const { pairId } = useParams()
     const { hasMinRole } = useAuth()
     const canEdit = hasMinRole('editor')
+    const canRetranscribe = hasMinRole('admin')
     const [points, setPoints] = useState([])
     const [pair, setPair] = useState(null)
     const [loading, setLoading] = useState(true)
     const [realigning, setRealigning] = useState(false)
+    const [confirmRetranscribe, setConfirmRetranscribe] = useState(false)
+    const [retranscribing, setRetranscribing] = useState(false)
     const [error, setError] = useState('')
     const [successMessage, setSuccessMessage] = useState('')
     const [query, setQuery] = useState('')
@@ -89,6 +93,24 @@ function TranscriptionEditorPage() {
         }
     }
 
+    // Issue #794: Re-align rebuilds from the saved transcript, and a re-queue
+    // reuses it, so a transcript that is wrong in a way the checks cannot see
+    // (e.g. #795's drift) is only replaced by transcribing again from scratch.
+    const handleRetranscribe = async () => {
+        setConfirmRetranscribe(false)
+        setRetranscribing(true)
+        setError('')
+        setSuccessMessage('')
+        try {
+            await retranscribePair(pairId)
+            setSuccessMessage('Queued for a fresh transcription. The saved transcript is replaced when it finishes.')
+        } catch (err) {
+            setError(err.message)
+        } finally {
+            setRetranscribing(false)
+        }
+    }
+
     const matchedCount = useMemo(() => points.filter(pt => pt.matched).length, [points])
     const heard = useMemo(() => heardTextByPoint(points, transcript), [points, transcript])
     const shown = useMemo(() => {
@@ -123,6 +145,21 @@ function TranscriptionEditorPage() {
                 </p>
             )}
 
+            {confirmRetranscribe && (
+                <Modal onClose={() => setConfirmRetranscribe(false)} labelledBy="retranscribe-title">
+                    <h3 id="retranscribe-title" style={{ marginTop: 0 }}>Re-transcribe from scratch?</h3>
+                    <p>
+                        The audiobook is transcribed again on the worker, ignoring the saved transcript.
+                        That takes hours for a full-length book. Use it when the alignment is off and
+                        Re-align does not help. The saved transcript stays until the new one is finished.
+                    </p>
+                    <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
+                        <button className="btn btn-secondary" onClick={() => setConfirmRetranscribe(false)}>Cancel</button>
+                        <button className="btn btn-primary" onClick={handleRetranscribe}>Queue re-transcription</button>
+                    </div>
+                </Modal>
+            )}
+
             {error && <div className="alert alert-error" style={{ marginBottom: '12px' }}>⚠️ {error}</div>}
             {successMessage && <div className="alert alert-success" style={{ marginBottom: '12px' }}>✅ {successMessage}</div>}
 
@@ -148,6 +185,11 @@ function TranscriptionEditorPage() {
                     {canEdit && (
                         <button className="btn btn-primary" onClick={handleRealign} disabled={realigning || points.length === 0}>
                             {realigning ? 'Re-aligning…' : 'Re-align'}
+                        </button>
+                    )}
+                    {canRetranscribe && (
+                        <button className="btn btn-secondary" onClick={() => setConfirmRetranscribe(true)} disabled={retranscribing}>
+                            {retranscribing ? 'Queueing…' : 'Re-transcribe from scratch'}
                         </button>
                     )}
                 </div>
