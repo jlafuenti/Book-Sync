@@ -900,3 +900,48 @@ def test_0027_moves_a_false_capture_date_back():
         assert row("user_progress", repaired_up) == (signed_up, stamp)
         assert row("bookmarks", device_bm) == (stamp, stamp)
         assert row("user_progress", device_up) == (stamp, stamp)
+
+
+def test_0032_widens_the_preview_and_the_downgrade_cuts_it_back():
+    """Issue #763: at head a sync point holds a sentence longer than 200 chars;
+    the downgrade cuts it to 200 rather than failing on the narrower type."""
+    from alembic import command
+
+    cfg = _alembic_config()
+    engine = _sync_engine()
+    command.upgrade(cfg, "head")
+    long_text = "w" * 450
+
+    with engine.begin() as conn:
+        conn.execute(text(
+            "INSERT INTO ebooks (title, filename, file_path, format, uploaded_at) "
+            "VALUES ('E', 'e.epub', '/x/e763.epub', 'epub', now())"
+        ))
+        conn.execute(text(
+            "INSERT INTO audiobooks (title, filename, file_path, format, uploaded_at) "
+            "VALUES ('A', 'a.m4b', '/x/a763.m4b', 'm4b', now())"
+        ))
+        conn.execute(text(
+            "INSERT INTO book_pairs (ebook_id, audiobook_id, status) "
+            "SELECT (SELECT id FROM ebooks LIMIT 1), (SELECT id FROM audiobooks LIMIT 1), 'SYNCED'"
+        ))
+        conn.execute(text(
+            "INSERT INTO sync_maps (book_pair_id, version, total_sentences, total_chapters, "
+            "created_at, degraded, splitter_version) "
+            "SELECT id, 1, 1, 1, now(), false, 2 FROM book_pairs LIMIT 1"
+        ))
+        conn.execute(text(
+            "INSERT INTO sync_points (sync_map_id, epub_chapter, epub_sentence_index, "
+            "epub_text_preview, audio_start_ms, audio_end_ms, confidence) "
+            "SELECT id, 0, 0, :t, 0, 3000, 1.0 FROM sync_maps LIMIT 1"
+        ), {"t": long_text})
+        assert conn.execute(text(
+            "SELECT epub_text_preview FROM sync_points"
+        )).scalar_one() == long_text
+
+    command.downgrade(cfg, "0031_sync_map_splitter_version")
+
+    with engine.begin() as conn:
+        assert conn.execute(text(
+            "SELECT epub_text_preview FROM sync_points"
+        )).scalar_one() == long_text[:200]

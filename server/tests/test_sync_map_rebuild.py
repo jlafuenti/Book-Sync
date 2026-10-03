@@ -187,6 +187,18 @@ async def test_count_outdated_counts_only_synced_pairs_below_current(db):
     assert await sync_map_rebuild.count_outdated(db) == (2, 3)
 
 
+async def test_maps_with_cut_sentences_are_outdated(db):
+    """Maps built before issue #763 hold sentences cut at 200 characters, so
+    the version moved past the one they were stamped with and the bulk rebuild
+    picks them up."""
+    pair_id = await _seed(db, outdated=False)
+    await db.execute(
+        update(SyncMap).where(SyncMap.book_pair_id == pair_id).values(splitter_version=2)
+    )
+    await db.commit()
+    assert await sync_map_rebuild.count_outdated(db) == (1, 1)
+
+
 # ---------------------------------------------------------------------------
 # A real run
 # ---------------------------------------------------------------------------

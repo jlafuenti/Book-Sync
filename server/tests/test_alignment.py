@@ -881,3 +881,19 @@ def test_unnarrated_back_matter_does_not_pull_the_narrated_text_early():
     epub, whisper, truth = _narrated_book(n=1200, extra_unnarrated=400, seed=13)
     points = align_texts(epub, whisper)
     assert _worst_error_minutes(points, truth) < 0.5
+
+
+def test_points_keep_the_whole_sentence():
+    """A long sentence is stored whole, not cut at 200 chars (issue #763):
+    read-along marks the text it is given, so a cut left the rest unmarked."""
+    epub, whisper = _make_clean_book(num=200, garbage_at=0, garbage_len=0)
+    long_text = " ".join(f"longword{k}" for k in range(45))
+    assert len(long_text) > 400
+    epub[100] = EpubSentence(chapter=epub[100].chapter,
+                             sentence_index=epub[100].sentence_index, text=long_text)
+    whisper[100] = TranscribedSentence(text=long_text, start_ms=whisper[100].start_ms,
+                                       end_ms=whisper[100].end_ms)
+    points = align_texts(epub, whisper)
+    stored = next(p for p in points if p.epub_chapter == epub[100].chapter
+                  and p.epub_sentence_index == epub[100].sentence_index)
+    assert stored.epub_text_preview == long_text

@@ -110,7 +110,8 @@ export async function getSyncMapAudit({ flaggedOnly = true } = {}) {
     return jsonOrThrow(resp, 'Sync-map audit failed');
 }
 
-// Rebuild of sync maps built by an older sentence splitter (issue #774).
+// Rebuild of sync maps built by an older sentence splitter (issue #774) or
+// before sync points kept whole sentences (issue #763).
 // `jsonOrThrow` keeps only the message, but the card has to tell a 404 (older
 // server, no such endpoint) from a 409 (a run is already active), so these
 // three put the HTTP status on `err.status`.

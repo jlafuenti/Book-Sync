@@ -63,6 +63,13 @@ operator must do by hand rather than read about afterwards.
   afresh. Before, the pipeline reused the cached transcript and stamped the current file's hash
   on it, so the bad timestamps looked verified from then on. A verdict older than the pair's
   current transcript is ignored, so a re-transcribed pair is never discarded a second time.
+- Read-along now marks a long sentence whole (#763). Sync points stored only the first 200
+  characters of each sentence, and the reader marks exactly the text it is given, so the rest
+  of a longer sentence stayed unmarked; about 2% of sentences are that long, and every book has
+  some. Sync points now store the whole sentence, which the Transcription Editor also shows in
+  full. Matching and saved positions are unchanged in method; they now see the whole sentence
+  too. The cost is the extra text in each sync-map download: only the part of long sentences
+  past 200 characters.
 
 ### Upgrade notes
 
@@ -73,6 +80,13 @@ operator must do by hand rather than read about afterwards.
 - Run Library verify (System → Troubleshoot) after deploying. Re-queue each pair it lists under
   "Transcripts out of step with their audio". That is a full re-transcription on the worker:
   hours per book, not a realign, because a realign reuses the same transcript.
+- Migration 0032 widens `sync_points.epub_text_preview` to `TEXT` (#763); on Postgres this is
+  instant. Existing maps keep their 200-character text until they are rebuilt, so after deploying,
+  System → "Rebuild sync maps" lists every map as built with older sentence handling (the
+  splitter version moves to 3). Run it, dry run first: about ten seconds per book from the cached
+  transcript, no re-transcription, saved positions carried over. Each rebuilt map gets a new
+  version, so phones fetch it on their next sync. Rolling back past 0032 cuts long sentences back
+  to 200 characters.
 
 ## [0.9.0] - 2026-10-02
 

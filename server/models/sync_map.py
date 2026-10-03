@@ -85,7 +85,10 @@ class SyncPoint(Base):
     Attributes:
         epub_chapter: Chapter index (0-based)
         epub_sentence_index: Sentence index within the chapter (0-based)
-        epub_text_preview: First 200 chars of the sentence for debugging
+        epub_text_preview: The sentence's text, whole. Despite the name it is
+            not a preview since issue #763: read-along marks exactly this text,
+            so a 200-char cut left the rest of a long sentence unmarked. Maps
+            aligned before then still hold the cut text until realigned.
         audio_start_ms: Audio start timestamp in milliseconds
         audio_end_ms: Audio end timestamp in milliseconds
         audio_text: The transcribed text that corresponds to this time range, user editable.
@@ -99,7 +102,7 @@ class SyncPoint(Base):
     )
     epub_chapter: Mapped[int] = mapped_column(Integer, nullable=False)
     epub_sentence_index: Mapped[int] = mapped_column(Integer, nullable=False)
-    epub_text_preview: Mapped[str] = mapped_column(String(200), nullable=True)
+    epub_text_preview: Mapped[str] = mapped_column(Text, nullable=True)
     audio_start_ms: Mapped[int] = mapped_column(Integer, nullable=False)
     audio_end_ms: Mapped[int] = mapped_column(Integer, nullable=False)
     audio_text: Mapped[str] = mapped_column(Text, nullable=True)
