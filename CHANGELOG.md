@@ -35,6 +35,14 @@ operator must do by hand rather than read about afterwards.
 
 ### Fixed
 
+- Transcription no longer drifts on audiobooks merged from many parts (#795). Such an m4b can
+  hold frames whose timestamps overlap at the joins. The transcriber decoded each 15-minute
+  chunk straight to raw samples, keeping every one, so a chunk came back seconds too long and
+  every timestamp in it ran late. The error grew at each join and reset at the next chunk:
+  about 4 s by the end of a chunk on one real book, over a minute inside one chunk on another.
+  Read-along highlights lagged the narrator by that much. Both the remote worker and the local
+  fallback now decode on the file's own timestamps; on a file without overlaps the decoded
+  audio is byte-for-byte unchanged.
 - Re-queueing a pair whose transcript Library verify found out of step now transcribes it
   afresh. Before, the pipeline reused the cached transcript and stamped the current file's hash
   on it, so the bad timestamps looked verified from then on. A verdict older than the pair's
@@ -42,6 +50,10 @@ operator must do by hand rather than read about afterwards.
 
 ### Upgrade notes
 
+- Deploy the transcription worker (`jetson/`) as well as the server for the drift fix (#795).
+  Do it between jobs: a job resumed across the deploy keeps its earlier, drifted chunks.
+  Books already transcribed from merged multi-part files keep their drifted transcripts until
+  they are transcribed again.
 - Run Library verify (System → Troubleshoot) after deploying. Re-queue each pair it lists under
   "Transcripts out of step with their audio". That is a full re-transcription on the worker:
   hours per book, not a realign, because a realign reuses the same transcript.

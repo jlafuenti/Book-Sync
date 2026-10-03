@@ -1042,3 +1042,28 @@ def test_health_reports_the_worker_version(clean_state, client):
 def test_the_app_advertises_the_same_version(clean_state, client):
     """OpenAPI's `version` and /v1/health's `worker_version` come from one literal."""
     assert jetson_server.app.version == jetson_server.WORKER_VERSION
+
+
+# ---------------------------------------------------------------------------
+# Issue #795: decode chunks on the file's timeline, not by sample count
+# ---------------------------------------------------------------------------
+
+
+def _af(cmd):
+    return cmd[cmd.index("-af") + 1] if "-af" in cmd else None
+
+
+def test_chunk_decode_follows_the_file_timestamps():
+    """A merged m4b can hold frames whose timestamps overlap at the part
+    joins. Decoded straight to raw PCM, every sample is kept, so a 900 s chunk
+    came back as 904 s and each Whisper timestamp in it drifted late. The
+    resampler's async mode makes ffmpeg follow the timestamps instead."""
+    cmd = jetson_server._chunk_decode_cmd("/x/book.m4b", 900, 900, 16000, fast_seek=True)
+    assert _af(cmd) == "aresample=async=1"
+    assert cmd.index("-ss") < cmd.index("-i")  # input seek, as before
+
+
+def test_slow_seek_fallback_also_follows_the_file_timestamps():
+    cmd = jetson_server._chunk_decode_cmd("/x/book.m4b", 900, 900, 16000, fast_seek=False)
+    assert _af(cmd) == "aresample=async=1"
+    assert cmd.index("-i") < cmd.index("-ss")
