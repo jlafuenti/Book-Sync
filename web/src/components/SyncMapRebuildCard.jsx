@@ -4,7 +4,8 @@ import Modal from './Modal'
 
 /**
  * System page card: rebuild sync maps built by an older sentence splitter
- * (issue #774). Admin-only; the page gates it, the server enforces it.
+ * (issue #774) or before sync points kept whole sentences (issue #763).
+ * Admin-only; the page gates it, the server enforces it.
  *
  * The run itself is a server-side job. This card only starts it, polls its
  * status every two seconds while it is running, and shows the per-pair results
@@ -169,7 +170,7 @@ export default function SyncMapRebuildCard() {
                         {outdated > 0 ? (
                             <>
                                 <p style={{ marginTop: 0 }}>
-                                    {outdated} of {status.total} sync maps were built by an older version of the sentence splitter.
+                                    {outdated} of {status.total} sync maps were built with older sentence handling.
                                 </p>
                                 <p className="system-card-desc">
                                     Rebuilding re-aligns each book from its saved transcript. It takes roughly ten seconds

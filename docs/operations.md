@@ -1011,7 +1011,10 @@ produced them. Each map records that in `sync_maps.splitter_version`; the splitt
 version is `SENTENCE_SPLITTER_VERSION` in `server/services/epub_parser.py`. When a release changes
 how EPUB text is split, maps stamped with a lower number are *outdated*: they keep working, but they
 name the old coordinates until they are rebuilt from the pair's cached transcript. Migration 0031
-stamped every pre-existing map as version 1. **Nothing rebuilds on deploy or at startup.**
+stamped every pre-existing map as version 1. The version also moves when what a map stores per
+sentence changes: version 3 (issue #763) marks maps that still hold sentences cut at 200 characters,
+whose coordinates are fine but whose long sentences read-along marks only in part. **Nothing
+rebuilds on deploy or at startup.**
 
 Three admin-only endpoints drive the rebuild (the System page uses the same ones):
 

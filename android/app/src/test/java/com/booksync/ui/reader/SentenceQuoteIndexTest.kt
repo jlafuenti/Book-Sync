@@ -106,6 +106,22 @@ class SentenceQuoteIndexTest {
     }
 
     @Test
+    fun `a preview longer than the old cap is a whole sentence`() {
+        // Maps aligned since issue #763 hold the full sentence, so only a
+        // preview of exactly the old cap can be a cut one.
+        val longer = "w".repeat(SentenceQuoteIndex.PREVIEW_CAP + 60) + " ends here."
+        val prev = point(0, 0, longer)
+        val cur = point(0, 1, "Short.")
+        val q = indexOf(prev, cur).quoteFor(cur)!!
+        assertEquals(longer.takeLast(SentenceQuoteIndex.CONTEXT_CHARS), q.before)
+
+        val longCur = point(0, 1, longer)
+        val q2 = indexOf(point(0, 0, "Before it."), longCur, point(0, 2, "After it.")).quoteFor(longCur)!!
+        assertEquals(longer, q2.highlight)
+        assertEquals("After it.", q2.after)
+    }
+
+    @Test
     fun `a truncated current preview has no after because the sentence goes on`() {
         val long = "z".repeat(SentenceQuoteIndex.PREVIEW_CAP)
         val cur = point(0, 1, long)

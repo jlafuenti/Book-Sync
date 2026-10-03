@@ -961,7 +961,7 @@ def _align_texts_impl(
             aligned_points.append(AlignedPoint(
                 epub_chapter=epub_sent.chapter,
                 epub_sentence_index=epub_sent.sentence_index,
-                epub_text_preview=epub_sent.text[:200],
+                epub_text_preview=epub_sent.text,
                 audio_start_ms=ws.start_ms,
                 audio_end_ms=ws.end_ms,
                 confidence=confidence,
@@ -974,7 +974,7 @@ def _align_texts_impl(
             aligned_points.append(AlignedPoint(
                 epub_chapter=epub_sent.chapter,
                 epub_sentence_index=epub_sent.sentence_index,
-                epub_text_preview=epub_sent.text[:200],
+                epub_text_preview=epub_sent.text,
                 audio_start_ms=start_ms,
                 audio_end_ms=end_ms,
                 confidence=0.0,  # Interpolated, not directly matched

@@ -64,7 +64,13 @@ class SentenceQuoteIndex(points: List<SyncPointEntity>) {
         return linesOf(neighbour.epubTextPreview).lastOrNull()?.takeLast(CONTEXT_CHARS)
     }
 
-    private fun isCapped(preview: String?): Boolean = (preview?.length ?: 0) >= PREVIEW_CAP
+    /**
+     * Whether [preview] may be a sentence cut at the old server cap. Maps
+     * aligned since issue #763 store the whole sentence, so a longer preview
+     * is whole; one of exactly [PREVIEW_CAP] characters is treated as cut, at
+     * the price of a genuine 200-character sentence losing its context.
+     */
+    private fun isCapped(preview: String?): Boolean = preview?.length == PREVIEW_CAP
 
     private fun linesOf(preview: String?): List<String> =
         preview?.lineSequence()?.map { it.trim() }?.filter { it.isNotEmpty() }?.toList().orEmpty()
@@ -73,7 +79,10 @@ class SentenceQuoteIndex(points: List<SyncPointEntity>) {
         /** How much of a neighbouring sentence to use as context. */
         const val CONTEXT_CHARS = 40
 
-        /** The server truncates `epubTextPreview` to this many characters. */
+        /**
+         * The server cut `epubTextPreview` to this many characters until
+         * issue #763; maps cached from before their next realign still are.
+         */
         const val PREVIEW_CAP = 200
     }
 }

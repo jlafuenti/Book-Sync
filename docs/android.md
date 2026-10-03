@@ -702,8 +702,10 @@ the page turns when the sentence leaves it.
   the preview is quoted: a preview can span two paragraphs (the server joins a
   dangling fragment to the next sentence), and a quote across a block boundary
   never matches the page text.
-  The preview is capped at 200 characters server-side, so a longer sentence is
-  marked up to the cap. While following is paused the mark stays on the
+  The preview is the whole sentence for maps aligned since issue #763; an older
+  map holds only its first 200 characters until it is realigned, so a longer
+  sentence is marked up to that cut, and a preview of exactly 200 characters
+  gets no context after it. While following is paused the mark stays on the
   sentence that was current.
 - **Audio.** The reader attaches its own `MediaController` to the running
   service and polls every 500 ms, like the player and the mini player. Its

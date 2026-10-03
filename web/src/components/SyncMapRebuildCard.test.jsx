@@ -68,7 +68,7 @@ describe('idle states', () => {
     it('shows the outdated count, the explanation and both buttons', async () => {
         getStatusMock.mockResolvedValue(status({ outdated: 4, total: 12 }))
         render(<SyncMapRebuildCard />)
-        expect(await screen.findByText(/4 of 12 sync maps were built by an older version of the sentence splitter/)).toBeInTheDocument()
+        expect(await screen.findByText(/4 of 12 sync maps were built with older sentence handling/)).toBeInTheDocument()
         expect(screen.getByText(/re-aligns each book from its saved transcript/)).toBeInTheDocument()
         expect(screen.getByText(/ten seconds per book/)).toBeInTheDocument()
         expect(screen.getByRole('button', { name: 'Dry run' })).toHaveClass('btn-secondary')

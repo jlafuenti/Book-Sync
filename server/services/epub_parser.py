@@ -23,9 +23,11 @@ from services.nltk_data import ensure_punkt
 
 logger = logging.getLogger(__name__)
 
-# Bump when sentence splitting changes in a way that shifts `sentence_index`;
-# sync maps stamped with a lower value are outdated (issue #774).
-SENTENCE_SPLITTER_VERSION = 2
+# Bump when sentence splitting changes in a way that shifts `sentence_index`, or
+# when what a sync map stores per sentence changes; sync maps stamped with a
+# lower value are outdated and the bulk rebuild realigns them (issue #774).
+# 3: sync points store the whole sentence, not its first 200 chars (issue #763).
+SENTENCE_SPLITTER_VERSION = 3
 
 
 @dataclass
