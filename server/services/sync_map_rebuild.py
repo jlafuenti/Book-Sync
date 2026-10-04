@@ -47,6 +47,7 @@ from services.realign import (
     NoCachedTranscript,
     RealignError,
     TranscriptRejected,
+    TranscriptTooShort,
     realign_pair_from_cached_transcript,
 )
 from utils import utcnow
@@ -267,6 +268,14 @@ async def _process_one(pair_id: int, dry_run: bool) -> PairResult:
             await db.rollback()
             return PairResult(pair_id, "skipped",
                               "Transcript is out of step with the audio; re-queue to re-transcribe")
+        except TranscriptTooShort:
+            # Issue #814: the transcript stops far short of the audio file (the
+            # queue's #796 floor); a rebuild would sync a map with no points for
+            # the rest of the file.
+            await db.rollback()
+            return PairResult(pair_id, "skipped",
+                              "Transcript covers only part of the audio; check the file, "
+                              "then re-transcribe from scratch")
         except RealignError as e:
             await db.rollback()
             return PairResult(pair_id, "failed", _clean_detail(e.detail))

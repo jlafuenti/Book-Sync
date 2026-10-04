@@ -361,6 +361,25 @@ async def test_a_pair_whose_transcript_is_rejected_is_skipped(db):
     assert (await _map(pid)).splitter_version == 1
 
 
+async def test_a_pair_whose_transcript_stops_far_short_of_the_file_is_skipped(db):
+    """Issue #814: the coverage floor the queue applies (#796) holds in the bulk
+    rebuild too, and is reported as a skip with the fix named, not a failure."""
+    from models.book import AudioBook
+
+    pid = await _seed(db)
+    pair = (await db.execute(select(BookPair).where(BookPair.id == pid))).scalar_one()
+    await db.execute(update(AudioBook).where(AudioBook.id == pair.audiobook_id)
+                     .values(duration_seconds=450))  # transcript ends at 18 s: 4%
+    await db.commit()
+
+    snap = await _run(pair_ids=[pid])
+
+    row = snap["results"][0]
+    assert row["outcome"] == "skipped"
+    assert "re-transcribe" in row["detail"].lower()
+    assert (await _map(pid)).splitter_version == 1
+
+
 async def test_a_missing_pair_is_skipped(db):
     snap = await _run(pair_ids=[987_654])
     assert snap["results"][0]["outcome"] == "skipped"

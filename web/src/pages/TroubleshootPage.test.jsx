@@ -9,9 +9,10 @@ const {
     getLibraryIssuesMock, repairChapterEncodingMock, bulkRepairChapterEncodingMock,
     getLibraryScanProgressMock, dismissMultiFileFolderMock, removeMultiFileTracksMock,
     scanLibraryMock, getSyncMapAuditMock, startLibraryScanMock, getPrintPageFillStatusMock,
-    requeuePairMock,
+    requeuePairMock, retranscribePairMock,
 } = vi.hoisted(() => ({
     requeuePairMock: vi.fn(),
+    retranscribePairMock: vi.fn(),
     getPrintPageFillStatusMock: vi.fn(),
     getLibraryIssuesMock: vi.fn(),
     repairChapterEncodingMock: vi.fn(),
@@ -32,6 +33,7 @@ vi.mock('../api', () => ({
     bulkDeleteIssues: vi.fn(),
     replaceLibraryFile: vi.fn(),
     requeuePair: requeuePairMock,
+    retranscribePair: retranscribePairMock,
     dismissFailedAcsm: vi.fn(),
     deleteEbook: vi.fn(),
     deleteAudiobook: vi.fn(),
@@ -53,7 +55,8 @@ vi.mock('../api', () => ({
     cancelPrintPageFill: vi.fn(),
 }))
 
-vi.mock('../contexts/AuthContext', () => ({ useAuth: () => ({ hasMinRole: () => true }) }))
+const { hasMinRoleMock } = vi.hoisted(() => ({ hasMinRoleMock: vi.fn(() => true) }))
+vi.mock('../contexts/AuthContext', () => ({ useAuth: () => ({ hasMinRole: hasMinRoleMock }) }))
 vi.mock('../components/EnhancedMetadataModal', () => ({ default: () => null }))
 
 function issuesWithChapterEncodingBad(rows, extra = {}) {
@@ -596,5 +599,59 @@ describe('TroubleshootPage transcripts covering only part of their audio', () =>
         fireEvent.click(await screen.findByText(/Transcripts covering only part of their audio/))
 
         expect(await screen.findByText(/covers only 70% of the file/)).toBeInTheDocument()
+    })
+
+    it('offers Re-transcribe, not Re-queue, and runs it after a confirmation (issue #814)', async () => {
+        // A re-queue reuses the cached partial transcript and changes nothing;
+        // only a fresh transcription can.
+        retranscribePairMock.mockReset().mockResolvedValue({ status: 'queued', pair_id: 9 })
+        requeuePairMock.mockReset()
+        getLibraryIssuesMock.mockResolvedValue(
+            issuesWithChapterEncodingBad([], { transcript_partial: [row] })
+        )
+        renderPage()
+
+        fireEvent.click(await screen.findByText(/Transcripts covering only part of their audio/))
+        await screen.findByText(/covers only 70% of the file/)
+
+        expect(screen.queryByRole('button', { name: 'Re-queue' })).not.toBeInTheDocument()
+        fireEvent.click(screen.getByRole('button', { name: 'Re-transcribe' }))
+        expect(retranscribePairMock).not.toHaveBeenCalled()
+
+        expect(await screen.findByText(/full transcription on the worker/)).toBeInTheDocument()
+        fireEvent.click(screen.getByRole('button', { name: 'Re-transcribe from scratch' }))
+        await waitFor(() => expect(retranscribePairMock).toHaveBeenCalledWith(9))
+        expect(requeuePairMock).not.toHaveBeenCalled()
+    })
+
+    it('an editor sees no Re-transcribe button (the action is admin-only)', async () => {
+        hasMinRoleMock.mockImplementation((role) => role !== 'admin')
+        try {
+            getLibraryIssuesMock.mockResolvedValue(
+                issuesWithChapterEncodingBad([], { transcript_partial: [row] })
+            )
+            renderPage()
+
+            fireEvent.click(await screen.findByText(/Transcripts covering only part of their audio/))
+            await screen.findByText(/covers only 70% of the file/)
+
+            expect(screen.queryByRole('button', { name: 'Re-transcribe' })).not.toBeInTheDocument()
+        } finally {
+            hasMinRoleMock.mockImplementation(() => true)
+        }
+    })
+
+    it('cancelling the confirmation does nothing', async () => {
+        retranscribePairMock.mockReset()
+        getLibraryIssuesMock.mockResolvedValue(
+            issuesWithChapterEncodingBad([], { transcript_partial: [row] })
+        )
+        renderPage()
+
+        fireEvent.click(await screen.findByText(/Transcripts covering only part of their audio/))
+        fireEvent.click(await screen.findByRole('button', { name: 'Re-transcribe' }))
+        fireEvent.click(await screen.findByRole('button', { name: 'Cancel' }))
+
+        expect(retranscribePairMock).not.toHaveBeenCalled()
     })
 })
