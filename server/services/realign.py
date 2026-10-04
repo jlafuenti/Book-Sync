@@ -35,6 +35,12 @@ from models.book import BookPair, PairStatus
 from models.sync_map import SyncMap, SyncPoint
 from models.transcript import AudioTranscript
 from services.alignment import align_texts_with_diagnostics
+from services.audio_change import (
+    TRANSCRIPT_COVERAGE_FAIL_BELOW,
+    coverage_detail,
+    record_transcript_coverage,
+    transcript_coverage,
+)
 from services.ebook_integrity import format_is_alignable
 from services.epub_parser import extract_book_sentences
 from services.sync_engine import save_sync_map_with_result
@@ -82,6 +88,16 @@ class TranscriptRejected(RealignError):
     status_code = 409
 
 
+class TranscriptTooShort(RealignError):
+    """The cached transcript stops far short of the audio file (issue #814):
+    the same coverage floor the queue applies since #796. The queue keeps such a
+    transcript cached when it refuses to sync it, so without this check one
+    Re-align would sync exactly what the queue refused.
+    """
+
+    status_code = 409
+
+
 @dataclass(frozen=True)
 class RealignResult:
     points: int
@@ -112,7 +128,7 @@ async def realign_pair_from_cached_transcript(
     """
     pair = (await db.execute(
         select(BookPair)
-        .options(selectinload(BookPair.ebook))
+        .options(selectinload(BookPair.ebook), selectinload(BookPair.audiobook))
         .where(BookPair.id == pair_id)
     )).scalar_one_or_none()
     if not pair or not pair.ebook:
@@ -142,6 +158,18 @@ async def realign_pair_from_cached_transcript(
     whisper_sentences = [
         TranscribedSentence(**s) for s in json.loads(transcript.sentences_json)
     ]
+    # The coverage floor the queue applies (issues #796, #814). Convert skips it
+    # for the same reason it skips the rejection above: a converted ebook needs
+    # a map in its own coordinates whatever the transcript's shortcomings.
+    duration_seconds = pair.audiobook.duration_seconds if pair.audiobook else None
+    coverage = transcript_coverage(whisper_sentences, duration_seconds)
+    if (not allow_rejected and coverage is not None
+            and coverage < TRANSCRIPT_COVERAGE_FAIL_BELOW):
+        raise TranscriptTooShort(
+            f"{coverage_detail(coverage, duration_seconds)}, possibly padded audio. "
+            f"Re-aligning would sync a map with no sync points for the rest of the "
+            f"file; check the file, then use Re-transcribe from scratch."
+        )
     try:
         epub_sentences = await asyncio.to_thread(
             extract_book_sentences, pair.ebook.file_path
@@ -174,6 +202,7 @@ async def realign_pair_from_cached_transcript(
         )).scalar_one()
 
     _map, saved = await save_sync_map_with_result(db, pair_id, aligned, diagnostics)
+    await record_transcript_coverage(db, pair_id, coverage, duration_seconds)
     pair.status = PairStatus.SYNCED
     pair.synced_at = utcnow()
 

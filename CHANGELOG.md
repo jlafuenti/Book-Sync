@@ -42,6 +42,13 @@ operator must do by hand rather than read about afterwards.
 
 ### Fixed
 
+- Re-align and the bulk sync-map rebuild now refuse a transcript that covers under half of its
+  audio file, as the transcription queue does since #796 (#814). The queue keeps such a transcript
+  cached when it refuses it, so one Re-align used to sync the very map it had just refused. Re-align
+  answers 409 with the reason; the rebuild lists the pair as skipped. Convert still realigns, as it
+  does for a rejected transcript. A Re-align also records or clears the "covers only part of its
+  audio" flag. In Troubleshoot that category now offers Re-transcribe (admins, after a
+  confirmation) instead of Re-queue, which reused the same partial transcript and changed nothing.
 - A padded audiobook no longer passes as healthy and syncs (#796). An m4b whose container
   stated ~10.3 h held only ~2.7 h of audio (each chapter some minutes of sound, then nothing).
   The integrity check's full decode follows the stream's timestamps across the gaps, so it

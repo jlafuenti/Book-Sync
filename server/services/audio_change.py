@@ -86,6 +86,76 @@ TRANSCRIPT_COVERAGE_WARN_BELOW = 0.90
 TRANSCRIPT_COVERAGE_CHECK_TYPE = "transcript_coverage"
 
 
+def transcript_coverage(sentences, duration_seconds: Optional[int]) -> Optional[float]:
+    """How much of the file a transcript reaches: its last segment's end over
+    the audiobook's stated duration (issue #796).
+
+    None -- not judged -- without a stated duration or without sentences (the
+    empty case already fails on its own). Separate from
+    `queue_manager._transcript_covers_duration`, which answers a different
+    question (is a legacy cached row a transcript of *this* file at all?) with
+    a 95% floor and works on the stored JSON; this one grades a transcript
+    already in hand against the two thresholds above. Shared by the queue and
+    by re-align (issue #814), so both judge a transcript the same way.
+    """
+    if not duration_seconds or not sentences:
+        return None
+    last_end_ms = max((s.end_ms or 0) for s in sentences)
+    return last_end_ms / (duration_seconds * 1000.0)
+
+
+def _hm(seconds: float) -> str:
+    minutes = int(round(seconds / 60.0))
+    return f"{minutes // 60}:{minutes % 60:02d}"
+
+
+def coverage_detail(coverage: float, duration_seconds: int) -> str:
+    return (
+        f"Transcript covers only {coverage * 100:.0f}% of the file's stated length "
+        f"({_hm(coverage * duration_seconds)} of {_hm(duration_seconds)})"
+    )
+
+
+async def record_transcript_coverage(
+    db, pair_id: int, coverage: Optional[float], duration_seconds: Optional[int],
+) -> None:
+    """Store a pair-level verdict when a sync map is built from a transcript
+    covering under `TRANSCRIPT_COVERAGE_WARN_BELOW` of the file, so
+    Troubleshoot can list it; flip an earlier one back to passing when a later
+    transcript covers the file. A pair never flagged gets no row.
+
+    A helper: flushes, never commits -- the caller's session owns the
+    transaction (`docs/request-transactions.md`).
+    """
+    if coverage is None:
+        return
+    from models.library_issue import LibraryCheckResult
+    from utils import utcnow
+
+    flagged = coverage < TRANSCRIPT_COVERAGE_WARN_BELOW
+    row = (await db.execute(select(LibraryCheckResult).where(
+        LibraryCheckResult.item_type == "pair",
+        LibraryCheckResult.item_id == pair_id,
+        LibraryCheckResult.check_type == TRANSCRIPT_COVERAGE_CHECK_TYPE,
+    ))).scalar_one_or_none()
+    if row is None:
+        if not flagged:
+            return
+        row = LibraryCheckResult(
+            item_type="pair", item_id=pair_id, check_type=TRANSCRIPT_COVERAGE_CHECK_TYPE,
+        )
+        db.add(row)
+    row.ok = not flagged
+    row.detail = (
+        f"{coverage_detail(coverage, duration_seconds)}; the rest of the audio has "
+        f"no sync points. Check the file for silent padding; if the file is whole, "
+        f"the transcription was cut short -- use Re-transcribe from scratch."
+        if flagged else None
+    )
+    row.checked_at = utcnow()
+    await db.flush()
+
+
 async def invalidate_audiobook_transcripts(db: AsyncSession, audiobook_id: int) -> int:
     """Drop the cached transcript and demote an active pair's status for
     every pair on this audiobook -- the same reaction

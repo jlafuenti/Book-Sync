@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react'
 import { Link } from 'react-router-dom'
 import {
     getLibraryIssues, startLibraryScan, getLibraryScanProgress, cancelLibraryScan,
-    bulkDeleteIssues, replaceLibraryFile, requeuePair, dismissFailedAcsm,
+    bulkDeleteIssues, replaceLibraryFile, requeuePair, retranscribePair, dismissFailedAcsm,
     deleteEbook, deleteAudiobook, convertUnsupportedFile,
     rescanBook, deleteOrphanCovers,
     getEbook, getAudiobook, updateEbookMetadata, updateAudiobookMetadata,
@@ -46,8 +46,9 @@ const CATEGORIES = [
     // Issue #796: the pair synced from a transcript that stops well short of
     // the audio file (half to 90% of its stated length), usually a file padded
     // with silence. The fix is the file, so like the rows around it this is a
-    // pair row with no bulk action.
-    { key: 'transcript_partial', label: 'Transcripts covering only part of their audio', kind: 'transcription', tone: 'warning' },
+    // pair row with no bulk action. Its action is Re-transcribe, not Re-queue
+    // (issue #814): a re-queue reuses the cached partial transcript.
+    { key: 'transcript_partial', label: 'Transcripts covering only part of their audio', kind: 'retranscribe', tone: 'warning' },
     { key: 'duplicate', label: 'Duplicate files', kind: 'dup', tone: 'warning' },
     // Issue #692: content-similarity candidates (audio duration / ebook file
     // size, corroborated by title/author/narrator/ASIN/ISBN) — never a
@@ -79,7 +80,7 @@ function Chevron({ open }) {
 }
 
 /* ── A single issue section (collapsible + bulk select) ────────────── */
-function IssueSection({ cat, rows, canEdit, onChanged, onOpenDetails }) {
+function IssueSection({ cat, rows, canEdit, canRetranscribe, onChanged, onOpenDetails }) {
     const [open, setOpen] = useState(false)
     const [selected, setSelected] = useState(new Set())
     const [busy, setBusy] = useState(false)
@@ -87,6 +88,8 @@ function IssueSection({ cat, rows, canEdit, onChanged, onOpenDetails }) {
     const [confirmDelete, setConfirmDelete] = useState(false)
     // Row whose imported per-track AudioBook rows are about to be removed (multi_file).
     const [confirmRemoveTracks, setConfirmRemoveTracks] = useState(null)
+    // The pair row awaiting confirmation of a fresh transcription (issue #814).
+    const [confirmRetranscribe, setConfirmRetranscribe] = useState(null)
     const lastIdxRef = useRef(null)
     const replaceInputRef = useRef(null)
     const replaceTargetRef = useRef(null)
@@ -202,6 +205,15 @@ function IssueSection({ cat, rows, canEdit, onChanged, onOpenDetails }) {
     const doConvert = async (r) => {
         setBusy(true); setMsg(null)
         try { await convertUnsupportedFile(r.item_id, false); onChanged() }
+        catch (e) { setMsg({ type: 'error', text: e.message }) }
+        finally { setBusy(false) }
+    }
+
+    const doRetranscribe = async () => {
+        const r = confirmRetranscribe
+        setConfirmRetranscribe(null)
+        setBusy(true); setMsg(null)
+        try { await retranscribePair(r.pair_id); setMsg({ type: 'success', text: 'Queued for a fresh transcription' }); onChanged() }
         catch (e) { setMsg({ type: 'error', text: e.message }) }
         finally { setBusy(false) }
     }
@@ -383,6 +395,10 @@ function IssueSection({ cat, rows, canEdit, onChanged, onOpenDetails }) {
                                                         <button className="btn btn-sm btn-primary" disabled={busy}
                                                             onClick={() => doRequeue(r)}>Re-queue</button>
                                                     )}
+                                                    {cat.kind === 'retranscribe' && canRetranscribe && (
+                                                        <button className="btn btn-sm btn-primary" disabled={busy}
+                                                            onClick={() => setConfirmRetranscribe(r)}>Re-transcribe</button>
+                                                    )}
                                                     {cat.kind === 'acsm' && (
                                                         <button className="btn btn-sm btn-danger" disabled={busy}
                                                             onClick={() => doDismiss(r)}>Dismiss</button>
@@ -426,6 +442,21 @@ function IssueSection({ cat, rows, canEdit, onChanged, onOpenDetails }) {
                                 <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
                                     <button className="btn btn-secondary" onClick={() => setConfirmRemoveTracks(null)}>Cancel</button>
                                     <button className="btn btn-danger" onClick={doRemoveTracks}>Remove tracks</button>
+                                </div>
+                        </Modal>
+                    )}
+
+                    {confirmRetranscribe && (
+                        <Modal onClose={() => setConfirmRetranscribe(null)} labelledBy="confirm-retranscribe-title">
+                                <h3 id="confirm-retranscribe-title" style={{ marginTop: 0 }}>Re-transcribe this pair from scratch?</h3>
+                                <p>
+                                    The saved transcript is set aside and the audio is transcribed again. That is a
+                                    full transcription on the worker, hours for a long book. Check the audio file
+                                    first: if it is padded with silence, a new transcription will stop short again.
+                                </p>
+                                <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+                                    <button className="btn btn-secondary" onClick={() => setConfirmRetranscribe(null)}>Cancel</button>
+                                    <button className="btn btn-primary" onClick={doRetranscribe}>Re-transcribe from scratch</button>
                                 </div>
                         </Modal>
                     )}
@@ -709,7 +740,8 @@ function TroubleshootPage() {
 
             {activeCats.map(cat => (
                 <IssueSection key={cat.key} cat={cat} rows={data.categories[cat.key]}
-                    canEdit={canEdit} onChanged={load} onOpenDetails={openDetails} />
+                    canEdit={canEdit} canRetranscribe={hasMinRole('admin')}
+                    onChanged={load} onOpenDetails={openDetails} />
             ))}
 
             <SyncMapAuditSection canEdit={canEdit} />
