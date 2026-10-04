@@ -16,6 +16,8 @@ operator must do by hand rather than read about afterwards.
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-10-04
+
 ### Added
 
 - "Re-transcribe from scratch" on the Transcription Editor page (admin only; API `POST
@@ -39,6 +41,12 @@ operator must do by hand rather than read about afterwards.
   -25 dB. A book the check cannot judge (not enough speech, or too short) is not reported, and is
   tried again on the next run rather than cached. It adds a few seconds per transcribed book to
   a verify run.
+
+### Changed
+
+- Dependency updates from Dependabot: WorkManager 2.12 (two minor versions; it needs minSdk 24,
+  and the app's is 26) and Gradle 9.8 for the Android build, plus core-ktx, navigation-compose
+  and Kover patch updates (#815).
 
 ### Fixed
 
