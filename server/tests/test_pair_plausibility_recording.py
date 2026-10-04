@@ -149,3 +149,56 @@ async def test_rewriting_an_existing_row_advances_checked_at(db):
 
     row = (await _rows(db, pair.id))[0]
     assert row.checked_at > stale
+
+
+# ---------------------------------------------------------------------------
+# Issue #798: the EPUB-conversion relink re-points a pair at a different ebook,
+# so the verdict has to be taken for the ebook the pair now has.
+# ---------------------------------------------------------------------------
+
+
+async def test_relinking_a_pair_to_a_converted_epub_records_a_verdict(db):
+    """A pair re-pointed onto a converted EPUB used to keep whatever verdict
+    (or none at all) it had for the source file. The pair that had no row must
+    get one, and it describes the new ebook, not the old one."""
+    from routers.library import _relink_or_cleanup_pairs
+    from tests.factories import make_audiobook, make_ebook
+
+    source = await make_ebook(db, filename="book.mobi", format="mobi", file_size=50_000)
+    epub = await make_ebook(db, filename="book.epub", file_size=2_800_000)
+    audio = await make_audiobook(db, duration_seconds=132)
+    pair = BookPair(ebook_id=source.id, audiobook_id=audio.id, status=PairStatus.SYNCED)
+    db.add(pair)
+    await db.commit()
+    await db.refresh(pair)
+    assert await _rows(db, pair.id) == []
+
+    await _relink_or_cleanup_pairs(source.id, epub, db)
+    await db.commit()
+
+    rows = await _rows(db, pair.id)
+    assert len(rows) == 1
+    assert rows[0].ok is False  # 2.8 MB of EPUB against 132 s of audio
+
+
+async def test_relinking_replaces_a_stale_verdict_for_the_old_file(db):
+    from routers.library import _relink_or_cleanup_pairs
+    from tests.factories import make_audiobook, make_ebook
+
+    source = await make_ebook(db, filename="book.mobi", format="mobi", file_size=2_800_000)
+    epub = await make_ebook(db, filename="book.epub", file_size=600_000)
+    audio = await make_audiobook(db, duration_seconds=10 * 3600)
+    pair = BookPair(ebook_id=source.id, audiobook_id=audio.id, status=PairStatus.SYNCED)
+    db.add(pair)
+    await db.flush()
+    db.add(LibraryCheckResult(item_type="pair", item_id=pair.id, check_type=CHECK_TYPE,
+                              ok=False, detail="about the source file"))
+    await db.commit()
+
+    await _relink_or_cleanup_pairs(source.id, epub, db)
+    await db.commit()
+
+    rows = await _rows(db, pair.id)
+    assert len(rows) == 1
+    assert rows[0].ok is True
+    assert rows[0].detail is None
