@@ -21,6 +21,7 @@ from models.settings import SystemSetting
 from services.pair_plausibility import (
     check_pair_plausibility,
     estimate_word_count,
+    probe_real_duration,
     record_pair_plausibility,
 )
 from utils import utcnow
@@ -302,6 +303,7 @@ async def auto_match_books(db: AsyncSession) -> int:
     # whose several candidates all reach the plausibility check is still parsed
     # once, and an ebook none of whose candidates gets that far is never parsed.
     word_counts = {}
+    real_durations = {}
 
     for _score, ebook, audiobook in candidates:
         if ebook.id in matched_ebook_ids or audiobook.id in matched_audiobook_ids:
@@ -325,11 +327,18 @@ async def auto_match_books(db: AsyncSession) -> int:
             if ebook.id not in word_counts:
                 word_counts[ebook.id] = await estimate_word_count(ebook.file_path)
             word_count = word_counts[ebook.id]
+        # Issue #796: a padded file is judged on the audio it actually holds.
+        # One header-only ffprobe per audiobook that reaches this check,
+        # cached like the word count above.
+        if audiobook.id not in real_durations:
+            real_durations[audiobook.id] = await probe_real_duration(audiobook)
+        real_duration = real_durations[audiobook.id]
         ok, detail = check_pair_plausibility(
             ebook_file_size=ebook.file_size,
             duration_seconds=audiobook.duration_seconds,
             is_abridged=audiobook.is_abridged,
             word_count=word_count,
+            real_duration_seconds=real_duration,
         )
         if not ok:
             logger.warning(
@@ -361,7 +370,8 @@ async def auto_match_books(db: AsyncSession) -> int:
         # costs nothing (`word_count` itself, the only expensive part, was
         # already computed once above and is passed through, not
         # recomputed).
-        await record_pair_plausibility(db, pair, ebook, audiobook, word_count=word_count)
+        await record_pair_plausibility(db, pair, ebook, audiobook, word_count=word_count,
+                                       real_duration_seconds=real_duration)
 
     if auto_transcribe and new_pair_ids:
         from services.queue_manager import add_to_queue

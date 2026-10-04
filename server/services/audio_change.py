@@ -69,6 +69,22 @@ AUDIO_DURATION_FINGERPRINT_TOLERANCE_SEC = 2
 # an untouched file.
 TRANSCRIPT_COVERAGE_MIN_FRACTION = 0.95
 
+# Coverage of the transcript a sync map is about to be built from — fresh or
+# cached — as its last segment's end over the audiobook's stated duration
+# (issue #796). A padded file (the container states hours its stream does not
+# hold) produced a transcript ending at 4% of the stated length, and the pair
+# still went SYNCED. Measured over 247 transcribed books in a real library:
+# minimum 97.2% (a five-minute untranscribed tail), 1st percentile 99.7%,
+# median 100%, none below 90%.
+#
+# Below FAIL: the queue item fails with the reason and the pair is not synced.
+# Below WARN: the pair syncs, but the verdict is recorded under
+# TRANSCRIPT_COVERAGE_CHECK_TYPE (a pair-level `library_check_results` row) and
+# Troubleshoot lists it. Both sit far below anything a healthy book produced.
+TRANSCRIPT_COVERAGE_FAIL_BELOW = 0.50
+TRANSCRIPT_COVERAGE_WARN_BELOW = 0.90
+TRANSCRIPT_COVERAGE_CHECK_TYPE = "transcript_coverage"
+
 
 async def invalidate_audiobook_transcripts(db: AsyncSession, audiobook_id: int) -> int:
     """Drop the cached transcript and demote an active pair's status for

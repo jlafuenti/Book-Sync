@@ -40,6 +40,8 @@ from typing import Optional, Tuple
 from sqlalchemy import select
 
 from models.library_issue import LibraryCheckResult
+from services import audio_integrity
+from services.audio_integrity import is_padded
 from utils import utcnow
 
 logger = logging.getLogger(__name__)
@@ -93,8 +95,17 @@ def check_pair_plausibility(
     duration_seconds: Optional[float],
     is_abridged: Optional[bool] = False,
     word_count: Optional[int] = None,
+    real_duration_seconds: Optional[float] = None,
 ) -> Tuple[bool, Optional[str]]:
     """Return `(ok, detail)`; `detail` is None whenever `ok` is True.
+
+    `real_duration_seconds` is the audio the stream actually holds, from its
+    header sample count (`audio_integrity.probe_real_audio_seconds`), or None
+    when unknown. When it shows the file is padded — far less audio than the
+    container states (`audio_integrity.is_padded`) — the pair is judged on
+    the real length (issue #796). Otherwise the stated `duration_seconds` is
+    used, as it always was: within the measured noise the two agree, and the
+    stated length is what every other part of the app uses.
 
     `ok=True` means "no reason to complain", which deliberately includes "cannot
     judge". Absent data is not a finding: `duration_seconds` is not always
@@ -124,6 +135,18 @@ def check_pair_plausibility(
     if not duration_seconds:
         return True, None
 
+    # A padded file states hours its stream does not hold (issue #796); judge
+    # on the audio that is there, and say why the length differs from the one
+    # the file reports.
+    padding_note = ""
+    if is_padded(real_duration_seconds, duration_seconds):
+        padding_note = (
+            f" The file states {_human_duration(duration_seconds)}, but its audio "
+            f"stream holds only {_human_duration(real_duration_seconds)}; the rest "
+            f"is padding."
+        )
+        duration_seconds = real_duration_seconds
+
     hours = duration_seconds / 3600.0
     length = _human_duration(duration_seconds)
 
@@ -148,7 +171,7 @@ def check_pair_plausibility(
                     f"than this ebook's text accounts for, which usually means "
                     f"the wrong audiobook was matched."
                 )
-            return False, detail
+            return False, detail + padding_note
         # The precise signal passed. Its verdict is final — do not second-guess
         # a real word-count measurement with the imprecise byte heuristic
         # below (issue #693).
@@ -182,7 +205,7 @@ def check_pair_plausibility(
             f"this ebook's text accounts for, which usually means the wrong "
             f"audiobook was matched."
         )
-    return False, detail
+    return False, detail + padding_note
 
 
 async def estimate_word_count(path: Optional[str]) -> Optional[int]:
@@ -215,8 +238,35 @@ async def estimate_word_count(path: Optional[str]) -> Optional[int]:
     return len(text.split())
 
 
-async def record_pair_plausibility(db, pair, ebook, audiobook, word_count=None) -> bool:
+async def probe_real_duration(audiobook) -> Optional[float]:
+    """The audio `audiobook`'s stream actually holds, in seconds, or None.
+
+    Issue #796: the plausibility check is only as good as the length it is
+    given, and a padded file's stated length is hours too long. One
+    header-only ffprobe (no decode), run through `asyncio.to_thread`. Skipped
+    — None, no subprocess — when the check has nothing to judge anyway: no
+    stated length, an abridged audiobook, or no file path.
+    """
+    if (audiobook is None or not getattr(audiobook, "duration_seconds", None)
+            or getattr(audiobook, "is_abridged", False)):
+        return None
+    path = getattr(audiobook, "file_path", None)
+    if not path:
+        return None
+    # Looked up on the module at call time so tests can stand in for ffprobe.
+    return await asyncio.to_thread(audio_integrity.probe_real_audio_seconds, path)
+
+
+_PROBE = object()  # sentinel: "not supplied, probe for it"
+
+
+async def record_pair_plausibility(db, pair, ebook, audiobook, word_count=None,
+                                   real_duration_seconds=_PROBE) -> bool:
     """Run the check for `pair` and store the verdict. Returns `ok`.
+
+    `real_duration_seconds` (issue #796) is probed here (`probe_real_duration`)
+    unless the caller already has it — `auto_match_books` probes once for its
+    own verdict and passes the result, None included, so it is not probed twice.
 
     Takes the already-loaded `ebook` and `audiobook` rather than re-querying:
     both call sites have them in hand, and `auto_match` runs this inside a loop
@@ -240,11 +290,14 @@ async def record_pair_plausibility(db, pair, ebook, audiobook, word_count=None) 
     disappear from Troubleshoot Library, rather than lingering as a stale
     `ok=False` row describing a problem that no longer exists.
     """
+    if real_duration_seconds is _PROBE:
+        real_duration_seconds = await probe_real_duration(audiobook)
     ok, detail = check_pair_plausibility(
         ebook_file_size=getattr(ebook, "file_size", None),
         duration_seconds=getattr(audiobook, "duration_seconds", None),
         is_abridged=getattr(audiobook, "is_abridged", False),
         word_count=word_count,
+        real_duration_seconds=real_duration_seconds,
     )
 
     row = (await db.execute(select(LibraryCheckResult).where(

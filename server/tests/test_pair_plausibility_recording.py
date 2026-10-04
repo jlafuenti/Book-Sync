@@ -202,3 +202,65 @@ async def test_relinking_replaces_a_stale_verdict_for_the_old_file(db):
     assert len(rows) == 1
     assert rows[0].ok is True
     assert rows[0].detail is None
+
+
+# ---------------------------------------------------------------------------
+# Padded audio (issue #796)
+# ---------------------------------------------------------------------------
+
+
+def _real_length(monkeypatch, seconds, calls=None):
+    """Stand in for the ffprobe sample count (blocking; run via to_thread)."""
+    from services import audio_integrity
+
+    def probe(path):
+        if calls is not None:
+            calls.append(path)
+        return seconds
+
+    monkeypatch.setattr(audio_integrity, "probe_real_audio_seconds", probe)
+
+
+async def test_a_padded_file_is_recorded_on_its_real_length(db, monkeypatch):
+    """Stated 10.3 h, real 2.7 h: 100k words is plausible on the first and not
+    on the second."""
+    pair, eb, ab = await _pair(db, ebook_size=600_000, duration=int(10.3 * 3600))
+    calls = []
+    _real_length(monkeypatch, 2.7 * 3600, calls)
+
+    ok = await record_pair_plausibility(db, pair, eb, ab, word_count=100_000)
+
+    assert ok is False
+    assert calls == ["/audio/novel.m4b"]
+    row = (await _rows(db, pair.id))[0]
+    assert row.ok is False
+    assert "2.7 hours" in row.detail
+
+
+async def test_an_unpadded_file_is_recorded_on_its_stated_length(db, monkeypatch):
+    pair, eb, ab = await _pair(db, ebook_size=600_000, duration=int(10.3 * 3600))
+    _real_length(monkeypatch, 10.3 * 3600 * 0.99)
+
+    ok = await record_pair_plausibility(db, pair, eb, ab, word_count=100_000)
+
+    assert ok is True
+
+
+async def test_an_unknown_real_length_is_recorded_on_the_stated_length(db, monkeypatch):
+    pair, eb, ab = await _pair(db, ebook_size=600_000, duration=int(10.3 * 3600))
+    _real_length(monkeypatch, None)
+
+    ok = await record_pair_plausibility(db, pair, eb, ab, word_count=100_000)
+
+    assert ok is True
+
+
+async def test_no_probe_when_there_is_no_stated_length(db, monkeypatch):
+    """Nothing to judge, so no reason to spawn ffprobe."""
+    pair, eb, ab = await _pair(db, ebook_size=600_000, duration=None)
+    calls = []
+    _real_length(monkeypatch, 100.0, calls)
+
+    await record_pair_plausibility(db, pair, eb, ab)
+
+    assert calls == []

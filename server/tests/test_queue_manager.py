@@ -2469,3 +2469,143 @@ async def test_an_empty_transcription_on_a_first_run_writes_no_transcript(db, mo
     assert await _transcripts_for(pair.id) == []
     assert (await _get(TranscriptionQueueItem, item.id)).status == "failed"
     assert (await _get(BookPair, pair.id)).status == PairStatus.ERROR
+
+
+# ---------------------------------------------------------------------------
+# A transcript far short of the file does not sync (issue #796)
+#
+# A padded file stated ~10.3 h while holding ~2.7 h of audio; its transcript
+# ended at 4% of the stated length and the pair still went SYNCED. Coverage is
+# the transcript's last end time over the audiobook's stated duration. Under
+# half: the item fails with the reason. Under 90%: it syncs, and Troubleshoot
+# lists it. Measured over 247 transcribed books: none below 97.2%.
+# ---------------------------------------------------------------------------
+
+
+def _rows_ending_at(end_ms):
+    return [
+        ("the quick brown fox jumps over the lazy dog", 0, end_ms // 2),
+        ("pack my box with five dozen liquor jugs", end_ms // 2, end_ms),
+    ]
+
+
+async def _coverage_rows(pair_id):
+    from models.library_issue import LibraryCheckResult
+    from services.audio_change import TRANSCRIPT_COVERAGE_CHECK_TYPE
+
+    async with async_session() as s:
+        return (await s.execute(select(LibraryCheckResult).where(
+            LibraryCheckResult.item_type == "pair",
+            LibraryCheckResult.item_id == pair_id,
+            LibraryCheckResult.check_type == TRANSCRIPT_COVERAGE_CHECK_TYPE,
+        ))).scalars().all()
+
+
+def test_the_coverage_thresholds_are_the_chosen_ones():
+    from services.audio_change import (
+        TRANSCRIPT_COVERAGE_FAIL_BELOW,
+        TRANSCRIPT_COVERAGE_WARN_BELOW,
+    )
+
+    assert TRANSCRIPT_COVERAGE_FAIL_BELOW == 0.50
+    assert TRANSCRIPT_COVERAGE_WARN_BELOW == 0.90
+
+
+async def test_a_fresh_transcript_covering_4_percent_does_not_sync(db, monkeypatch):
+    pair = await make_book_pair(db, status=PairStatus.AUTO_MATCHED, duration_seconds=1000)
+    item = await _seed_item(db, pair.id, status="pending")
+    _install_pipeline(monkeypatch, _PipelineProvider(rows=_rows_ending_at(40_000)))
+
+    await queue_manager._process_next_item()
+
+    refreshed = await _get(TranscriptionQueueItem, item.id)
+    assert refreshed.status == "failed"
+    assert "covers only 4%" in refreshed.error_message
+    assert "padded" in refreshed.error_message
+    # The same failure path as any other: Troubleshoot's failed-transcription
+    # list reads pairs in ERROR with the item's error message.
+    assert (await _get(BookPair, pair.id)).status == PairStatus.ERROR
+    assert await _sync_map_for(pair.id) is None
+    # The transcript is kept: the worker's hours are not thrown away.
+    assert len(await _transcripts_for(pair.id)) == 1
+
+
+async def test_a_requeue_reuses_the_short_transcript_and_still_does_not_sync(db, monkeypatch):
+    """The cached copy is held to the same floor, or a re-queue would sync
+    the very transcript the first run refused."""
+    pair = await make_book_pair(db, status=PairStatus.AUTO_MATCHED, duration_seconds=1000)
+    await _seed_item(db, pair.id, status="pending")
+    provider = _PipelineProvider(rows=_rows_ending_at(40_000))
+    _install_pipeline(monkeypatch, provider)
+    await queue_manager._process_next_item()
+
+    item = await _seed_item(db, pair.id, status="pending")
+    await queue_manager._process_next_item()
+
+    assert provider.transcribe_calls == 1, "no second transcription"
+    refreshed = await _get(TranscriptionQueueItem, item.id)
+    assert refreshed.status == "failed"
+    assert "covers only 4%" in refreshed.error_message
+    assert (await _get(BookPair, pair.id)).status == PairStatus.ERROR
+
+
+async def test_a_fresh_transcript_covering_70_percent_syncs_and_is_flagged(db, monkeypatch):
+    pair = await make_book_pair(db, status=PairStatus.AUTO_MATCHED, duration_seconds=1000)
+    item = await _seed_item(db, pair.id, status="pending")
+    _install_pipeline(monkeypatch, _PipelineProvider(rows=_rows_ending_at(700_000)))
+
+    await queue_manager._process_next_item()
+
+    assert (await _get(TranscriptionQueueItem, item.id)).status == "completed"
+    assert (await _get(BookPair, pair.id)).status == PairStatus.SYNCED
+    rows = await _coverage_rows(pair.id)
+    assert len(rows) == 1
+    assert rows[0].ok is False
+    assert "70%" in rows[0].detail
+
+
+async def test_a_fresh_transcript_covering_99_percent_syncs_unflagged(db, monkeypatch):
+    pair = await make_book_pair(db, status=PairStatus.AUTO_MATCHED, duration_seconds=1000)
+    item = await _seed_item(db, pair.id, status="pending")
+    _install_pipeline(monkeypatch, _PipelineProvider(rows=_rows_ending_at(990_000)))
+
+    await queue_manager._process_next_item()
+
+    assert (await _get(TranscriptionQueueItem, item.id)).status == "completed"
+    assert (await _get(BookPair, pair.id)).status == PairStatus.SYNCED
+    assert [r for r in await _coverage_rows(pair.id) if r.ok is False] == []
+
+
+async def test_a_flag_clears_when_a_later_transcript_covers_the_file(db, monkeypatch):
+    pair = await make_book_pair(db, status=PairStatus.AUTO_MATCHED, duration_seconds=1000)
+    await _seed_item(db, pair.id, status="pending")
+    _install_pipeline(monkeypatch, _PipelineProvider(rows=_rows_ending_at(700_000)))
+    await queue_manager._process_next_item()
+    assert (await _coverage_rows(pair.id))[0].ok is False
+
+    # The file is replaced (a new path misses the cache) and re-transcribed.
+    async with async_session() as s:
+        audiobook = (await s.execute(
+            select(AudioBook).join(BookPair, BookPair.audiobook_id == AudioBook.id)
+            .where(BookPair.id == pair.id)
+        )).scalar_one()
+        audiobook.file_path = "/x/replaced/full.m4b"
+        await s.commit()
+    await _seed_item(db, pair.id, status="pending")
+    _install_pipeline(monkeypatch, _PipelineProvider(rows=_rows_ending_at(995_000)))
+    await queue_manager._process_next_item()
+
+    rows = await _coverage_rows(pair.id)
+    assert len(rows) == 1
+    assert rows[0].ok is True
+
+
+async def test_coverage_is_not_judged_without_a_stated_duration(db, monkeypatch):
+    pair = await make_book_pair(db, status=PairStatus.AUTO_MATCHED, duration_seconds=None)
+    item = await _seed_item(db, pair.id, status="pending")
+    _install_pipeline(monkeypatch, _PipelineProvider(rows=_rows_ending_at(40_000)))
+
+    await queue_manager._process_next_item()
+
+    assert (await _get(TranscriptionQueueItem, item.id)).status == "completed"
+    assert await _coverage_rows(pair.id) == []

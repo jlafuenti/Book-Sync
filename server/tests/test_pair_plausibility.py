@@ -313,3 +313,57 @@ def test_the_byte_only_flag_says_no_word_count_was_available_too_much_audio():
     )
     assert ok is False
     assert "word count" in detail.lower()
+
+
+# ---------------------------------------------------------------------------
+# Padded audio (issue #796): judge on the real length, not the stated one
+# ---------------------------------------------------------------------------
+#
+# A container stated ~10.3 h while its stream held ~2.7 h. On the stated length
+# a novel's words-per-hour looked like a normal full reading; on the real one it
+# is nearly four times too fast. `real_duration_seconds` is the sample-derived
+# length (`audio_integrity.probe_real_audio_seconds`), or None when unknown.
+
+
+def test_a_padded_file_is_judged_on_its_real_length():
+    ok, detail = check_pair_plausibility(
+        ebook_file_size=600_000, duration_seconds=_hours(10.3),
+        word_count=100_000, real_duration_seconds=_hours(2.7),
+    )
+
+    assert ok is False
+    assert "2.7 hours" in detail
+    # Say why the number differs from the length the file reports.
+    assert "10.3 hours" in detail
+
+
+def test_a_padded_file_is_judged_on_its_real_length_by_bytes_too():
+    ok, _detail = check_pair_plausibility(
+        ebook_file_size=12_000_000, duration_seconds=_hours(10.3),
+        real_duration_seconds=_hours(2.7) / 5,
+    )
+
+    assert ok is False
+
+
+@pytest.mark.parametrize("ratio", [0.93, 1.0, 1.05])
+def test_a_real_length_close_to_the_stated_one_changes_nothing(ratio):
+    """Within the measured noise, the stated length is used as before: a book
+    that reads at 9.7k words/hour on it must stay plausible."""
+    stated = _hours(10.3)
+    ok, detail = check_pair_plausibility(
+        ebook_file_size=600_000, duration_seconds=stated,
+        word_count=100_000, real_duration_seconds=stated * ratio,
+    )
+
+    assert (ok, detail) == (True, None)
+
+
+def test_a_padded_file_that_still_fits_the_text_is_not_flagged():
+    """Padding alone is the integrity check's finding, not this one's."""
+    ok, detail = check_pair_plausibility(
+        ebook_file_size=600_000, duration_seconds=_hours(20),
+        word_count=100_000, real_duration_seconds=_hours(10),
+    )
+
+    assert (ok, detail) == (True, None)

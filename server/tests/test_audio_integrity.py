@@ -23,8 +23,15 @@ import subprocess
 from services import audio_integrity
 from services.audio_integrity import check_audio_integrity, is_unverified
 
+# The header probe asks for JSON: the format duration plus the audio stream's
+# frame count (issue #796). 155,039 AAC-LC frames at 44.1 kHz is 3600 s.
 _HEALTHY_PROBE = subprocess.CompletedProcess(
-    args=["ffprobe"], returncode=0, stdout="3600.0\n", stderr=""
+    args=["ffprobe"], returncode=0, stderr="",
+    stdout=(
+        '{"streams": [{"codec_name": "aac", "profile": "LC", '
+        '"sample_rate": "44100", "nb_frames": "155039"}], '
+        '"format": {"duration": "3600.000000"}}'
+    ),
 )
 
 

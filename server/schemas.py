@@ -984,6 +984,10 @@ class TroubleshootCategories(StrictResponse):
     #: now on disk (Library verify, `services.transcript_timing`), so the sync
     #: map is seconds off everywhere. Fixed by re-transcribing the pair.
     transcript_out_of_step: List[TroubleshootPairItem]
+    #: Issue #796 — the pair synced from a transcript that stops well short of
+    #: the audio file (between half and 90% of its stated length; under half
+    #: the job fails instead). Usually a padded file. Recorded by the queue.
+    transcript_partial: List[TroubleshootPairItem]
     duplicate: List[TroubleshootItem]
     #: Issue #692 — content-similarity candidates the exact-hash check above
     #: cannot see (a remux, a re-tag, a metadata write-back). Report-only.
