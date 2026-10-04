@@ -60,7 +60,7 @@ function issuesWithChapterEncodingBad(rows, extra = {}) {
     const categories = {
         missing: [], zero_byte: [], chapter_encoding_bad: rows, audio_corrupt: [],
         ebook_drm: [], ebook_unreadable: [], unsupported_format: [], multi_file_audiobook: [],
-        sync_map_missing: [], implausible_pair: [], transcript_out_of_step: [],
+        sync_map_missing: [], implausible_pair: [], transcript_out_of_step: [], transcript_partial: [],
         duplicate: [], possible_duplicate: [], missing_cover: [], orphaned_cover: [],
         failed_transcription: [], failed_acsm: [],
         ...extra,
@@ -576,5 +576,25 @@ describe('TroubleshootPage transcripts out of step with their audio', () => {
         expect(await screen.findByText(/4.9 s early against this audio file/)).toBeInTheDocument()
         fireEvent.click(screen.getByRole('button', { name: 'Re-queue' }))
         await waitFor(() => expect(requeuePairMock).toHaveBeenCalledWith(7))
+    })
+})
+
+describe('TroubleshootPage transcripts covering only part of their audio', () => {
+    // Issue #796: the pair synced from a transcript that stops well short of
+    // the file, usually because the file is padded with silence.
+    const row = {
+        pair_id: 9, ebook_id: 5, audiobook_id: 6, title: 'Axis Test', author: 'An Author',
+        detail: "Transcript covers only 70% of the file's stated length (7:00 of 10:00); the rest of the audio has no sync points.",
+    }
+
+    it('lists the pair with its detail', async () => {
+        getLibraryIssuesMock.mockResolvedValue(
+            issuesWithChapterEncodingBad([], { transcript_partial: [row] })
+        )
+        renderPage()
+
+        fireEvent.click(await screen.findByText(/Transcripts covering only part of their audio/))
+
+        expect(await screen.findByText(/covers only 70% of the file/)).toBeInTheDocument()
     })
 })

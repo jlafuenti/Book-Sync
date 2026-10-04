@@ -42,6 +42,38 @@ operator must do by hand rather than read about afterwards.
 
 ### Fixed
 
+- A padded audiobook no longer passes as healthy and syncs (#796). An m4b whose container
+  stated ~10.3 h held only ~2.7 h of audio (each chapter some minutes of sound, then nothing).
+  The integrity check's full decode follows the stream's timestamps across the gaps, so it
+  "decoded fully"; the pair-plausibility check used the stated length, so the words-per-hour
+  rate looked normal; and the pair went synced from a transcript that ended at 4% of the file.
+  Three checks now catch it:
+  - **Audio integrity** (Library verify, and the queue's gate before a file is sent to the
+    transcriber) reads the header frame count and fails a file whose real audio
+    (`frames x samples per frame / sample rate`) is under 80% of its stated length, with a
+    detail such as `padded: ~2.7 h of audio in a file stating 10.3 h`. Header only, no extra
+    decode. AAC-LC counts 1024 samples per frame and HE-AAC 2048 at the reported rate. A file
+    whose header carries no frame count, as most MP3s do, or an unknown codec, is not judged
+    and passes as before.
+  - **Pair plausibility** judges a padded file on its real length instead of the stated one, at
+    pair creation, auto-match and Library verify's re-check.
+  - **Transcript coverage**: before a sync map is built, the transcript's last timestamp is
+    compared with the audiobook's stated length. Under 50%, the job fails with the reason (for
+    example "Transcript covers only 4% of the file's stated length ... possibly padded audio")
+    and shows under Troubleshoot's failed transcriptions; the pair is not marked synced. The
+    transcript is kept, so a re-queue of the same file costs no transcription time (and fails
+    the same way); replacing the file transcribes it afresh. Between 50% and 90%, the pair syncs
+    as before and Troubleshoot lists it under a new category, "Transcripts covering only part of
+    their audio" (`transcript_partial` in `GET /api/troubleshoot/issues`).
+
+  The thresholds come from a real library: over 413 files with a frame count, the real length
+  was 92.9% to 105% of the stated one (median 100%), against 26% for the padded file; over 247
+  transcribed books, transcripts reached at least 97.2% of the stated length (median 100%),
+  against 4%. Apart from the file that prompted this, no file in that library measured under 80%
+  and no transcript under 90%, so no stored result needs clearing. Library verify keeps reusing
+  an audio-integrity result while the file's size and modification time are unchanged, so files
+  it has already checked are not re-checked for padding until they change; the queue's gate
+  runs the check on every new transcription job.
 - Auto-match no longer lets a weaker ebook take an audiobook that belongs to a better one (#803).
   It used to give each ebook only its single best-scoring audiobook: if the plausibility check
   rejected that pair (audio far too short for the ebook's word count), the ebook got nothing and

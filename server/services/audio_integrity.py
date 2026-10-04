@@ -10,7 +10,12 @@ before failing with a cryptic error.
 `check_audio_integrity` performs a two-stage, full-decode validation:
 
   1. ffprobe the container header / duration. Catches truncated or unreadable
-     containers (e.g. a `moov` atom that extends past EOF) instantly.
+     containers (e.g. a `moov` atom that extends past EOF) instantly. The same
+     probe reads the audio stream's frame count, which catches a *padded*
+     file: one whose container states far more time than its stream holds
+     (issue #796). ffmpeg's decode below follows the stream's timestamps
+     across the gaps and so "fully decodes" a padded file to its stated
+     length; only the sample count gives it away.
   2. Full decode via `ffmpeg -v error -i <file> -f null -`. Catches mid-stream
      corruption (e.g. an AAC stream riddled with invalid packets) that a header
      probe alone would miss.
@@ -19,11 +24,41 @@ Designed to run on the server, where audiobook files are locally mounted and
 ffmpeg/ffprobe are available, BEFORE anything is sent to the remote transcriber.
 """
 
+import json
 import logging
 import subprocess
-from typing import Tuple
+from typing import Optional, Tuple
 
 logger = logging.getLogger(__name__)
+
+# A file whose header sample count accounts for less than this fraction of its
+# stated duration is padded (issue #796). Measured on a real library of 446
+# audiobooks: 413 could be measured this way (the 33 MP3s carry no frame count
+# in their header), with a median ratio of 1.000, 1st percentile 0.998, minimum
+# 0.929 (a file whose transcript nevertheless covers 99.9% of its stated length,
+# so noise rather than padding) and maximum 1.050. The padded file that
+# prompted this measured 0.26. 0.80 sits well clear of both.
+PADDED_AUDIO_MAX_RATIO = 0.80
+
+# Samples per frame, for turning a header frame count into seconds. AAC-LC
+# (and the rarer Main/LTP profiles) code 1024 samples per frame. HE-AAC and
+# HE-AACv2 code 1024 at the core rate, but ffprobe reports the doubled SBR
+# output rate, so 2048 at the reported rate — the three HE-AAC files in the
+# measurement above agreed. Any other AAC profile (LD/ELD use 480/512), a
+# missing profile, or another codec: not judged.
+_AAC_SAMPLES_PER_FRAME = {
+    "LC": 1024,
+    "Main": 1024,
+    "LTP": 1024,
+    "HE-AAC": 2048,
+    "HE-AACv2": 2048,
+}
+# MPEG-1 Layer III (32-48 kHz) codes 1152 samples per frame; MPEG-2 and 2.5
+# (below 32 kHz) code 576. MP3 headers seldom carry a frame count at all, in
+# which case the file is not judged.
+_MP3_SAMPLES_PER_FRAME_MPEG1 = 1152
+_MP3_SAMPLES_PER_FRAME_LOW_RATE = 576
+_MP3_MPEG1_MIN_RATE = 32000
 
 # Substrings in ffmpeg/ffprobe stderr that indicate genuine media corruption.
 # Public: also used by services.chapter_repair to distinguish "ffmpeg can't
@@ -72,6 +107,100 @@ def stderr_indicates_corruption(stderr: str) -> bool:
     return any(marker in low for marker in CORRUPTION_MARKERS)
 
 
+def _run_header_probe(path: str) -> subprocess.CompletedProcess:
+    """ffprobe the container duration and the first audio stream's frame count.
+
+    Header only: nothing is decoded. Raises `subprocess.TimeoutExpired` or
+    `FileNotFoundError` (no ffprobe) for the caller to handle.
+    """
+    cmd = [
+        "ffprobe", "-v", "error",
+        "-select_streams", "a:0",
+        "-show_entries",
+        "format=duration:stream=codec_name,profile,sample_rate,nb_frames",
+        "-of", "json",
+        path,
+    ]
+    return subprocess.run(cmd, capture_output=True, text=True, timeout=_PROBE_TIMEOUT_SEC)
+
+
+def _parse_header_probe(stdout: str) -> Tuple[Optional[str], dict]:
+    """`(format duration string or None, first audio stream's fields or {})`."""
+    try:
+        data = json.loads(stdout or "")
+    except ValueError:
+        return None, {}
+    if not isinstance(data, dict):
+        return None, {}
+    duration = (data.get("format") or {}).get("duration")
+    streams = data.get("streams") or []
+    stream = streams[0] if streams and isinstance(streams[0], dict) else {}
+    return duration, stream
+
+
+def _positive_number(value) -> Optional[float]:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if number > 0 else None
+
+
+def sample_derived_seconds(stream: dict) -> Optional[float]:
+    """The audio the stream actually holds, from its header frame count:
+    `nb_frames * samples_per_frame / sample_rate`.
+
+    None — "not judged" — whenever that can't be worked out: no frame count
+    (most MP3s), a missing or zero sample rate, or a codec/profile whose
+    frame size isn't known here.
+    """
+    frames = _positive_number(stream.get("nb_frames"))
+    rate = _positive_number(stream.get("sample_rate"))
+    if frames is None or rate is None:
+        return None
+    codec = stream.get("codec_name")
+    if codec == "aac":
+        per_frame = _AAC_SAMPLES_PER_FRAME.get(stream.get("profile"))
+    elif codec == "mp3":
+        per_frame = (_MP3_SAMPLES_PER_FRAME_MPEG1 if rate >= _MP3_MPEG1_MIN_RATE
+                     else _MP3_SAMPLES_PER_FRAME_LOW_RATE)
+    else:
+        per_frame = None
+    if per_frame is None:
+        return None
+    return frames * per_frame / rate
+
+
+def is_padded(real_seconds: Optional[float], stated_seconds: Optional[float]) -> bool:
+    """Whether the stream holds well under the container's stated length
+    (`PADDED_AUDIO_MAX_RATIO`). False when either side is unknown."""
+    if not real_seconds or not stated_seconds:
+        return False
+    return real_seconds < stated_seconds * PADDED_AUDIO_MAX_RATIO
+
+
+def probe_real_audio_seconds(path: str) -> Optional[float]:
+    """The sample-derived length of `path`'s audio, or None if unknown.
+
+    Blocking (one header-only ffprobe): call through `asyncio.to_thread`. Every
+    failure — no ffprobe, a timeout, an unreadable file, a stream that can't be
+    judged — collapses to None, which callers read as "use the stated length".
+    """
+    try:
+        probe = _run_header_probe(path)
+    except (subprocess.TimeoutExpired, OSError) as e:
+        logger.info("[audio_integrity] header probe of %s failed: %s", path, e)
+        return None
+    if probe.returncode != 0:
+        return None
+    _duration, stream = _parse_header_probe(probe.stdout)
+    return sample_derived_seconds(stream)
+
+
+def _hours(seconds: float) -> str:
+    return f"{seconds / 3600.0:.1f} h"
+
+
 def check_audio_integrity(path: str) -> Tuple[bool, str]:
     """
     Validate that an audio file is fully decodable.
@@ -82,16 +211,8 @@ def check_audio_integrity(path: str) -> Tuple[bool, str]:
     to react.
     """
     # Stage 1: header / duration probe.
-    probe_cmd = [
-        "ffprobe", "-v", "error",
-        "-show_entries", "format=duration",
-        "-of", "default=noprint_wrappers=1:nokey=1",
-        path,
-    ]
     try:
-        probe = subprocess.run(
-            probe_cmd, capture_output=True, text=True, timeout=_PROBE_TIMEOUT_SEC
-        )
+        probe = _run_header_probe(path)
     except subprocess.TimeoutExpired:
         return False, "ffprobe timed out reading the file header"
     except FileNotFoundError:
@@ -105,13 +226,22 @@ def check_audio_integrity(path: str) -> Tuple[bool, str]:
         reason_str = reason[-1] if reason else "unreadable container header"
         return False, f"ffprobe failed: {reason_str}"
 
-    duration_str = (probe.stdout or "").strip()
+    duration_str, stream = _parse_header_probe(probe.stdout)
     try:
         duration = float(duration_str)
         if duration <= 0:
             return False, "reported audio duration is zero"
-    except ValueError:
+    except (TypeError, ValueError):
         return False, f"could not parse audio duration ({duration_str!r})"
+
+    # Padding (issue #796): the stream holds far less than the container
+    # states. Decided here, from the header alone, because the full decode
+    # below cannot see it. A stream that can't be measured is not judged.
+    real = sample_derived_seconds(stream)
+    if is_padded(real, duration):
+        return False, (
+            f"padded: ~{_hours(real)} of audio in a file stating {_hours(duration)}"
+        )
 
     # Stage 2: full decode. `-v error` keeps stderr to genuine problems; counting
     # those lines distinguishes a fully-decodable file from a corrupt one.

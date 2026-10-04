@@ -43,6 +43,11 @@ const CATEGORIES = [
     // Re-queue transcribes afresh: the server discards a transcript verify
     // flagged instead of reusing it.
     { key: 'transcript_out_of_step', label: 'Transcripts out of step with their audio', kind: 'transcription', tone: 'warning' },
+    // Issue #796: the pair synced from a transcript that stops well short of
+    // the audio file (half to 90% of its stated length), usually a file padded
+    // with silence. The fix is the file, so like the rows around it this is a
+    // pair row with no bulk action.
+    { key: 'transcript_partial', label: 'Transcripts covering only part of their audio', kind: 'transcription', tone: 'warning' },
     { key: 'duplicate', label: 'Duplicate files', kind: 'dup', tone: 'warning' },
     // Issue #692: content-similarity candidates (audio duration / ebook file
     // size, corroborated by title/author/narrator/ASIN/ISBN) — never a

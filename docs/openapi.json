@@ -5689,6 +5689,13 @@
             "title": "Transcript Out Of Step",
             "type": "array"
           },
+          "transcript_partial": {
+            "items": {
+              "$ref": "#/components/schemas/TroubleshootPairItem"
+            },
+            "title": "Transcript Partial",
+            "type": "array"
+          },
           "unsupported_format": {
             "items": {
               "$ref": "#/components/schemas/TroubleshootItem"
@@ -5716,6 +5723,7 @@
           "sync_map_missing",
           "implausible_pair",
           "transcript_out_of_step",
+          "transcript_partial",
           "duplicate",
           "possible_duplicate",
           "missing_cover",

@@ -61,6 +61,8 @@ CATEGORY_KEYS = {
     "implausible_pair",
     # Library verify's transcript timing check: also a pair row.
     "transcript_out_of_step",
+    # Issue #796: synced from a transcript covering only part of the file.
+    "transcript_partial",
 }
 
 SCAN_PROGRESS_KEYS = {

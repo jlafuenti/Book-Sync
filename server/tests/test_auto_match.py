@@ -541,3 +541,23 @@ async def test_equal_scores_resolve_to_the_lowest_ids(db):
     assert sorted((p.ebook_id, p.audiobook_id) for p in pairs) == sorted(
         [(e1.id, a1.id), (e2.id, a2.id)]
     )
+
+
+async def test_auto_match_skips_a_padded_audiobook_judged_on_its_real_length(
+    db, tmp_path, monkeypatch
+):
+    """Issue #796: 1,000 words against a file stating 6 minutes is a normal
+    10,000 words/hour, but the stream holds only 1.5 minutes of audio, so the
+    real rate is 40,000 words/hour. The real length decides."""
+    from services import audio_integrity
+
+    monkeypatch.setattr(audio_integrity, "probe_real_audio_seconds", lambda p: 90.0)
+    path = _epub_with_word_count(tmp_path, 1_000)
+    eb = EBook(title="Mistborn", author="Brandon Sanderson", filename="book.epub",
+               file_path=path)
+    ab = AudioBook(title="Mistborn", author="Brandon Sanderson", filename="book.m4b",
+                   file_path=str(tmp_path / "book.m4b"), duration_seconds=360)
+    db.add_all([eb, ab])
+    await db.commit()
+
+    assert await auto_match_books(db) == 0
