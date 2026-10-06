@@ -866,6 +866,75 @@ async def test_watcher_releases_the_model_once_per_closed_window(db, monkeypatch
     assert provider.release_calls == 2
 
 
+# ---------------------------------------------------------------------------
+# Stale "waiting for the window" messages (issue #830)
+# ---------------------------------------------------------------------------
+
+_STALE = "Waiting for off-hours window (opens 01:00 UTC)"
+
+
+async def test_watcher_clears_the_waiting_message_once_the_window_opens(db, monkeypatch):
+    """The message written while the window was shut used to stay on every
+    pending row until each was claimed — hours or days with a long queue —
+    so a running queue read as a held one."""
+    pair = await make_book_pair(db)
+    item = await _seed_item(db, pair.id, status="pending", message=_STALE)
+    await _enable_window(db)
+    _freeze_clock(monkeypatch, 3)
+
+    await queue_manager._offhours_tick()
+
+    assert (await _get(TranscriptionQueueItem, item.id)).message == "Waiting in queue"
+
+
+async def test_watcher_clears_the_waiting_message_when_the_window_is_disabled(db):
+    """Turning the window off in System settings must not leave rows
+    claiming they wait for it — the case seen on a live server."""
+    pair = await make_book_pair(db)
+    item = await _seed_item(db, pair.id, status="pending", message=_STALE)
+
+    await queue_manager._offhours_tick()
+
+    assert (await _get(TranscriptionQueueItem, item.id)).message == "Waiting in queue"
+
+
+async def test_watcher_keeps_the_waiting_message_while_the_window_is_shut(db, monkeypatch):
+    pair = await make_book_pair(db)
+    item = await _seed_item(db, pair.id, status="pending", message=_STALE)
+    await _enable_window(db)
+    _freeze_clock(monkeypatch, 8)
+
+    async def _no_provider():
+        return _FakeProvider()
+
+    monkeypatch.setattr(
+        "services.transcription_providers.get_transcription_provider", _no_provider
+    )
+
+    await queue_manager._offhours_tick()
+
+    assert (await _get(TranscriptionQueueItem, item.id)).message == _STALE
+
+
+async def test_watcher_leaves_other_messages_alone(db):
+    """Only the window's own message is stale once it opens: a restart or
+    retry notice still describes the row truthfully."""
+    pairs = [await make_book_pair(db) for _ in range(3)]
+    reattach = await _seed_item(
+        db, pairs[0].id, status="pending", message="Reattaching after server restart..."
+    )
+    retry = await _seed_item(
+        db, pairs[1].id, status="pending", message="Provider unavailable, retrying in 30s"
+    )
+    running = await _seed_item(db, pairs[2].id, status="in_progress", message=_STALE)
+
+    await queue_manager._offhours_tick()
+
+    assert (await _get(TranscriptionQueueItem, reattach.id)).message == "Reattaching after server restart..."
+    assert (await _get(TranscriptionQueueItem, retry.id)).message == "Provider unavailable, retrying in 30s"
+    assert (await _get(TranscriptionQueueItem, running.id)).message == _STALE
+
+
 async def test_pause_active_job_lets_an_unpausable_provider_finish(db):
     """Local Whisper can't stop mid-job. It also isn't using the remote
     worker's GPU, so finishing is the right outcome — and we must not re-ask

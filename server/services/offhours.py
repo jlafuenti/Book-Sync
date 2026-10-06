@@ -40,6 +40,11 @@ START_KEY = "transcription_offhours_start"
 END_KEY = "transcription_offhours_end"
 TIMEZONE_KEY = "transcription_offhours_timezone"
 
+# Start of the queue-item message written while the window holds work back.
+# The queue manager matches on it to clear the message once the window opens
+# (issue #830), so the two must not drift apart.
+WAITING_MESSAGE_PREFIX = "Waiting for off-hours window"
+
 DEFAULTS = {
     ENABLED_KEY: False,
     START_KEY: "01:00",
@@ -136,7 +141,7 @@ def dispatch_allowed(
     if is_open(config, now):
         return True, ""
     return False, (
-        f"Waiting for off-hours window (opens {format_hhmm(config.start)} "
+        f"{WAITING_MESSAGE_PREFIX} (opens {format_hhmm(config.start)} "
         f"{config.tz.key})"
     )
 

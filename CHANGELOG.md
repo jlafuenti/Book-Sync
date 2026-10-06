@@ -30,6 +30,14 @@ operator must do by hand rather than read about afterwards.
 
 ### Fixed
 
+- Queued transcriptions no longer keep saying "Waiting for off-hours window" after the window
+  opens or is turned off (#830). The message written while the window was shut stayed on every
+  pending item until that item was claimed, which with a long queue meant days, so a running
+  queue looked held. The off-hours watcher now puts "Waiting in queue" back within a minute of
+  the window opening or being disabled, even while a long job is running. Other messages, such
+  as a retry notice, are left alone. Rows still showing the stale text on a running server clear
+  themselves on the first watcher tick after this deploy.
+
 - After a server restart, the transcription that was running when the server went down now runs
   next, ahead of everything else in the queue (#819). The server used to pick the top-priority
   pending item instead. When priorities had changed during the job, that was a different book,
