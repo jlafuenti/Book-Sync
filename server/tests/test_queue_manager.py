@@ -335,6 +335,81 @@ async def test_recovered_flag_does_not_survive_a_second_claim(db, monkeypatch):
     assert item.id not in queue_manager._recovered_at_startup
 
 
+async def test_recovered_item_is_claimed_before_a_higher_priority_one(db, monkeypatch):
+    """After a restart the interrupted row runs next, whatever the priorities
+    say (issue #819). The remote worker is still transcribing its file; picking
+    the top-priority row instead left the worker carrying on unattended while
+    the new row sat behind it, and the hours spent survived only in a 24 h
+    in-memory result cache."""
+    base = datetime.datetime(2026, 1, 1, 12, 0, 0)
+    running_pair = await make_book_pair(db)
+    urgent_pair = await make_book_pair(db)
+    running = await _seed_item(
+        db, running_pair.id, status="in_progress", priority=2, created_at=base,
+    )
+    await _seed_item(
+        db, urgent_pair.id, status="pending", priority=1,
+        created_at=base + datetime.timedelta(minutes=1),
+    )
+    await queue_manager.reset_stale_items()
+
+    ran = []
+    await _stub_pipeline(monkeypatch, ran)
+
+    assert await queue_manager._process_next_item() is True
+    assert ran == [running.id]
+
+
+async def test_recovered_item_is_claimed_before_a_paused_one(db, monkeypatch):
+    """A paused row's checkpoint waits on the worker's disk; the recovered
+    row's job is still running there. The running one comes first."""
+    base = datetime.datetime(2026, 1, 1, 12, 0, 0)
+    running_pair = await make_book_pair(db)
+    paused_pair = await make_book_pair(db)
+    running = await _seed_item(
+        db, running_pair.id, status="in_progress", priority=5, created_at=base,
+    )
+    await _seed_item(
+        db, paused_pair.id, status="pending", priority=1, progress=0.4,
+        created_at=base - datetime.timedelta(hours=1),
+        paused_at=base - datetime.timedelta(minutes=30),
+    )
+    await queue_manager.reset_stale_items()
+
+    ran = []
+    await _stub_pipeline(monkeypatch, ran)
+
+    assert await queue_manager._process_next_item() is True
+    assert ran == [running.id]
+
+
+async def test_priority_order_resumes_once_the_recovered_item_is_claimed(db, monkeypatch):
+    """The preference is one-shot, like the reattach marker: once the
+    recovered row has been claimed, the rest of the queue runs in priority
+    order again."""
+    base = datetime.datetime(2026, 1, 1, 12, 0, 0)
+    pairs = [await make_book_pair(db) for _ in range(3)]
+    running = await _seed_item(
+        db, pairs[0].id, status="in_progress", priority=3, created_at=base,
+    )
+    low = await _seed_item(
+        db, pairs[1].id, status="pending", priority=2,
+        created_at=base + datetime.timedelta(minutes=1),
+    )
+    high = await _seed_item(
+        db, pairs[2].id, status="pending", priority=1,
+        created_at=base + datetime.timedelta(minutes=2),
+    )
+    await queue_manager.reset_stale_items()
+
+    ran = []
+    await _stub_pipeline(monkeypatch, ran)
+
+    for _ in range(3):
+        assert await queue_manager._process_next_item() is True
+    assert ran == [running.id, high.id, low.id]
+
+
 # ---------------------------------------------------------------------------
 # _process_next_item — retry / backoff / failure transitions
 # ---------------------------------------------------------------------------
