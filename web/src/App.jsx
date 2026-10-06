@@ -45,7 +45,7 @@ import { useTourAnchor, TourAnchors } from './tour/anchors'
 //
 // epub.js is the one big dependency this cannot move: HomePage opens the reader
 // too, so it is reachable from the eager tree. It gets a manual vendor chunk
-// instead (src/build/manualChunks.js) — still downloaded up front, but no longer
+// instead (src/build/codeSplitting.js) — still downloaded up front, but no longer
 // re-downloaded every time an eager page changes.
 const TranscriptionPage = lazy(() => import('./pages/TranscriptionPage'))
 const TranscriptionEditorPage = lazy(() => import('./pages/TranscriptionEditorPage'))
