@@ -658,10 +658,14 @@ async def _process_next_item():
     window_open, wait_reason = offhours.dispatch_allowed(config)
 
     async with async_session() as db:
-        # Get the highest-priority pending item. Items holding a checkpoint
-        # (paused_at set) sort first so a half-transcribed book finishes before
-        # a fresh one starts — its partial work is sitting on the worker and is
-        # what the next window should be spent on.
+        # Get the highest-priority pending item. A row a restart interrupted
+        # (`_recovered_at_startup`) sorts first of all: its job is most likely
+        # still running on the worker, and claiming anything else leaves the
+        # worker finishing it unattended while the new row waits behind it
+        # (issue #819). Items holding a checkpoint (paused_at set) come next so
+        # a half-transcribed book finishes before a fresh one starts — its
+        # partial work is sitting on the worker and is what the next window
+        # should be spent on.
         stmt = select(TranscriptionQueueItem).where(
             TranscriptionQueueItem.status == "pending"
         )
@@ -671,6 +675,7 @@ async def _process_next_item():
 
         result = await db.execute(
             stmt.order_by(
+                TranscriptionQueueItem.id.in_(_recovered_at_startup).desc(),
                 TranscriptionQueueItem.paused_at.is_(None).asc(),
                 TranscriptionQueueItem.priority.asc(),
                 TranscriptionQueueItem.created_at.asc(),

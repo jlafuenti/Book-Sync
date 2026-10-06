@@ -28,6 +28,16 @@ operator must do by hand rather than read about afterwards.
   5.2, not 6, because version 6's optional Babel 8 chain still collides with `vite-plugin-pwa`'s
   Babel 7 one in npm's resolver.
 
+### Fixed
+
+- After a server restart, the transcription that was running when the server went down now runs
+  next, ahead of everything else in the queue (#819). The server used to pick the top-priority
+  pending item instead. When priorities had changed during the job, that was a different book,
+  and the remote worker carried on transcribing the old one with no job attached. The new item
+  then waited behind it, and the finished transcript survived only in the worker's 24-hour
+  in-memory result cache. The trade-off: an item moved to the top while another was running
+  waits until the interrupted one finishes, exactly as it would have without the restart.
+
 ## [0.10.0] - 2026-10-04
 
 ### Added
