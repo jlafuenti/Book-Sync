@@ -477,6 +477,32 @@ async def _mark_pending_items_waiting(db, reason: str) -> None:
         await db.commit()
 
 
+async def _clear_waiting_messages() -> None:
+    """
+    Put "Waiting in queue" back on pending items still saying they wait for
+    the off-hours window, once it has opened or been turned off (issue #830).
+
+    Without this the message stayed until each item was claimed, which with a
+    long queue meant days of rows describing a hold that no longer existed.
+    Other messages (a retry notice, "Reattaching after server restart...") are
+    still true and are left alone. Owns its session: it runs from the
+    watcher's task, not a request.
+    """
+    async with async_session() as db:
+        result = await db.execute(
+            select(TranscriptionQueueItem).where(
+                TranscriptionQueueItem.status == "pending",
+                TranscriptionQueueItem.message.startswith(offhours.WAITING_MESSAGE_PREFIX),
+            )
+        )
+        stale = result.scalars().all()
+        if not stale:
+            return
+        for item in stale:
+            item.message = "Waiting in queue"
+        await db.commit()
+
+
 # ---------------------------------------------------------------------------
 # Progress-write throttling (issue #244)
 # ---------------------------------------------------------------------------
@@ -1484,6 +1510,9 @@ async def _offhours_tick() -> None:
     config = await offhours.load_config()
     if not config.enabled or offhours.is_open(config):
         _resources_released = False
+        # Runs here rather than in `_queue_loop`, which can sit inside one
+        # multi-hour job and would leave the stale text up all that time.
+        await _clear_waiting_messages()
         return
 
     if _active_item_id is not None:
