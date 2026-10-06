@@ -65,9 +65,23 @@ build is split so a deploy invalidates as little as possible (issue #281). The
 rarely-first-visited routes are `React.lazy` in `web/src/App.jsx` — Book detail
 (the reader), System, Import sources, Troubleshoot, Transcription and the
 transcript alignment view — and the epub.js dependency tree gets its own vendor chunk
-(`web/src/build/manualChunks.js`). Home, Library and Login stay eager: they are
+(`web/src/build/codeSplitting.js`). Home, Library and Login stay eager: they are
 the first paint. `web/src/App.codeSplit.test.jsx` fails if a lazy route is
 quietly hoisted back to a static import.
+
+React and the API client get chunks of their own too, but only to protect the
+epub.js one (issue #516): without them, Rolldown puts the CommonJS interop
+runtime that epub.js imports into a common chunk beside them, and any API edit
+rehashes epub.js. CI never runs `vite build`, so the unit tests cannot see this.
+After a Vite or Rolldown upgrade, build once and check it by hand:
+
+```bash
+cd web && npx vite build --outDir /tmp/tandem-dist
+head -c 200 /tmp/tandem-dist/assets/epubjs-*.js
+```
+
+The only import should be `./rolldown-runtime-*.js`. Any other chunk named
+there means an edit to that chunk's contents will re-download epub.js.
 
 Registration is `web/src/pwa/registerSw.js`, called from `main.jsx`, and runs
 **only in production builds** (`import.meta.env.PROD`) — the dev server (HMR)
