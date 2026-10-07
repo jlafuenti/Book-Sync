@@ -138,6 +138,19 @@ export async function startSyncMapRebuild({ dryRun, pairIds = null, limit = null
     return rebuildJson(resp, 'Failed to start the sync-map rebuild');
 }
 
+// Word-timing coverage (issue #835): how many cached transcripts carry
+// word-level timing, and a bulk queue of the ones that do not. Both put the HTTP
+// status on `err.status` (the card hides itself on a 404, an older server).
+export async function getWordTimingStatus() {
+    const resp = await fetchWithAuth(`${API_BASE}/troubleshoot/word-timing`);
+    return rebuildJson(resp, 'Failed to load word-timing coverage');
+}
+
+export async function queueWordTiming() {
+    const resp = await fetchWithAuth(`${API_BASE}/troubleshoot/word-timing/queue`, { method: 'POST' });
+    return rebuildJson(resp, 'Failed to queue transcripts for word timing');
+}
+
 export async function cancelSyncMapRebuild() {
     const resp = await fetchWithAuth(`${API_BASE}/troubleshoot/sync-map-rebuild/cancel`, { method: 'POST' });
     return rebuildJson(resp, 'Failed to cancel the sync-map rebuild');

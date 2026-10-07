@@ -18,9 +18,10 @@ import { roleMeets } from '../roles'
 
 const {
     diskMock, ebooksMock, audiobooksMock, pairsMock, queueMock,
-    unsupportedMock, settingsMock, calibreMock, rebuildStatusMock, authRef,
+    unsupportedMock, settingsMock, calibreMock, rebuildStatusMock, wordTimingMock, authRef,
 } = vi.hoisted(() => ({
     rebuildStatusMock: vi.fn(),
+    wordTimingMock: vi.fn(),
     diskMock: vi.fn(),
     ebooksMock: vi.fn(),
     audiobooksMock: vi.fn(),
@@ -45,6 +46,7 @@ vi.mock('../api', async (importOriginal) => {
         getSettings: settingsMock,
         getCalibreStatus: calibreMock,
         getSyncMapRebuildStatus: rebuildStatusMock,
+        getWordTimingStatus: wordTimingMock,
     }
 })
 
@@ -69,6 +71,7 @@ beforeEach(() => {
     settingsMock.mockReset().mockResolvedValue({})
     calibreMock.mockReset().mockResolvedValue({ available: false })
     rebuildStatusMock.mockReset().mockResolvedValue({ outdated: 0, total: 0, running: false, results: [] })
+    wordTimingMock.mockReset().mockResolvedValue({ with_words: 4, without_words: 0, queued: 0 })
 })
 
 function renderPage(tab) {
@@ -158,6 +161,25 @@ describe('the calibre probe follows the same gate', () => {
  * past the status gate above, and the role check on the card itself is the
  * second layer.
  */
+describe('the word-timing card is admin-only (issue #835)', () => {
+    it('appears for an admin, under the rebuild card', async () => {
+        authRef.role = 'admin'
+        renderPage('status')
+        const rebuild = await screen.findByText('Rebuild Sync Maps')
+        const word = await screen.findByText('Word timing')
+        expect(wordTimingMock).toHaveBeenCalled()
+        expect(rebuild.compareDocumentPosition(word) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    })
+
+    it('does not appear, or fetch, for an editor', async () => {
+        authRef.role = 'editor'
+        renderPage('status')
+        await new Promise(r => setTimeout(r, 0))
+        expect(screen.queryByText('Word timing')).not.toBeInTheDocument()
+        expect(wordTimingMock).not.toHaveBeenCalled()
+    })
+})
+
 describe('the sync-map rebuild card is admin-only', () => {
     it('appears for an admin', async () => {
         authRef.role = 'admin'
