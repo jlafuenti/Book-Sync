@@ -20,7 +20,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel
 from rapidfuzz import fuzz
 from sqlalchemy import delete as sa_delete
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import settings
@@ -41,7 +41,7 @@ from schemas import (
     ActionResult, BulkChapterRepairResult, ChapterRepairResult, DeletedCount,
     LibraryScanProgress, MultiFileDismissResult, MultiFileRemoveTracksResult,
     ReplaceFileResult, RequeueResult, SyncMapAuditResponse, SyncMapRebuildStart,
-    SyncMapRebuildStatus, TroubleshootIssues,
+    SyncMapRebuildStatus, TroubleshootIssues, WordTimingQueued, WordTimingStatus,
 )
 from services import chapter_repair, library_verify, pair_plausibility, transcript_timing
 from services import sync_map_audit as sync_map_audit_service
@@ -1262,6 +1262,79 @@ async def sync_map_rebuild_cancel(
     maps not yet reached stay outdated and a later run picks them up."""
     sync_map_rebuild.cancel()
     return await _rebuild_status(db)
+
+
+# Priority for the bulk word-timing backfill. Ordinary requests queue at 100 and
+# the claim takes the smallest number first, so a book someone just asked for
+# never waits behind the backfill.
+WORD_TIMING_PRIORITY = 200
+
+
+def _live_queue_pair_ids():
+    return select(TranscriptionQueueItem.book_pair_id).where(
+        TranscriptionQueueItem.status.in_(["pending", "in_progress"])
+    )
+
+
+@router.get("/word-timing", response_model=WordTimingStatus)
+async def word_timing_status(
+    db: AsyncSession = Depends(get_db, scope="function"),
+    _: User = Depends(get_admin_user),
+):
+    """How many transcribed pairs have word timing, and how many of those that
+    do not are already queued for a fresh transcription (issue #835). Pairs
+    that were never transcribed are not counted: there is nothing to upgrade."""
+    with_words = (await db.execute(
+        select(func.count()).select_from(AudioTranscript)
+        .where(AudioTranscript.words_json.is_not(None))
+    )).scalar_one()
+    without_words = (await db.execute(
+        select(func.count()).select_from(AudioTranscript)
+        .where(AudioTranscript.words_json.is_(None))
+    )).scalar_one()
+    queued = (await db.execute(
+        select(func.count()).select_from(AudioTranscript)
+        .where(AudioTranscript.words_json.is_(None),
+               AudioTranscript.pair_id.in_(_live_queue_pair_ids()))
+    )).scalar_one()
+    return {"with_words": with_words, "without_words": without_words, "queued": queued}
+
+
+@router.post("/word-timing/queue", response_model=WordTimingQueued)
+async def word_timing_queue(
+    db: AsyncSession = Depends(get_db, scope="function"),
+    _: User = Depends(get_admin_user),
+):
+    """Queue every transcribed pair that lacks word timing for a fresh
+    transcription, behind everything else (priority 200).
+
+    A transcript made before word timing cannot be upgraded; the audio has to go
+    through the worker again, which is hours per book, so this is weeks of
+    worker time for a large library. Each pair gets the same admin rejection as
+    a per-pair re-transcribe, so the old transcript is set aside until the new
+    one replaces it; the old map stays in use until then. Pairs already queued
+    are skipped, so running it twice queues nothing new.
+    """
+    from services.queue_manager import add_to_queue
+    from services.retranscribe import request_retranscription
+
+    pair_ids = list((await db.execute(
+        select(AudioTranscript.pair_id)
+        .where(AudioTranscript.words_json.is_(None),
+               AudioTranscript.pair_id.not_in(_live_queue_pair_ids()))
+        .order_by(AudioTranscript.pair_id)
+    )).scalars().all())
+    for pair_id in pair_ids:
+        await request_retranscription(
+            db, pair_id, priority=WORD_TIMING_PRIORITY,
+            detail="Re-transcription requested to add word timing",
+        )
+    # Committed by hand before the side effect (docs/request-transactions.md):
+    # the worker can claim a job as soon as it is queued, and must already see
+    # the rejection, or it would reuse the old transcript.
+    await db.commit()
+    created = await add_to_queue(pair_ids, priority=WORD_TIMING_PRIORITY)
+    return {"queued": len(created)}
 
 
 class DeleteCoversRequest(BaseModel):

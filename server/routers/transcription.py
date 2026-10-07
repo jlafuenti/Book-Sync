@@ -46,7 +46,6 @@ from routers.auth import (
     get_editor_user,
     rate_limited,
 )
-from utils import utcnow
 
 router = APIRouter(prefix="/api/transcription", tags=["transcription"])
 
@@ -548,28 +547,14 @@ async def retranscribe_pair(
     transcript replaces the old one (issue #794). The old transcript stays
     until then, so a failed or cancelled job leaves the pair no worse off.
     """
-    from models.library_issue import LibraryCheckResult
     from services.queue_manager import add_to_queue
-    from services.transcript_timing import REJECTED_CHECK_TYPE
+    from services.retranscribe import request_retranscription
 
     pair = await db.get(BookPair, pair_id)
     if pair is None:
         raise HTTPException(status_code=404, detail="Book pair not found")
 
-    row = (await db.execute(
-        select(LibraryCheckResult).where(
-            LibraryCheckResult.item_type == "pair",
-            LibraryCheckResult.item_id == pair_id,
-            LibraryCheckResult.check_type == REJECTED_CHECK_TYPE,
-        )
-    )).scalar_one_or_none()
-    if row is None:
-        row = LibraryCheckResult(item_type="pair", item_id=pair_id,
-                                 check_type=REJECTED_CHECK_TYPE)
-        db.add(row)
-    row.ok = False
-    row.detail = "Re-transcription requested"
-    row.checked_at = utcnow()
+    await request_retranscription(db, pair_id)
     # Committed by hand before the side effect (docs/request-transactions.md):
     # the worker can claim the job as soon as it is queued, and must already
     # see the rejection, or it would reuse the old transcript.

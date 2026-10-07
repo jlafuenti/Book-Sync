@@ -1220,6 +1220,19 @@ class SyncMapRebuildPairResult(StrictResponse):
     bookmarks_remapped: Optional[int]
 
 
+class WordTimingStatus(StrictResponse):
+    """How much of the library has word timing (issue #835)."""
+
+    with_words: int
+    without_words: int
+    #: Of `without_words`, the pairs with a pending or running queue item.
+    queued: int
+
+
+class WordTimingQueued(StrictResponse):
+    queued: int
+
+
 class SyncMapRebuildStatus(StrictResponse):
     current_version: int
     outdated: int

@@ -149,9 +149,12 @@ _resources_released = False
 
 
 async def _add_to_queue_in(
-    db: AsyncSession, pair_ids: list[int]
+    db: AsyncSession, pair_ids: list[int], *, priority: int = 100
 ) -> list[TranscriptionQueueItem]:
-    """Create the queue rows in [db]. Flushes; never commits."""
+    """Create the queue rows in [db]. Flushes; never commits.
+
+    `priority` orders the claim (lower first); the default 100 is every
+    ordinary request, a bulk backfill asks for a larger number so it waits."""
     created = []
     for pair_id in pair_ids:
         # Check pair exists
@@ -177,7 +180,7 @@ async def _add_to_queue_in(
         item = TranscriptionQueueItem(
             book_pair_id=pair_id,
             status="pending",
-            priority=100,
+            priority=priority,
             progress=0.0,
             message="Waiting in queue",
         )
@@ -191,7 +194,7 @@ async def _add_to_queue_in(
 
 
 async def add_to_queue(
-    pair_ids: list[int], db: Optional[AsyncSession] = None
+    pair_ids: list[int], db: Optional[AsyncSession] = None, *, priority: int = 100
 ) -> list[TranscriptionQueueItem]:
     """
     Add one or more book pairs to the transcription queue.
@@ -213,12 +216,12 @@ async def add_to_queue(
     on, and their pairs are already committed.
     """
     if db is not None:
-        created = await _add_to_queue_in(db, pair_ids)
+        created = await _add_to_queue_in(db, pair_ids, priority=priority)
         logger.info(f"Added {len(created)} item(s) to transcription queue")
         return created
 
     async with async_session() as own_db:
-        created = await _add_to_queue_in(own_db, pair_ids)
+        created = await _add_to_queue_in(own_db, pair_ids, priority=priority)
         await own_db.commit()
         # Refresh to get IDs
         for item in created:
