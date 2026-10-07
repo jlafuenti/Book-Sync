@@ -53,6 +53,12 @@ class AudioTranscript(Base):
     audio_duration_seconds: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     sentence_count: Mapped[int] = mapped_column(Integer, nullable=False)
     sentences_json: Mapped[str] = mapped_column(Text, nullable=False)
+    #: Per-word timing from the worker (issue #835): a JSON array parallel to
+    #: `sentences_json`, one entry per sentence, each `[[text, start_ms,
+    #: end_ms], ...]`. Kept apart from `sentences_json` so that column's shape
+    #: stays exactly what every reader of it expects. NULL on a transcript made
+    #: before word timing, or by a worker that does not return words.
+    words_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=utcnow, nullable=False
     )
