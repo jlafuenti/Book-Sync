@@ -325,6 +325,15 @@ costs a single `version` lookup. `PositionResponse.sync_map_version` reports the
 stored value so a client that pulls a position and later pushes it back attests
 the right one.
 
+**`sync_points.word_starts` has no position semantics** (issue #835). It holds the audio start
+of each whitespace token of a sentence, derived from the transcript's word timing when the map is
+aligned; it is not an anchor, not a hint, and nothing here reads it. Neither matcher
+(`services/sync_matcher.py` and Android's `SyncMatcher`) looks at it, `epub_to_audio` and
+`audio_to_epub` ignore it, and the re-map above never consults it. A position write stays a chapter
+and a sentence index; a client that wants to highlight a word asks
+`GET /api/files/syncmap/{pair_id}/words` separately, and tokenises the sentence as `str.split()`
+does (pinned by `server/tests/fixtures/sync_parity/word_tokens_cases.json`).
+
 ## Map provenance and drift
 
 A sync map is only meaningful against the ebook file it was aligned from.
