@@ -17,10 +17,16 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 
 import UnsupportedFilesPanel from './UnsupportedFilesPanel'
 
-const { getUnsupportedFilesMock, convertUnsupportedFileMock, convertAllMock } = vi.hoisted(() => ({
+const {
+    getUnsupportedFilesMock, convertUnsupportedFileMock, convertAllMock,
+    deleteSourceMock, forceDeleteMock, forceDeleteAllMock,
+} = vi.hoisted(() => ({
     getUnsupportedFilesMock: vi.fn(),
     convertUnsupportedFileMock: vi.fn(),
     convertAllMock: vi.fn(),
+    deleteSourceMock: vi.fn(),
+    forceDeleteMock: vi.fn(),
+    forceDeleteAllMock: vi.fn(),
 }))
 
 vi.mock('../api', async (importOriginal) => {
@@ -30,8 +36,18 @@ vi.mock('../api', async (importOriginal) => {
         getUnsupportedFiles: getUnsupportedFilesMock,
         convertUnsupportedFile: convertUnsupportedFileMock,
         convertAllUnsupportedFiles: convertAllMock,
+        deleteUnsupportedSource: deleteSourceMock,
+        forceDeleteUnsupportedFile: forceDeleteMock,
+        forceDeleteAllUnsupportedFiles: forceDeleteAllMock,
     }
 })
+
+// The real reader pulls in epub.js; Preview only needs to show it opened.
+vi.mock('./EbookReader', () => ({
+    default: ({ bookTitle, onClose }) => (
+        <div>Reading {bookTitle}<button onClick={onClose}>Close reader</button></div>
+    ),
+}))
 
 const FILE = {
     id: 1743,
@@ -47,6 +63,9 @@ const FILE = {
 beforeEach(() => {
     convertUnsupportedFileMock.mockReset()
     convertAllMock.mockReset()
+    deleteSourceMock.mockReset().mockResolvedValue({})
+    forceDeleteMock.mockReset().mockResolvedValue({})
+    forceDeleteAllMock.mockReset()
 })
 
 async function renderPanel(props = {}) {
@@ -165,5 +184,125 @@ describe('UnsupportedFilesPanel force-delete confirmation is a dialog', () => {
 
         fireEvent.click(container.querySelector('.modal-overlay'))
         expect(screen.queryByRole('dialog')).toBeNull()
+    })
+})
+
+
+describe('UnsupportedFilesPanel — the other actions', () => {
+    const CONVERTED = { ...FILE, id: 1744, already_converted: true, epub_ebook_id: 902 }
+
+    it('shows a conversion error against the file', async () => {
+        convertUnsupportedFileMock.mockRejectedValue(new Error('Calibre timed out'))
+        await renderPanel()
+
+        fireEvent.click(screen.getByRole('button', { name: 'Convert' }))
+
+        const msg = await screen.findByText('Calibre timed out')
+        expect(msg.className).toContain('error')
+    })
+
+    it('deletes the original of a converted file, then reloads', async () => {
+        const onChanged = vi.fn()
+        render(<UnsupportedFilesPanel files={[CONVERTED]} canAdmin={true} onChanged={onChanged} />)
+
+        fireEvent.click(await screen.findByRole('button', { name: 'Delete Original' }))
+
+        await waitFor(() => expect(deleteSourceMock).toHaveBeenCalledWith(1744))
+        await waitFor(() => expect(onChanged).toHaveBeenCalled())
+    })
+
+    it('reports a failed Delete Original against the file', async () => {
+        deleteSourceMock.mockRejectedValue(new Error('Permission denied'))
+        render(<UnsupportedFilesPanel files={[CONVERTED]} canAdmin={true} onChanged={() => {}} />)
+
+        fireEvent.click(await screen.findByRole('button', { name: 'Delete Original' }))
+
+        expect(await screen.findByText('Permission denied')).toBeInTheDocument()
+    })
+
+    it('previews the converted EPUB in the reader', async () => {
+        render(<UnsupportedFilesPanel files={[CONVERTED]} canAdmin={true} onChanged={() => {}} />)
+
+        fireEvent.click(await screen.findByRole('button', { name: 'Preview' }))
+        expect(screen.getByText('Reading Bartleby the Scrivener')).toBeInTheDocument()
+
+        fireEvent.click(screen.getByRole('button', { name: 'Close reader' }))
+        expect(screen.queryByText('Reading Bartleby the Scrivener')).toBeNull()
+    })
+
+    it('force-deletes one file after confirming', async () => {
+        const { onChanged } = await renderPanel()
+
+        fireEvent.click(screen.getByRole('button', { name: 'Force Delete' }))
+        fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
+
+        await waitFor(() => expect(forceDeleteMock).toHaveBeenCalledWith(1743))
+        await waitFor(() => expect(onChanged).toHaveBeenCalled())
+    })
+
+    it('reports a failed force delete against the file', async () => {
+        forceDeleteMock.mockRejectedValue(new Error('File is locked'))
+        await renderPanel()
+
+        fireEvent.click(screen.getByRole('button', { name: 'Force Delete' }))
+        fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
+
+        expect(await screen.findByText('File is locked')).toBeInTheDocument()
+    })
+
+    it('force-deletes every file after confirming, and says how many', async () => {
+        forceDeleteAllMock.mockResolvedValue({ total: 3 })
+        const { onChanged } = await renderPanel()
+
+        fireEvent.click(screen.getByRole('button', { name: 'Force Delete All' }))
+        expect(screen.getByRole('dialog')).toHaveTextContent('All unsupported files will be permanently deleted')
+        fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
+
+        expect(await screen.findByText('Force deleted 3 files.')).toBeInTheDocument()
+        expect(onChanged).toHaveBeenCalled()
+    })
+
+    it('reports a failed force delete of everything', async () => {
+        forceDeleteAllMock.mockRejectedValue(new Error('Library is busy'))
+        await renderPanel()
+
+        fireEvent.click(screen.getByRole('button', { name: 'Force Delete All' }))
+        fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
+
+        expect(await screen.findByText('Library is busy')).toBeInTheDocument()
+    })
+
+    it('lists the files a Convert All could not convert', async () => {
+        convertAllMock.mockResolvedValue({
+            succeeded: [], failed: [{ filename: 'Bartleby the Scrivener.mobi', error: 'DRM protected' }],
+            total: 1, realign_failures: [],
+        })
+        await renderPanel()
+
+        fireEvent.click(screen.getByRole('button', { name: 'Convert All' }))
+
+        expect(await screen.findByText(/Converted 0 of 1\. 1 failed\./)).toBeInTheDocument()
+        expect(screen.getByText('Bartleby the Scrivener.mobi: DRM protected')).toBeInTheDocument()
+    })
+
+    it('reports a Convert All that fails outright', async () => {
+        convertAllMock.mockRejectedValue(new Error('Calibre is not installed'))
+        await renderPanel()
+
+        fireEvent.click(screen.getByRole('button', { name: 'Convert All' }))
+
+        expect(await screen.findByText('Calibre is not installed')).toBeInTheDocument()
+    })
+
+    it('shows sizes in KB or MB, and a dash when unknown', async () => {
+        render(<UnsupportedFilesPanel canAdmin={false} onChanged={() => {}} files={[
+            { ...FILE, id: 1, title: 'Small', file_size: 2048 },
+            { ...FILE, id: 2, title: 'Large', file_size: 5 * 1024 * 1024 },
+            { ...FILE, id: 3, title: 'Unknown', file_size: 0 },
+        ]} />)
+
+        expect(await screen.findByText('2.0 KB')).toBeInTheDocument()
+        expect(screen.getByText('5.0 MB')).toBeInTheDocument()
+        expect(screen.getByText('—')).toBeInTheDocument()
     })
 })

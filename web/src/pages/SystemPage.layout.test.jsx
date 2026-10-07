@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, fireEvent } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import SystemPage from './SystemPage'
 import { roleMeets } from '../roles'
@@ -119,6 +119,20 @@ describe('configuration pairs', () => {
         expect(row).toBe(pairOf('Updates'))
     })
 
+    it('opens and closes Disk Breakdown and Updates together, like the other pairs', async () => {
+        await renderPage()
+        const isOpen = (title) => screen.getByText(title, { selector: 'h3' })
+            .closest('.system-card').querySelector('.system-card-body') !== null
+
+        fireEvent.click(screen.getByText('Detailed Disk Breakdown', { selector: 'h3' }))
+        expect(isOpen('Detailed Disk Breakdown')).toBe(true)
+        expect(isOpen('Updates')).toBe(true)
+
+        fireEvent.click(screen.getByText('Updates', { selector: 'h3' }))
+        expect(isOpen('Detailed Disk Breakdown')).toBe(false)
+        expect(isOpen('Updates')).toBe(false)
+    })
+
     it('leaves Google Books on its own', async () => {
         await renderPage()
 
@@ -139,6 +153,15 @@ describe('troubleshoot status badge', () => {
 
         const badge = await screen.findByText('3 open')
         expect(badge.getAttribute('title')).toMatch(/2 more already queued/)
+    })
+
+    it('is reloaded by Refresh', async () => {
+        await renderPage()
+        await waitFor(() => expect(issuesMock).toHaveBeenCalledTimes(1))
+
+        fireEvent.click(screen.getByRole('button', { name: /Refresh/ }))
+
+        await waitFor(() => expect(issuesMock).toHaveBeenCalledTimes(2))
     })
 
     it('says so when nothing is open', async () => {
