@@ -32,11 +32,25 @@ import server as jetson_server  # noqa: E402  (import after env var is set above
 AUTH = {"Authorization": "Bearer test-key"}
 
 
+class _FakeWord:
+    """Stands in for faster-whisper's Word (word_timestamps=True)."""
+
+    def __init__(self, word, start, end, probability=0.9):
+        self.word = word
+        self.start = start
+        self.end = end
+        self.probability = probability
+
+
 class _FakeSegment:
-    def __init__(self, text, start, end):
+    def __init__(self, text, start, end, words=None):
         self.text = text
         self.start = start
         self.end = end
+        # A segment from a transcribe() call made without word_timestamps has
+        # no `words` attribute at all; leave it off unless the test gives some.
+        if words is not None:
+            self.words = words
 
 
 class _FakeCT2:
@@ -73,7 +87,11 @@ class _FakeWhisper:
     def transcribe(self, audio_array, **kwargs):
         self.calls += 1
         self.kwargs.append(kwargs)
-        return iter([_FakeSegment("Hello there.", 0.0, 1.0)]), _FakeInfo(self._detected_language)
+        segment = _FakeSegment(
+            "Hello there.", 0.0, 1.0,
+            words=[_FakeWord(" Hello", 0.0, 0.4, 0.99), _FakeWord(" there.", 0.5, 1.0, 0.8)],
+        )
+        return iter([segment]), _FakeInfo(self._detected_language)
 
 
 @pytest.fixture
@@ -1067,3 +1085,340 @@ def test_slow_seek_fallback_also_follows_the_file_timestamps():
     cmd = jetson_server._chunk_decode_cmd("/x/book.m4b", 900, 900, 16000, fast_seek=False)
     assert _af(cmd) == "aresample=async=1"
     assert cmd.index("-i") < cmd.index("-ss")
+
+
+# ---------------------------------------------------------------------------
+# Word timestamps (#835): sentences carry the words they were built from
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def real_sentence_split(monkeypatch):
+    """conftest stubs nltk with sent_tokenize = [text]. Swap in a splitter that,
+    like punkt, preserves the text and cuts after sentence-ending punctuation."""
+    import re
+
+    monkeypatch.setattr(
+        jetson_server.nltk, "sent_tokenize",
+        lambda text: [p for p in re.split(r"(?<=[.!?])\s+", text) if p],
+    )
+
+
+def _words(*triples):
+    """_words((" the", 0.0, 0.2, 0.9), ...) -> list of _FakeWord."""
+    return [_FakeWord(*t) for t in triples]
+
+
+def _assert_word_invariant(sentences):
+    for s in sentences:
+        assert s.words, f"sentence without words: {s.text!r}"
+        assert s.text.split() == [w["text"] for w in s.words]
+        assert s.start_ms == s.words[0]["start_ms"]
+        assert s.end_ms == s.words[-1]["end_ms"]
+
+
+def test_each_segment_with_words_becomes_one_sentence(real_sentence_split):
+    segments = [
+        _FakeSegment(" The lamp was lit.", 0.0, 2.0, _words(
+            (" The", 0.0, 0.3, 0.9), (" lamp", 0.4, 0.8, 0.8),
+            (" was", 0.9, 1.2, 0.7), (" lit.", 1.3, 2.0, 0.6),
+        )),
+        _FakeSegment(" Nobody came.", 3.0, 4.0, _words(
+            (" Nobody", 3.0, 3.5, 0.9), (" came.", 3.6, 4.0, 0.9),
+        )),
+    ]
+
+    out = jetson_server._group_words_into_sentences(segments)
+
+    assert [s.text for s in out] == ["The lamp was lit.", "Nobody came."]
+    assert [(s.start_ms, s.end_ms) for s in out] == [(0, 2000), (3000, 4000)]
+    assert out[0].words[1] == {
+        "text": "lamp", "start_ms": 400, "end_ms": 800, "probability": 0.8,
+    }
+    _assert_word_invariant(out)
+
+
+def test_a_sentence_spanning_two_segments_is_merged(real_sentence_split):
+    segments = [
+        _FakeSegment(" Since I knew you, I", 0.0, 2.0, _words(
+            (" Since", 0.0, 0.3, 0.9), (" I", 0.4, 0.5, 0.9), (" knew", 0.6, 0.9, 0.9),
+            (" you,", 1.0, 1.3, 0.9), (" I", 1.4, 1.5, 0.9),
+        )),
+        _FakeSegment(" have been troubled.", 2.0, 3.0, _words(
+            (" have", 2.0, 2.3, 0.9), (" been", 2.4, 2.6, 0.9), (" troubled.", 2.7, 3.0, 0.9),
+        )),
+    ]
+
+    out = jetson_server._group_words_into_sentences(segments)
+
+    assert [s.text for s in out] == ["Since I knew you, I have been troubled."]
+    assert len(out[0].words) == 8
+    assert (out[0].start_ms, out[0].end_ms) == (0, 3000)
+    _assert_word_invariant(out)
+
+
+def test_a_segment_with_two_sentences_splits_on_the_word_boundary(real_sentence_split):
+    # Character proration would put the boundary near 2.4s, nowhere near the
+    # real 1.5s: the second sentence is one short word after a long pause.
+    segments = [
+        _FakeSegment(" The door was open. No.", 0.0, 3.0, _words(
+            (" The", 0.0, 0.2, 0.9), (" door", 0.3, 0.6, 0.9),
+            (" was", 0.7, 0.9, 0.9), (" open.", 1.0, 1.5, 0.9),
+            (" No.", 2.5, 3.0, 0.9),
+        )),
+    ]
+
+    out = jetson_server._group_words_into_sentences(segments)
+
+    assert [s.text for s in out] == ["The door was open.", "No."]
+    assert [(s.start_ms, s.end_ms) for s in out] == [(0, 1500), (2500, 3000)]
+    _assert_word_invariant(out)
+
+
+def test_hyphenated_pieces_are_glued_into_one_word(real_sentence_split):
+    segments = [
+        _FakeSegment(" parchment-pale skin.", 0.0, 2.0, _words(
+            (" parchment", 0.0, 0.5, 0.9), ("-pale", 0.5, 0.9, 0.4), (" skin.", 1.0, 1.5, 0.9),
+        )),
+    ]
+
+    out = jetson_server._group_words_into_sentences(segments)
+
+    assert [w["text"] for w in out[0].words] == ["parchment-pale", "skin."]
+    glued = out[0].words[0]
+    assert (glued["start_ms"], glued["end_ms"], glued["probability"]) == (0, 900, 0.4)
+    assert out[0].text == "parchment-pale skin."
+    _assert_word_invariant(out)
+
+
+def test_a_hyphenated_word_split_across_a_segment_boundary_is_glued(real_sentence_split):
+    segments = [
+        _FakeSegment(" sallow", 0.0, 1.0, _words((" sallow", 0.0, 0.6, 0.9))),
+        _FakeSegment("-faced men.", 1.0, 2.0, _words(
+            ("-faced", 0.6, 1.0, 0.9), (" men.", 1.1, 1.6, 0.9),
+        )),
+    ]
+
+    out = jetson_server._group_words_into_sentences(segments)
+
+    assert [w["text"] for w in out[0].words] == ["sallow-faced", "men."]
+    assert out[0].words[0]["end_ms"] == 1000
+
+
+def test_a_leading_unspaced_piece_with_no_predecessor_starts_a_word(real_sentence_split):
+    segments = [_FakeSegment("-ish.", 0.0, 1.0, _words(("-ish.", 0.0, 1.0, 0.9)))]
+
+    out = jetson_server._group_words_into_sentences(segments)
+
+    assert [w["text"] for w in out[0].words] == ["-ish."]
+
+
+def test_blank_words_are_dropped(real_sentence_split):
+    segments = [
+        _FakeSegment(" Hi.", 0.0, 1.0, _words(
+            (" ", 0.0, 0.1, 0.9), (" Hi.", 0.2, 1.0, 0.9),
+        )),
+    ]
+
+    out = jetson_server._group_words_into_sentences(segments)
+
+    assert [w["text"] for w in out[0].words] == ["Hi."]
+    assert out[0].start_ms == 200
+
+
+def _run_of_words(n, start=0.0, step=0.5, gap_after=None, gap=2.0):
+    """n words w0..w{n-1}, `step` apart; an extra `gap` after index gap_after."""
+    out, t = [], start
+    for i in range(n):
+        out.append(_FakeWord(f" w{i}", t, t + 0.25, 0.9))
+        t += step + (gap if i == gap_after else 0.0)
+    return out
+
+
+def test_a_sentence_over_the_word_cap_splits_at_its_largest_gap(real_sentence_split):
+    # 60 words, no punctuation until the end, biggest pause after the 20th.
+    words = _run_of_words(60, gap_after=19)
+    segments = [_FakeSegment(" long.", 0.0, 40.0, words)]
+
+    out = jetson_server._group_words_into_sentences(segments)
+
+    assert [len(s.words) for s in out] == [20, 40]
+    assert all(len(s.words) <= jetson_server.MAX_SENTENCE_WORDS for s in out)
+    _assert_word_invariant(out)
+
+
+def test_the_word_cap_recurses_until_every_piece_fits(real_sentence_split):
+    words = _run_of_words(130, gap_after=100)
+    segments = [_FakeSegment(" long.", 0.0, 80.0, words)]
+
+    out = jetson_server._group_words_into_sentences(segments)
+
+    assert sum(len(s.words) for s in out) == 130
+    assert all(len(s.words) <= jetson_server.MAX_SENTENCE_WORDS for s in out)
+    assert len(out) >= 3
+    _assert_word_invariant(out)
+
+
+def test_word_cap_ties_go_to_the_earliest_gap(real_sentence_split):
+    words = _run_of_words(60)  # every gap identical
+    segments = [_FakeSegment(" long.", 0.0, 40.0, words)]
+
+    out = jetson_server._group_words_into_sentences(segments)
+
+    assert len(out[0].words) == 1  # earliest gap: right after the first word
+    assert all(len(s.words) <= jetson_server.MAX_SENTENCE_WORDS for s in out)
+
+
+def test_exactly_the_cap_is_not_split(real_sentence_split):
+    words = _run_of_words(jetson_server.MAX_SENTENCE_WORDS, gap_after=10)
+    segments = [_FakeSegment(" long.", 0.0, 40.0, words)]
+
+    out = jetson_server._group_words_into_sentences(segments)
+
+    assert len(out) == 1
+
+
+def test_a_segment_without_words_falls_back_to_character_proration(real_sentence_split):
+    segments = [
+        _FakeSegment(" One here. Two here.", 0.0, 2.0),          # no attribute
+        _FakeSegment(" Another one.", 3.0, 4.0, words=[]),        # empty list
+    ]
+
+    out = jetson_server._group_words_into_sentences(segments)
+
+    assert [s.text for s in out] == ["One here.", "Two here.", "Another one."]
+    assert all(s.words == [] for s in out)
+    assert (out[-1].start_ms, out[-1].end_ms) == (3000, 4000)
+
+
+def test_wordless_and_worded_segments_keep_their_order(real_sentence_split):
+    segments = [
+        _FakeSegment(" Before.", 0.0, 1.0),
+        _FakeSegment(" Middle part.", 2.0, 3.0, _words(
+            (" Middle", 2.0, 2.4, 0.9), (" part.", 2.5, 3.0, 0.9),
+        )),
+        _FakeSegment(" After.", 4.0, 5.0, words=[]),
+    ]
+
+    out = jetson_server._group_words_into_sentences(segments)
+
+    assert [s.text for s in out] == ["Before.", "Middle part.", "After."]
+    assert [bool(s.words) for s in out] == [False, True, False]
+
+
+def test_a_sentence_defaults_to_no_words():
+    assert jetson_server.TranscribedSentence("x", 0, 1).words == []
+
+
+# --- the wiring: transcribe(), offsets, checkpoint, response, cache ---------
+
+
+def test_transcribe_asks_whisper_for_word_timestamps(
+    clean_state, fake_audio_pipeline, monkeypatch, tmp_path
+):
+    audio, fake = _run_job(monkeypatch, tmp_path)
+
+    jetson_server._transcribe_file(str(audio), "book.m4b")
+
+    assert fake.kwargs and all(kw.get("word_timestamps") is True for kw in fake.kwargs)
+
+
+def test_the_chunk_offset_applies_to_words_as_well_as_sentences(
+    clean_state, fake_audio_pipeline, monkeypatch, tmp_path
+):
+    audio, _ = _run_job(monkeypatch, tmp_path)
+
+    result = jetson_server._transcribe_file(str(audio), "book.m4b")
+
+    second = result["sentences"][1]  # chunk 2 starts at 900 s
+    assert second["start_ms"] == 900_000
+    assert [(w["start_ms"], w["end_ms"]) for w in second["words"]] == [
+        (900_000, 900_400), (900_500, 901_000),
+    ]
+    assert second["end_ms"] == second["words"][-1]["end_ms"]
+
+
+def test_the_transcribe_response_carries_words_per_sentence(
+    clean_state, fake_audio_pipeline, monkeypatch, tmp_path, client
+):
+    _run_job(monkeypatch, tmp_path)
+
+    r = client.post(
+        "/v1/transcribe",
+        files={"audio_file": ("book.m4b", b"audio-bytes", "audio/mpeg")},
+        headers=AUTH,
+    )
+
+    assert r.status_code == 200, r.text
+    first = r.json()["sentences"][0]
+    assert first["words"] == [
+        {"text": "Hello", "start_ms": 0, "end_ms": 400, "probability": 0.99},
+        {"text": "there.", "start_ms": 500, "end_ms": 1000, "probability": 0.8},
+    ]
+
+
+def test_the_cached_result_carries_words(
+    clean_state, fake_audio_pipeline, monkeypatch, tmp_path, client
+):
+    audio, _ = _run_job(monkeypatch, tmp_path)
+    jetson_server._transcribe_file(str(audio), "book.m4b")
+
+    r = client.get("/v1/result/book.m4b", headers=AUTH)
+
+    assert r.status_code == 200
+    assert [w["text"] for w in r.json()["sentences"][0]["words"]] == ["Hello", "there."]
+
+
+def test_a_checkpoint_round_trips_words(tmp_path):
+    ckpt = str(tmp_path / "job.json")
+    word = {"text": "Hi.", "start_ms": 5, "end_ms": 9, "probability": 0.5}
+    sentence = jetson_server.TranscribedSentence("Hi.", 5, 9, [word])
+
+    jetson_server._save_checkpoint(ckpt, 10.0, 0, 900, [sentence])
+    loaded = jetson_server._load_checkpoint(ckpt)
+
+    assert loaded["sentences"][0]["words"] == [word]
+    assert jetson_server.TranscribedSentence(**loaded["sentences"][0]) == sentence
+
+
+def test_a_checkpoint_written_before_words_still_loads(tmp_path):
+    ckpt = tmp_path / "old.json"
+    ckpt.write_text(json.dumps({
+        "version": 1, "total_duration": 10.0, "completed_through_sec": 0,
+        "current_chunk_size": 900,
+        "sentences": [{"text": "Old.", "start_ms": 0, "end_ms": 10}],
+    }))
+
+    loaded = jetson_server._load_checkpoint(str(ckpt))
+    restored = [jetson_server.TranscribedSentence(**s) for s in loaded["sentences"]]
+
+    assert restored == [jetson_server.TranscribedSentence("Old.", 0, 10)]
+    assert restored[0].words == []
+
+
+def test_a_resumed_job_keeps_the_words_banked_before_the_pause(
+    clean_state, fake_audio_pipeline, monkeypatch, tmp_path, client
+):
+    audio, _ = _run_job(monkeypatch, tmp_path)
+    size = audio.stat().st_size
+    real_save = jetson_server._save_checkpoint
+    pause_once = {"done": False}
+
+    def _save_then_pause(*args, **kwargs):
+        real_save(*args, **kwargs)
+        if not pause_once["done"]:
+            pause_once["done"] = True
+            jetson_server._pause_event.set()
+
+    monkeypatch.setattr(jetson_server, "_save_checkpoint", _save_then_pause)
+    jetson_server._transcribe_file(str(audio), "book.m4b")
+    monkeypatch.setattr(jetson_server, "model", _FakeWhisper())
+    monkeypatch.setattr(jetson_server, "_model_state", "loaded")
+
+    body = client.post(
+        "/v1/transcribe/resume", json={"filename": "book.m4b", "size": size}, headers=AUTH
+    ).json()
+
+    assert [len(s["words"]) for s in body["sentences"]] == [2, 2]
+    assert body["sentences"][0]["words"][0]["start_ms"] == 0
+    assert body["sentences"][1]["words"][0]["start_ms"] == 900_000

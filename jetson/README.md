@@ -162,6 +162,17 @@ Uploads clean themselves up, but a hard stop mid-upload (an OoM-kill, a power cu
 one behind; anything older than 48h in `TMPDIR` is swept at startup, and only when `TMPDIR` is
 inside the checkpoint volume — the worker never sweeps a system temp directory it might share.
 
+## What the transcript looks like
+
+`POST /v1/transcribe` (and `/v1/result/{filename}`) answers with a list of `sentences`, each
+carrying `text`, `start_ms` and `end_ms`, plus a `words` list: one entry per word with `text`,
+`start_ms`, `end_ms` and the model's `probability`. A sentence's start and end are its first and
+last word's, and `words` joins back into `text`. Sentences are found across segment boundaries,
+a hyphenated compound comes back as one word, and a run of more than 50 words with no sentence
+punctuation is cut at its longest pause. Word timestamps add no measurable cost per segment. A
+checkpoint written before word timestamps existed still resumes; its sentences simply have
+`words: []`, as does any segment the model returned without word data.
+
 ## Sharing the GPU (issue #106)
 
 This worker is built to coexist with another GPU tenant (e.g. Home Assistant's voice
