@@ -155,10 +155,14 @@ class ReaderActivity : AppCompatActivity() {
         private const val PAGE_COUNT_MAX_RETRIES = 2
         // Waits before each live page probe attempt (issue #730); a newer locator cancels them.
         private val PROBE_RETRY_DELAYS_MS = longArrayOf(0L, 250L, 500L, 1000L, 2000L, 4000L)
-        // Read-along (issue #762): how often the audio position is sampled
-        // (the cadence PlayerViewModel and MiniPlayerBar poll at) and the
-        // toolbar icon's alpha while following is off (255 while on).
-        private const val READ_ALONG_POLL_MS = 500L
+        // Read-along (issue #762): how often the audio position is sampled, and
+        // the toolbar icon's alpha while following is off (255 while on). It was
+        // 500 ms, the cadence PlayerViewModel and MiniPlayerBar poll at; the word
+        // mark (issue #836) needs a finer one, since a spoken word can be 200 ms.
+        // Sentence work stays cheap at this rate: the controller yields a
+        // Decorate only when the sentence changes, and a Word only when the
+        // token does, so an idle tick is one binary search and no WebView call.
+        private const val READ_ALONG_POLL_MS = 150L
         private const val READ_ALONG_ICON_OFF_ALPHA = 140
         // How long after a suspect locator emission to wait before asking the
         // page whether the sentence is still on screen (Readium's snap-back
@@ -355,6 +359,12 @@ class ReaderActivity : AppCompatActivity() {
     private var readAlong: ReadAlongController = ReadAlongController(emptyList())
     private var readAlongMediaController: MediaController? = null
     private var readAlongPollJob: Job? = null
+    // Word mark (issue #836): the sentence whose token ranges the page search
+    // built, how many it built (0 = not located, or no CSS.highlights), and the
+    // token the audio wants marked, remembered so a late locate can draw it.
+    private var wordMarkPoint: SyncPointEntity? = null
+    private var wordMarkTokenCount = 0
+    private var wordMarkWanted = -1
     /** The pending settle-then-probe for a suspect locator emission; see [verifySuspectedTurn]. */
     private var suspectVerifyJob: Job? = null
 
@@ -2454,13 +2464,26 @@ class ReaderActivity : AppCompatActivity() {
             // hidden below, leaves exactly one run in Following.
             suspectVerifyJob?.cancel()
             suspectVerifyJob = null
-            readAlong = ReadAlongController(points)
+            val words = repository.getSyncPointWords(pairId)
+            clearWordMark()
+            readAlong = ReadAlongController(points, words)
             readAlong.start(System.currentTimeMillis())
             setFollowToolbar(active = true)
             readAlongBar.visibility = View.VISIBLE
             updateReadAlongPlayButton(ctrl.playWhenReady)
             showBackToAudio(false)
             startReadAlongPoll(ctrl)
+            if (words.isEmpty()) {
+                // No word timing cached (a map from before the feature, or a
+                // failed fetch): ask once. The sentence mark does not wait for it.
+                val run = readAlong
+                launch {
+                    if (repository.ensureSyncPointWords(pairId) && readAlong === run && run.isFollowing) {
+                        readAlong.setWords(repository.getSyncPointWords(pairId))
+                        readAlong.currentPoint?.let { locateWordMark(it) }
+                    }
+                }
+            }
         }
     }
 
@@ -2563,16 +2586,101 @@ class ReaderActivity : AppCompatActivity() {
                     val audioMs = ctrl.currentPosition.toInt()
                     readAlongTime.text = formatAudioTime(audioMs.toLong())
                     readAlong.onAudioPosition(audioMs, System.currentTimeMillis())
-                        ?.let { onReadAlongDecorate(it.point) }
+                        .forEach { onReadAlongAction(it) }
                     delay(READ_ALONG_POLL_MS)
                 }
             }
         }
     }
 
+    /** What a poll tick yields: a new sentence to mark, or a new word within it. */
+    private fun onReadAlongAction(action: ReadAlongController.Action) {
+        when (action) {
+            is ReadAlongController.Action.Decorate -> onReadAlongDecorate(action.point)
+            is ReadAlongController.Action.Word -> onReadAlongWord(action)
+            is ReadAlongController.Action.Jump -> Unit // only the visibility check yields a jump
+        }
+    }
+
+    /**
+     * The audio reached a new word (issue #836). A token below zero (before the
+     * first word, or a sentence with no word timing) only removes the mark.
+     * Otherwise it is drawn when the page search found exactly as many words as
+     * the timing has: a count that differs means the page text and the
+     * server's text disagree, and a mark on the wrong word is worse than none.
+     * A word that arrives before the search has answered is remembered and
+     * drawn by [locateWordMark] when it does.
+     */
+    private fun onReadAlongWord(action: ReadAlongController.Action.Word) {
+        val nav = navigator ?: return
+        val starts = readAlong.wordStartsFor(action.point)
+        if (action.tokenIndex < 0 || starts == null) {
+            wordMarkWanted = -1
+            lifecycleScope.launch { nav.evaluateJavascript(wordMarkClearScript()) }
+            return
+        }
+        wordMarkWanted = action.tokenIndex
+        if (wordMarkTokenCount == starts.size && sameSentencePoint(wordMarkPoint, action.point)) {
+            lifecycleScope.launch { nav.evaluateJavascript(wordMarkSetScript(action.tokenIndex)) }
+        }
+    }
+
+    private fun sameSentencePoint(a: SyncPointEntity?, b: SyncPointEntity?): Boolean =
+        a != null && b != null && a.epubChapter == b.epubChapter && a.epubSentenceIndex == b.epubSentenceIndex
+
+    /**
+     * Builds the DOM ranges for [point]'s words on the current page (see
+     * `WordMark.kt`) and, when the page answers with as many as the timing has,
+     * draws the word the audio is on. Called when the sentence changes and again
+     * once a jump has settled, since a jump into another chapter loads a new
+     * document. Removes the previous sentence's mark first, so it never lingers
+     * while the search runs. A sentence without word timing locates nothing.
+     */
+    private fun locateWordMark(point: SyncPointEntity) {
+        val sameSentence = sameSentencePoint(wordMarkPoint, point)
+        if (!sameSentence) wordMarkWanted = -1
+        wordMarkPoint = point
+        wordMarkTokenCount = 0
+        val nav = navigator ?: return
+        val starts = readAlong.wordStartsFor(point)
+        val quote = readAlong.quotes.quoteFor(point)
+        val plan = quote?.let { wordMarkPlan(point.epubTextPreview, it) }
+        lifecycleScope.launch {
+            // Re-locating the same sentence (after a jump) keeps its mark up.
+            if (!sameSentence) nav.evaluateJavascript(wordMarkClearScript())
+            if (starts == null || plan == null) return@launch
+            val answer = nav.evaluateJavascript(
+                wordMarkLocateScript(plan.quote.highlight, plan.quote.before, plan.quote.after, plan.tokenRanges),
+            )
+            val built = answer?.trim()?.toIntOrNull() ?: 0
+            // A newer sentence may have been located while this one was answering.
+            if (!sameSentencePoint(wordMarkPoint, point)) return@launch
+            wordMarkTokenCount = built
+            if (built != starts.size) {
+                Log.d(
+                    TAG,
+                    "read-along: word mark skipped for chapter ${point.epubChapter} sentence " +
+                        "${point.epubSentenceIndex} (page ranges $built, timed words ${starts.size})",
+                )
+                return@launch
+            }
+            if (wordMarkWanted >= 0) nav.evaluateJavascript(wordMarkSetScript(wordMarkWanted))
+        }
+    }
+
+    /** Removes the word mark and forgets which sentence it was located for. */
+    private fun clearWordMark() {
+        wordMarkPoint = null
+        wordMarkTokenCount = 0
+        wordMarkWanted = -1
+        val nav = navigator ?: return
+        lifecycleScope.launch { nav.evaluateJavascript(wordMarkClearScript()) }
+    }
+
     /** The audio reached a new sentence: mark it, then turn the page if it is not on screen. */
     private fun onReadAlongDecorate(point: SyncPointEntity) {
         applyReadAlongDecoration(point)
+        locateWordMark(point)
         lifecycleScope.launch {
             val quote = readAlong.quotes.quoteFor(point) ?: return@launch
             val visible = isSentenceVisible(
@@ -2624,6 +2732,7 @@ class ReaderActivity : AppCompatActivity() {
 
     /** Removes the sentence mark; called when following stops. */
     private fun clearReadAlongDecoration() {
+        clearWordMark()
         val nav = navigator ?: return
         lifecycleScope.launch { nav.applyDecorations(emptyList(), READ_ALONG_DECORATION_GROUP) }
     }
@@ -2653,6 +2762,12 @@ class ReaderActivity : AppCompatActivity() {
         programmaticTarget = locator
         if (!nav.go(locator, animated = false)) {
             Log.w(TAG, "read-along: go() declined for chapter ${point.epubChapter}")
+        }
+        // A jump into another chapter loads a new document, whose word ranges
+        // do not exist yet: build them again once the page has settled.
+        lifecycleScope.launch {
+            delay(READ_ALONG_SETTLE_MS)
+            if (readAlong.isFollowing && sameSentencePoint(readAlong.currentPoint, point)) locateWordMark(point)
         }
     }
 
@@ -2693,17 +2808,27 @@ class ReaderActivity : AppCompatActivity() {
             val visible = isSentenceVisible(
                 quote, "chapter ${point.epubChapter} sentence ${point.epubSentenceIndex}",
             )
-            if (readAlong.onSuspectVerified(visible)) showBackToAudio(readAlong.isPaused)
+            if (readAlong.onSuspectVerified(visible)) {
+                showBackToAudio(readAlong.isPaused)
+                // Paused: the user is elsewhere, so the word mark goes with the
+                // pause. Following again by itself: mark the word again.
+                if (readAlong.isPaused) clearWordMark() else locateWordMark(point)
+            }
         }
     }
 
     private fun onBackToAudioTapped() {
         val actions = readAlong.onBackToAudio(System.currentTimeMillis())
         showBackToAudio(false)
+        clearWordMark()
         actions.forEach { action ->
             when (action) {
-                is ReadAlongController.Action.Decorate -> applyReadAlongDecoration(action.point)
+                is ReadAlongController.Action.Decorate -> {
+                    applyReadAlongDecoration(action.point)
+                    locateWordMark(action.point)
+                }
                 is ReadAlongController.Action.Jump -> jumpToSentence(action.point)
+                is ReadAlongController.Action.Word -> Unit // the next poll tick reports the word
             }
         }
     }

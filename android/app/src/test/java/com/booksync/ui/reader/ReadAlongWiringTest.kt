@@ -387,6 +387,69 @@ class ReadAlongWiringTest {
         )
     }
 
+    // ============ Word mark (issue #836) ============
+
+    @Test
+    fun `the poll runs at 150 ms and hands every action to one handler`() {
+        assertTrue(activity.contains("private const val READ_ALONG_POLL_MS = 150L"))
+        val poll = activity.substringAfter("private fun startReadAlongPoll(").substringBefore("\n    }")
+        assertTrue(poll.contains("readAlong.onAudioPosition(audioMs, System.currentTimeMillis())"))
+        assertTrue(poll.contains("onReadAlongAction("))
+        val handler = activity.substringAfter("private fun onReadAlongAction(").substringBefore("\n    }")
+        assertTrue(handler.contains("is ReadAlongController.Action.Decorate -> onReadAlongDecorate(action.point)"))
+        assertTrue(handler.contains("is ReadAlongController.Action.Word -> onReadAlongWord(action)"))
+    }
+
+    @Test
+    fun `a Word action clears the mark for no token and otherwise draws only a fully located sentence`() {
+        val word = activity.substringAfter("private fun onReadAlongWord(").substringBefore("\n    }")
+        assertTrue(word.contains("action.tokenIndex < 0"))
+        assertTrue(word.contains("wordMarkClearScript()"))
+        assertTrue(word.contains("wordMarkTokenCount == starts.size"))
+        assertTrue(word.contains("wordMarkSetScript(action.tokenIndex)"))
+    }
+
+    @Test
+    fun `the word mark is located once per sentence, after the sentence decoration`() {
+        val decorate = activity.substringAfter("private fun onReadAlongDecorate(").substringBefore("\n    }")
+        assertTrue(decorate.indexOf("applyReadAlongDecoration(point)") in 0 until decorate.indexOf("locateWordMark(point)"))
+        val locate = activity.substringAfter("private fun locateWordMark(").substringBefore("\n    }")
+        assertTrue(locate.contains("wordMarkPlan(point.epubTextPreview"))
+        assertTrue(locate.contains("wordMarkLocateScript("))
+    }
+
+    @Test
+    fun `the word mark is cleared wherever the sentence mark goes`() {
+        val clearDecoration = activity.substringAfter("private fun clearReadAlongDecoration()").substringBefore("\n    }")
+        assertTrue("stopping clears the decoration, which clears the word mark", clearDecoration.contains("clearWordMark()"))
+        val stop = activity.substringAfter("private fun stopFollowing()").substringBefore("\n    }")
+        assertTrue(stop.contains("clearReadAlongDecoration()"))
+        val back = activity.substringAfter("private fun onBackToAudioTapped()").substringBefore("\n    }")
+        assertTrue(
+            "Back to audio clears before it re-decorates",
+            back.indexOf("clearWordMark()") in 0 until back.indexOf("is ReadAlongController.Action.Decorate"),
+        )
+        assertTrue(back.contains("locateWordMark(action.point)"))
+        val verify = activity.substringAfter("private fun verifySuspectedTurn()").substringBefore("\n    }")
+        assertTrue("a verified manual turn clears it", verify.contains("clearWordMark()"))
+    }
+
+    @Test
+    fun `following starts with the cached words and fetches them once when there are none`() {
+        val start = activity.substringAfter("private fun startFollowing(").substringBefore("\n    }")
+        assertTrue(start.contains("repository.getSyncPointWords(pairId)"))
+        assertTrue(start.contains("ReadAlongController(points, words)"))
+        assertTrue(start.contains("repository.ensureSyncPointWords(pairId)"))
+        assertTrue("late words replace the controller's, not the controller", start.contains("readAlong.setWords("))
+    }
+
+    @Test
+    fun `a jump re-locates the word mark once the page has settled`() {
+        val jump = activity.substringAfter("private fun jumpToSentence(").substringBefore("\n    }")
+        assertTrue(jump.contains("delay(READ_ALONG_SETTLE_MS)"))
+        assertTrue(jump.contains("locateWordMark(point)"))
+    }
+
     @Test
     fun `the end of the book stops following without a pause command`() {
         assertTrue(activity.contains("Player.STATE_ENDED -> stopFollowing()"))
