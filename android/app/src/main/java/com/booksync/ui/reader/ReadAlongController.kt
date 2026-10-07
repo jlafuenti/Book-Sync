@@ -109,6 +109,12 @@ class ReadAlongController(
          * means clear the word mark.
          */
         data class Word(val point: SyncPointEntity, val tokenIndex: Int) : Action
+
+        /**
+         * The word being read sits on the next page (issue #841): turn forward
+         * once, without waiting for the next sentence to start.
+         */
+        data class TurnForward(val point: SyncPointEntity) : Action
     }
 
     enum class LocatorVerdict { Ignored, Echo, Suspect }
@@ -122,10 +128,14 @@ class ReadAlongController(
         private set
     private var lastJumpAtMs: Long = Long.MIN_VALUE / 2
 
+    /** The sentence a word-driven page turn was already made for (issue #841); at most one per sentence. */
+    private var turnedForPoint: Pair<Int, Int>? = null
+
     fun start(nowMs: Long) {
         state = State.Following
         currentPoint = null
         currentToken = NO_TOKEN
+        turnedForPoint = null
         lastJumpAtMs = Long.MIN_VALUE / 2
     }
 
@@ -133,6 +143,7 @@ class ReadAlongController(
         state = State.Off
         currentPoint = null
         currentToken = NO_TOKEN
+        turnedForPoint = null
         lastJumpAtMs = Long.MIN_VALUE / 2
     }
 
@@ -158,7 +169,10 @@ class ReadAlongController(
         val point = SyncMatcher.pointForAudioPosition(points, audioMs) { it.audioStartMs } ?: return emptyList()
         val changed = !sameSentence(point, currentPoint)
         currentPoint = point
-        if (changed) currentToken = NO_TOKEN
+        if (changed) {
+            currentToken = NO_TOKEN
+            turnedForPoint = null
+        }
         if (state != State.Following) return emptyList()
         val out = ArrayList<Action>(2)
         if (changed) out.add(Action.Decorate(point))
@@ -194,6 +208,23 @@ class ReadAlongController(
         return Action.Jump(point)
     }
 
+    /**
+     * The page reports that [point]'s current word lies past the right edge of
+     * the viewport (issue #841): the sentence runs onto the next page, so turn
+     * forward now rather than when the next sentence starts. Yields at most one
+     * [Action.TurnForward] per sentence, and only while following with [point]
+     * still the current sentence. Arms the echo window like a jump, so the
+     * locator Readium emits for the turn is ours and not a manual page turn.
+     */
+    fun onWordOffPage(point: SyncPointEntity, nowMs: Long): Action.TurnForward? {
+        if (state != State.Following || !sameSentence(point, currentPoint)) return null
+        val key = point.epubChapter to point.epubSentenceIndex
+        if (turnedForPoint == key) return null
+        turnedForPoint = key
+        lastJumpAtMs = nowMs
+        return Action.TurnForward(point)
+    }
+
     fun onLocatorEmitted(nowMs: Long): LocatorVerdict {
         if (state == State.Off) return LocatorVerdict.Ignored
         if (nowMs - lastJumpAtMs <= jumpEchoWindowMs) return LocatorVerdict.Echo
@@ -224,6 +255,7 @@ class ReadAlongController(
         if (state != State.Paused || point == null) return emptyList()
         state = State.Following
         lastJumpAtMs = nowMs
+        turnedForPoint = null
         // The word mark was cleared with the pause; report the word again.
         currentToken = NO_TOKEN
         return listOf(Action.Decorate(point), Action.Jump(point))

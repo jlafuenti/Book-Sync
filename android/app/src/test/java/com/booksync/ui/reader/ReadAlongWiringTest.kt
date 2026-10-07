@@ -461,4 +461,30 @@ class ReadAlongWiringTest {
     fun `the end of the book stops following without a pause command`() {
         assertTrue(activity.contains("Player.STATE_ENDED -> stopFollowing()"))
     }
+
+    // ============ Page turn on a word past the page (issue #841) ============
+
+    @Test
+    fun `a word on the next page turns the page through onWordOffPage, without animation`() {
+        val turn = activity.substringAfter("private fun turnIfWordOffPage(").substringBefore("\n    }")
+        assertTrue(turn.contains("trim('\"') != \"right\""))
+        assertTrue(turn.contains("readAlong.onWordOffPage(point, System.currentTimeMillis())"))
+        assertTrue(turn.contains("goForward(animated = false)"))
+        assertTrue(turn.contains("read-along: word is on the next page, turning"))
+    }
+
+    @Test
+    fun `both the live and the deferred word draws read the verdict and may turn`() {
+        val word = activity.substringAfter("private fun onReadAlongWord(").substringBefore("\n    }")
+        assertTrue(word.contains("turnIfWordOffPage(action.point, nav.evaluateJavascript(wordMarkSetScript(action.tokenIndex)))"))
+        val locate = activity.substringAfter("private fun locateWordMark(").substringBefore("\n    /** Removes the word mark")
+        assertTrue(locate.contains("turnIfWordOffPage(point, nav.evaluateJavascript(wordMarkSetScript(wordMarkWanted)))"))
+    }
+
+    @Test
+    fun `the sentence visibility jump path is unchanged`() {
+        val decorate = activity.substringAfter("private fun onReadAlongDecorate(").substringBefore("\n    }")
+        assertTrue(decorate.contains("readAlong.onSentenceVisibility(point, visible, System.currentTimeMillis())"))
+        assertTrue(decorate.contains("jumpToSentence(it.point)"))
+    }
 }

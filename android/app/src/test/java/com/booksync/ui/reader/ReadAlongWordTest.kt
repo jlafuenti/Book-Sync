@@ -148,4 +148,62 @@ class ReadAlongWordTest {
         assertEquals(listOf(Action.Decorate(p0), Action.Jump(p0)), back)
         assertEquals(listOf(Action.Word(p0, 1)), c.onAudioPosition(11_600, 6_150L))
     }
+
+    // --- a word on the next page turns it (issue #841) ---------------------
+
+    @Test
+    fun `a word off the page yields one turn for the current sentence and arms the echo window`() {
+        val c = following()
+        c.onAudioPosition(11_500, 100L)
+        assertEquals(Action.TurnForward(p0), c.onWordOffPage(p0, 200L))
+        assertEquals(ReadAlongController.LocatorVerdict.Echo, c.onLocatorEmitted(300L))
+    }
+
+    @Test
+    fun `a second off-page word in the same sentence does not turn again`() {
+        val c = following()
+        c.onAudioPosition(11_500, 100L)
+        assertNotNull(c.onWordOffPage(p0, 200L))
+        assertNull(c.onWordOffPage(p0, 400L))
+    }
+
+    @Test
+    fun `a new sentence allows one turn again`() {
+        val c = following()
+        c.onAudioPosition(11_500, 100L)
+        assertNotNull(c.onWordOffPage(p0, 200L))
+        c.onAudioPosition(13_500, 1_000L)
+        assertNotNull(c.onWordOffPage(p1, 1_100L))
+    }
+
+    @Test
+    fun `no turn while paused or off`() {
+        val c = following()
+        c.onAudioPosition(11_500, 100L)
+        c.onSuspectVerified(visible = false)
+        assertNull(c.onWordOffPage(p0, 200L))
+        c.stop()
+        assertNull(c.onWordOffPage(p0, 300L))
+    }
+
+    @Test
+    fun `a stale point yields no turn and no echo window`() {
+        val c = following()
+        c.onAudioPosition(13_500, 100L)
+        assertNull(c.onWordOffPage(p0, 200L))
+        assertEquals(ReadAlongController.LocatorVerdict.Suspect, c.onLocatorEmitted(300L))
+    }
+
+    @Test
+    fun `back to audio and a restart allow a turn for the same sentence again`() {
+        val c = following()
+        c.onAudioPosition(11_500, 100L)
+        assertNotNull(c.onWordOffPage(p0, 200L))
+        c.onSuspectVerified(visible = false)
+        c.onBackToAudio(5_000L)
+        assertNotNull(c.onWordOffPage(p0, 5_100L))
+        c.start(9_000L)
+        c.onAudioPosition(11_500, 9_100L)
+        assertNotNull(c.onWordOffPage(p0, 9_200L))
+    }
 }

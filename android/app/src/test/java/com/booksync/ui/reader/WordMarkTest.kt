@@ -87,6 +87,28 @@ class WordMarkTest {
     }
 
     @Test
+    fun `the set script answers where the word sits relative to the viewport (issue 841)`() {
+        val js = wordMarkSetScript(2)
+        for (verdict in listOf("'visible'", "'right'", "'left'", "'none'")) {
+            assertTrue("answers $verdict", js.contains(verdict))
+        }
+        // The same column test the visibility probe uses.
+        assertTrue(js.contains("getClientRects()"))
+        assertTrue(js.contains("width > 0"))
+        assertTrue(js.contains("left >= -1"))
+        assertTrue(js.contains("window.innerWidth"))
+        assertTrue(js.contains("left >= vpW"))
+        assertTrue(js.contains("right <= 0"))
+    }
+
+    @Test
+    fun `the set script answers none when there is nothing to paint, and on any exception`() {
+        val js = wordMarkSetScript(0)
+        assertTrue(js.contains("!m || i < 0 || i >= m.ranges.length || !CSS.highlights) return 'none'"))
+        assertTrue(js.contains("catch (e) { return 'none'; }"))
+    }
+
+    @Test
     fun `the clear script deletes the highlight, guarded`() {
         val js = wordMarkClearScript()
         assertTrue(js.contains("CSS.highlights.delete('tandem-word')"))

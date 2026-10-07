@@ -109,15 +109,35 @@ $pageSearchPrelude
 """.trimIndent()
 }
 
-/** Paints token [index] of the located sentence; does nothing when there is no such range. */
+/**
+ * Paints token [index] of the located sentence and answers where its range
+ * sits relative to the viewport (issue #841): `'visible'` when any of its
+ * rects is in the current column (the same test [sentenceVisibilityScript]
+ * uses), `'right'` when every rect lies past the right edge (the word is on
+ * the next page), `'left'` when every rect lies before the left edge, and
+ * `'none'` when there is nothing to paint or measure, or on any exception.
+ */
 internal fun wordMarkSetScript(index: Int): String = """
 (function(i) {
     try {
         var m = window.__tandemWordMark;
-        if (!m || i < 0 || i >= m.ranges.length || !CSS.highlights) return 0;
+        if (!m || i < 0 || i >= m.ranges.length || !CSS.highlights) return 'none';
         CSS.highlights.set('$WORD_HIGHLIGHT_NAME', new Highlight(m.ranges[i]));
-        return 1;
-    } catch (e) { return 0; }
+        var vpW = window.innerWidth;
+        var rects = m.ranges[i].getClientRects();
+        var seen = 0, allRight = true, allLeft = true;
+        for (var r = 0; r < rects.length; r++) {
+            if (!(rects[r].width > 0)) continue;
+            seen++;
+            if (rects[r].left >= -1 && rects[r].left < vpW) return 'visible';
+            if (!(rects[r].left >= vpW)) allRight = false;
+            if (!(rects[r].right <= 0)) allLeft = false;
+        }
+        if (seen === 0) return 'none';
+        if (allRight) return 'right';
+        if (allLeft) return 'left';
+        return 'none';
+    } catch (e) { return 'none'; }
 })($index)
 """.trimIndent()
 
