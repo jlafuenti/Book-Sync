@@ -6,6 +6,7 @@ import com.booksync.data.util.localFileName
 import com.booksync.data.local.entity.*
 import com.booksync.data.remote.*
 import com.booksync.diagnostics.DiagnosticLogger
+import com.booksync.sync.WordTokens
 import com.booksync.diagnostics.LogChannel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CancellationException
@@ -37,6 +38,7 @@ class MediaDownloadRepository @Inject constructor(
     private val eBookDao: EBookDao,
     private val audioBookDao: AudioBookDao,
     private val syncPointDao: SyncPointDao,
+    private val syncPointWordsDao: SyncPointWordsDao,
     @param:ApplicationContext private val context: Context,
     private val diagnosticLogger: DiagnosticLogger,
     private val syncMapRemovalStore: SyncMapRemovalStore,
@@ -171,6 +173,7 @@ class MediaDownloadRepository @Inject constructor(
 
     suspend fun clearSyncMapCache(pairId: Int) {
         syncPointDao.deletePointsForPair(pairId)
+        syncPointWordsDao.deleteForPair(pairId)
         resetSyncMapDownloaded(pairId)
     }
 
@@ -185,11 +188,75 @@ class MediaDownloadRepository @Inject constructor(
         // `syncMapDownloaded = false`, which the prune, Refresh and Remove all
         // read as "no map" (issue #678, seen on the emulator).
         withContext(NonCancellable) { saveSyncMap(pairId, syncMap) }
+
+        // Word timing is optional (issue #836): fetched after the map is safely
+        // saved, outside the NonCancellable block so a cancelled bounded wait does
+        // not hold the caller for a second request, and never allowed to fail the
+        // download. A cancel here costs nothing: [ensureSyncPointWords] fetches on
+        // demand when the reader asks.
+        fetchAndStoreSyncPointWords(pairId, expectedVersion = syncMap.version)
     }
 
+    /**
+     * Fetches `GET .../syncmap/{pairId}/words` and replaces this pair's cached
+     * rows. Returns whether any rows are stored afterwards. A response for a
+     * different map version than [expectedVersion] is dropped: its timings
+     * would not line up with the points on disk. Network and decode failures
+     * are logged and swallowed.
+     */
+    private suspend fun fetchAndStoreSyncPointWords(pairId: Int, expectedVersion: Int?): Boolean {
+        return try {
+            val words = api.getSyncMapWords(pairId)
+            if (expectedVersion != null && words.version != expectedVersion) {
+                logW("sync point words — pair $pairId: server map v${words.version}, cache v$expectedVersion; not stored")
+                return false
+            }
+            val rows = words.points
+                .filter { it.word_starts.isNotEmpty() }
+                .map {
+                    SyncPointWordsEntity(
+                        bookPairId = pairId,
+                        epubChapter = it.epub_chapter,
+                        epubSentenceIndex = it.epub_sentence_index,
+                        wordStarts = WordTokens.joinStarts(it.word_starts),
+                    )
+                }
+            syncPointWordsDao.deleteForPair(pairId)
+            if (rows.isNotEmpty()) syncPointWordsDao.insertAll(rows)
+            log("sync point words — ${rows.size} points with word timing saved for pair $pairId")
+            rows.isNotEmpty()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            logW("sync point words — pair $pairId fetch failed: ${e.message}")
+            false
+        }
+    }
+
+    /**
+     * Makes sure the word timing for [pairId] is cached, for the reader's
+     * read-along word mark (issue #836). True when rows are present, already
+     * or after a fetch; false when there is no cached sync map, the server has
+     * no words for it, or the fetch failed (the next follow start tries again).
+     * Never throws.
+     */
+    suspend fun ensureSyncPointWords(pairId: Int): Boolean {
+        if (syncPointWordsDao.countForPair(pairId) > 0) return true
+        val pair = bookPairDao.getPairById(pairId)
+        if (pair?.syncMapDownloaded != true) return false
+        return fetchAndStoreSyncPointWords(pairId, expectedVersion = pair.syncMapVersion)
+    }
+
+    /** Cached word starts per sync point, keyed by (chapter, sentence index). */
+    suspend fun getSyncPointWords(pairId: Int): Map<Pair<Int, Int>, IntArray> =
+        syncPointWordsDao.getForPair(pairId)
+            .associate { (it.epubChapter to it.epubSentenceIndex) to WordTokens.parseStarts(it.wordStarts) }
+            .filterValues { it.isNotEmpty() }
+
     private suspend fun saveSyncMap(pairId: Int, syncMap: SyncMapResponse) {
-        // Clear old sync points
+        // Clear old sync points, and the word timing that belonged to them
         syncPointDao.deletePointsForPair(pairId)
+        syncPointWordsDao.deleteForPair(pairId)
 
         // Save new sync points
         val entities = syncMap.sync_points.map { point ->

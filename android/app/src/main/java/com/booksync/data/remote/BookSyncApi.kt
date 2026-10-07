@@ -211,6 +211,10 @@ interface BookSyncApi {
     @GET("api/files/syncmap/{pairId}")
     suspend fun getSyncMap(@Path("pairId") pairId: Int): SyncMapResponse
 
+    /** Per-word start times for the points that have them (issue #836). */
+    @GET("api/files/syncmap/{pairId}/words")
+    suspend fun getSyncMapWords(@Path("pairId") pairId: Int): SyncMapWordsResponse
+
     // ============ Bookmark ============
     //
     // Only the history log is left here. The bookmark GET/PUT were adapters

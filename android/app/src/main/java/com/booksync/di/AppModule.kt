@@ -330,6 +330,7 @@ object AppModule {
             com.booksync.data.local.MIGRATION_20_21,
             com.booksync.data.local.MIGRATION_21_22,
             com.booksync.data.local.MIGRATION_22_23,
+            com.booksync.data.local.MIGRATION_23_24,
         )
          // Destructive fallback ONLY for pre-position-work installs (< v12,
          // before MIGRATION_12_13 — those versions predate the migration
@@ -352,6 +353,9 @@ object AppModule {
 
     @Provides
     fun provideSyncPointDao(db: BookSyncDatabase): SyncPointDao = db.syncPointDao()
+
+    @Provides
+    fun provideSyncPointWordsDao(db: BookSyncDatabase): SyncPointWordsDao = db.syncPointWordsDao()
 
     @Provides
     fun provideBookmarkDao(db: BookSyncDatabase): BookmarkDao = db.bookmarkDao()

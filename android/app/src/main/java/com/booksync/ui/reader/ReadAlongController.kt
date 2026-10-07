@@ -75,9 +75,22 @@ fun planAudioStart(itemLoaded: Boolean, targetMs: Int, savedMs: Int?): AudioStar
  */
 class ReadAlongController(
     private val points: List<SyncPointEntity>,
+    words: Map<Pair<Int, Int>, IntArray> = emptyMap(),
     private val jumpEchoWindowMs: Long = 1500L,
 ) {
     enum class State { Off, Following, Paused }
+
+    /**
+     * Word start times (audio ms) per sentence, keyed by (chapter, sentence
+     * index), for the word mark (issue #836). One value per whitespace token of
+     * the sentence's text; a sentence not listed has no word timing. Loaded
+     * after the controller starts when the cache was empty, so replaceable
+     * through [setWords].
+     */
+    private var words: Map<Pair<Int, Int>, IntArray> = words
+
+    /** The token last reported through [Action.Word]; [NO_TOKEN] until the first poll in a sentence. */
+    private var currentToken: Int = NO_TOKEN
 
     /**
      * Quote context for each sentence, indexed once per following session
@@ -88,6 +101,14 @@ class ReadAlongController(
     sealed interface Action {
         data class Decorate(val point: SyncPointEntity) : Action
         data class Jump(val point: SyncPointEntity) : Action
+
+        /**
+         * The word under the audio changed (issue #836): [tokenIndex] is the
+         * whitespace token of [point]'s text now being read, or -1 for none
+         * (before the first word, or a sentence with no word timing), which
+         * means clear the word mark.
+         */
+        data class Word(val point: SyncPointEntity, val tokenIndex: Int) : Action
     }
 
     enum class LocatorVerdict { Ignored, Echo, Suspect }
@@ -104,21 +125,67 @@ class ReadAlongController(
     fun start(nowMs: Long) {
         state = State.Following
         currentPoint = null
+        currentToken = NO_TOKEN
         lastJumpAtMs = Long.MIN_VALUE / 2
     }
 
     fun stop() {
         state = State.Off
         currentPoint = null
+        currentToken = NO_TOKEN
         lastJumpAtMs = Long.MIN_VALUE / 2
     }
 
-    fun onAudioPosition(audioMs: Int, nowMs: Long): Action.Decorate? {
-        if (state == State.Off) return null
-        val point = SyncMatcher.pointForAudioPosition(points, audioMs) { it.audioStartMs } ?: return null
+    /** Replaces the word timing; the next poll reports the current word again. */
+    fun setWords(map: Map<Pair<Int, Int>, IntArray>) {
+        words = map
+        currentToken = NO_TOKEN
+    }
+
+    /** The word start times of [point]'s sentence, or null when it has none. */
+    fun wordStartsFor(point: SyncPointEntity): IntArray? =
+        words[point.epubChapter to point.epubSentenceIndex]
+
+    /**
+     * One poll tick. A change of sentence yields [Action.Decorate]; then, while
+     * following, [Action.Word] whenever the token under [audioMs] differs from
+     * the one last reported. [currentToken] is reset on a sentence change, so
+     * the first poll in a new sentence always reports its word (or -1, which
+     * clears the previous sentence's mark).
+     */
+    fun onAudioPosition(audioMs: Int, nowMs: Long): List<Action> {
+        if (state == State.Off) return emptyList()
+        val point = SyncMatcher.pointForAudioPosition(points, audioMs) { it.audioStartMs } ?: return emptyList()
         val changed = !sameSentence(point, currentPoint)
         currentPoint = point
-        return if (changed && state == State.Following) Action.Decorate(point) else null
+        if (changed) currentToken = NO_TOKEN
+        if (state != State.Following) return emptyList()
+        val out = ArrayList<Action>(2)
+        if (changed) out.add(Action.Decorate(point))
+        val token = tokenAt(wordStartsFor(point), audioMs)
+        if (token != currentToken) {
+            currentToken = token
+            out.add(Action.Word(point, token))
+        }
+        return out
+    }
+
+    /** Index of the last start <= [audioMs]; -1 before the first or without timing. */
+    private fun tokenAt(starts: IntArray?, audioMs: Int): Int {
+        if (starts == null || starts.isEmpty()) return -1
+        var lo = 0
+        var hi = starts.size - 1
+        var found = -1
+        while (lo <= hi) {
+            val mid = (lo + hi) ushr 1
+            if (starts[mid] <= audioMs) {
+                found = mid
+                lo = mid + 1
+            } else {
+                hi = mid - 1
+            }
+        }
+        return found
     }
 
     fun onSentenceVisibility(point: SyncPointEntity, visible: Boolean, nowMs: Long): Action.Jump? {
@@ -147,6 +214,8 @@ class ReadAlongController(
             else -> return false
         }
         state = next
+        // The word mark was cleared with the pause; report the word again.
+        if (next == State.Following) currentToken = NO_TOKEN
         return true
     }
 
@@ -155,6 +224,8 @@ class ReadAlongController(
         if (state != State.Paused || point == null) return emptyList()
         state = State.Following
         lastJumpAtMs = nowMs
+        // The word mark was cleared with the pause; report the word again.
+        currentToken = NO_TOKEN
         return listOf(Action.Decorate(point), Action.Jump(point))
     }
 
@@ -163,6 +234,9 @@ class ReadAlongController(
             a.epubChapter == b.epubChapter && a.epubSentenceIndex == b.epubSentenceIndex
 
     companion object {
+        /** Distinct from every real token index, including -1 ("no word"). */
+        private const val NO_TOKEN = -2
+
         /**
          * The text to look for on the page for a sync point. A preview can
          * span two paragraphs (the server's tokenizer joins a dangling

@@ -9,6 +9,7 @@ import com.booksync.data.local.dao.BookmarkLogDao
 import com.booksync.data.local.dao.EBookDao
 import com.booksync.data.local.dao.PendingSyncDao
 import com.booksync.data.local.dao.SyncPointDao
+import com.booksync.data.local.dao.SyncPointWordsDao
 import com.booksync.data.local.dao.UserProgressDao
 import com.booksync.data.remote.BookSyncApi
 import com.booksync.data.remote.DeviceIdManager
@@ -35,6 +36,7 @@ internal fun buildRepository(
     eBookDao: EBookDao = mockk(relaxed = true),
     audioBookDao: AudioBookDao = mockk(relaxed = true),
     syncPointDao: SyncPointDao = mockk(relaxed = true),
+    syncPointWordsDao: SyncPointWordsDao = mockk(relaxed = true),
     bookmarkDao: BookmarkDao = mockk(relaxed = true),
     pendingSyncDao: PendingSyncDao = mockk(relaxed = true),
     userProgressDao: UserProgressDao = mockk(relaxed = true),
@@ -54,6 +56,7 @@ internal fun buildRepository(
         eBookDao = eBookDao,
         audioBookDao = audioBookDao,
         syncPointDao = syncPointDao,
+        syncPointWordsDao = syncPointWordsDao,
         bookmarkDao = bookmarkDao,
         userProgressDao = userProgressDao,
         acknowledgedItemDao = acknowledgedItemDao,
@@ -66,6 +69,7 @@ internal fun buildRepository(
         eBookDao = eBookDao,
         audioBookDao = audioBookDao,
         syncPointDao = syncPointDao,
+        syncPointWordsDao = syncPointWordsDao,
         context = context,
         diagnosticLogger = diagnosticLogger,
         syncMapRemovalStore = syncMapRemovalStore,
@@ -93,6 +97,7 @@ internal fun buildLibraryRepository(
     eBookDao: EBookDao = mockk(relaxed = true),
     audioBookDao: AudioBookDao = mockk(relaxed = true),
     syncPointDao: SyncPointDao = mockk(relaxed = true),
+    syncPointWordsDao: SyncPointWordsDao = mockk(relaxed = true),
     bookmarkDao: BookmarkDao = mockk(relaxed = true),
     userProgressDao: UserProgressDao = mockk(relaxed = true),
     acknowledgedItemDao: AcknowledgedItemDao = mockk(relaxed = true),
@@ -104,6 +109,7 @@ internal fun buildLibraryRepository(
     eBookDao = eBookDao,
     audioBookDao = audioBookDao,
     syncPointDao = syncPointDao,
+    syncPointWordsDao = syncPointWordsDao,
     bookmarkDao = bookmarkDao,
     userProgressDao = userProgressDao,
     acknowledgedItemDao = acknowledgedItemDao,
@@ -118,6 +124,7 @@ internal fun buildMediaDownloadRepository(
     eBookDao: EBookDao = mockk(relaxed = true),
     audioBookDao: AudioBookDao = mockk(relaxed = true),
     syncPointDao: SyncPointDao = mockk(relaxed = true),
+    syncPointWordsDao: SyncPointWordsDao = mockk(relaxed = true),
     context: Context = mockk(relaxed = true),
     diagnosticLogger: DiagnosticLogger = mockk(relaxed = true),
     syncMapRemovalStore: SyncMapRemovalStore = mockk(relaxed = true),
@@ -127,6 +134,7 @@ internal fun buildMediaDownloadRepository(
     eBookDao = eBookDao,
     audioBookDao = audioBookDao,
     syncPointDao = syncPointDao,
+    syncPointWordsDao = syncPointWordsDao,
     context = context,
     diagnosticLogger = diagnosticLogger,
     syncMapRemovalStore = syncMapRemovalStore,

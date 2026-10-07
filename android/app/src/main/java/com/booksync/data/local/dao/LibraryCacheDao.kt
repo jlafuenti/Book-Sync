@@ -37,8 +37,11 @@ interface LibraryCacheDao {
     @Query("DELETE FROM sync_points")
     suspend fun clearSyncPoints()
 
+    @Query("DELETE FROM sync_point_words")
+    suspend fun clearSyncPointWords()
+
     /**
-     * All four together: a crash midway would otherwise leave, say, the pairs
+     * All five together: a crash midway would otherwise leave, say, the pairs
      * gone and their sync points behind, where the next refresh against the new
      * server would resolve a pair id to another server's alignment data.
      */
@@ -48,5 +51,6 @@ interface LibraryCacheDao {
         clearEbooks()
         clearAudiobooks()
         clearSyncPoints()
+        clearSyncPointWords()
     }
 }

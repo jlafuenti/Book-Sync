@@ -30,7 +30,7 @@ import org.junit.Test
  */
 class LibraryCacheClearQueryTest {
 
-    private val libraryTables = listOf("book_pairs", "ebooks", "audiobooks", "sync_points")
+    private val libraryTables = listOf("book_pairs", "ebooks", "audiobooks", "sync_points", "sync_point_words")
     private val personalTables = listOf(
         "bookmarks", "user_progress", "bookmark_log", "pending_sync", "acknowledged_items",
     )
@@ -115,6 +115,7 @@ class LibraryCacheClearQueryTest {
                 "epubTextPreview, audioStartMs, audioEndMs, confidence) " +
                 "VALUES (1, 0, 0, 'text', 0, 1000, 1.0)"
         )
+        exec("INSERT INTO sync_point_words (bookPairId, epubChapter, epubSentenceIndex, wordStarts) VALUES (1, 0, 0, '0,400')")
         exec(
             "INSERT INTO bookmarks (scopeKey, bookPairId, source, epubChapter, epubSentenceIndex, " +
                 "audioPositionMs, updatedAt, syncedToServer) " +

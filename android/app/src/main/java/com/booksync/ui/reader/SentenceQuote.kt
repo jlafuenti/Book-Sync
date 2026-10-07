@@ -103,6 +103,39 @@ class SentenceQuoteIndex(points: List<SyncPointEntity>) {
  */
 fun sentenceVisibilityScript(quote: String, before: String?, after: String?): String = """
 (function(quote, before, after) {
+$pageSearchPrelude
+    var full = squash(collapse(quote)).text;
+    var want = full.substring(0, 60);
+    if (!want) return 'missing';
+    var ctxBefore = squash(collapse(before)).text;
+    var ctxAfter = squash(collapse(after)).text;
+    var best = bestOccurrence(want, full.length, ctxBefore, ctxAfter);
+    if (best < 0) return 'missing';
+    var first = page.map[best];
+    var last = page.map[best + want.length - 1];
+    var range = document.createRange();
+    range.setStart(owners[first], offsets[first]);
+    range.setEnd(owners[last], offsets[last] + 1);
+    var rects = range.getClientRects();
+    var vpW = window.innerWidth;
+    for (var r = 0; r < rects.length; r++) {
+        // The current column's fragments sit in [0, vpW).
+        if (rects[r].width > 0 && rects[r].left >= -1 && rects[r].left < vpW) return 'visible';
+    }
+    return 'hidden';
+})(${jsString(quote)}, ${jsString(before)}, ${jsString(after)})
+""".trimIndent()
+
+/**
+ * The page-text search shared by [sentenceVisibilityScript] and
+ * [wordMarkLocateScript] (issue #836): the helpers `collapse` and `squash`, the
+ * walk over the document's text nodes that builds `chars`/`owners`/`offsets`
+ * and the squashed `page`, and `bestOccurrence`, which picks among repeated
+ * copies of a sentence by their surroundings (issue #793). Pasted at the top
+ * of a script's function body; a script then reads `page`, `owners` and
+ * `offsets` to build a DOM range for the characters it found.
+ */
+internal val pageSearchPrelude: String = """
     function collapse(s) { return s.replace(/\s+/g, ' ').trim(); }
     // Text with the space before punctuation dropped; map[i] is the index in
     // the input of squashed character i.
@@ -115,11 +148,6 @@ fun sentenceVisibilityScript(quote: String, before: String?, after: String?): St
         }
         return { text: out.join(''), map: map };
     }
-    var full = squash(collapse(quote)).text;
-    var want = full.substring(0, 60);
-    if (!want) return 'missing';
-    var ctxBefore = squash(collapse(before)).text;
-    var ctxAfter = squash(collapse(after)).text;
     var walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null);
     var chars = [], owners = [], offsets = [], lastSpace = true, node;
     while ((node = walker.nextNode())) {
@@ -149,28 +177,20 @@ fun sentenceVisibilityScript(quote: String, before: String?, after: String?): St
         while (n < a.length && n < b.length && a.charAt(n) === b.charAt(n)) n++;
         return n;
     }
-    var best = -1, bestScore = -1, from = 0, at;
-    while ((at = page.text.indexOf(want, from)) >= 0) {
-        var score = 0;
-        if (ctxBefore) score += commonSuffix(ctxBefore, page.text.substring(Math.max(0, at - ctxBefore.length - 1), at).replace(/ +$/, ''));
-        if (ctxAfter) score += commonPrefix(ctxAfter, page.text.substring(at + full.length).replace(/^ +/, ''));
-        if (score > bestScore) { best = at; bestScore = score; }
-        from = at + 1;
+    // Index in page.text of the copy of `want` whose surroundings best match
+    // ctxBefore / ctxAfter (a tie keeps the first); -1 when absent. `fullLen`
+    // is where the sentence ends, so the text after it can be compared.
+    function bestOccurrence(want, fullLen, ctxBefore, ctxAfter) {
+        var best = -1, bestScore = -1, from = 0, at;
+        while ((at = page.text.indexOf(want, from)) >= 0) {
+            var score = 0;
+            if (ctxBefore) score += commonSuffix(ctxBefore, page.text.substring(Math.max(0, at - ctxBefore.length - 1), at).replace(/ +$/, ''));
+            if (ctxAfter) score += commonPrefix(ctxAfter, page.text.substring(at + fullLen).replace(/^ +/, ''));
+            if (score > bestScore) { best = at; bestScore = score; }
+            from = at + 1;
+        }
+        return best;
     }
-    if (best < 0) return 'missing';
-    var first = page.map[best];
-    var last = page.map[best + want.length - 1];
-    var range = document.createRange();
-    range.setStart(owners[first], offsets[first]);
-    range.setEnd(owners[last], offsets[last] + 1);
-    var rects = range.getClientRects();
-    var vpW = window.innerWidth;
-    for (var r = 0; r < rects.length; r++) {
-        // The current column's fragments sit in [0, vpW).
-        if (rects[r].width > 0 && rects[r].left >= -1 && rects[r].left < vpW) return 'visible';
-    }
-    return 'hidden';
-})(${jsString(quote)}, ${jsString(before)}, ${jsString(after)})
 """.trimIndent()
 
 /** A JavaScript string literal for [s]; null becomes the empty string. */

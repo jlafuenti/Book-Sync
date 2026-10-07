@@ -467,7 +467,7 @@ compares it at every authentication:
 |---|---|
 | nothing | nothing — a re-login must not cost the user their downloads |
 | the **user**, same server | rows and files stand; the in-memory Auto search results are dropped and the owner re-stamped. One server's library is shared, so deleting would cost a large re-download and buy no privacy — and the *positions* are already scoped, so Continue Listening is correctly empty for the new account |
-| the **server** | `book_pairs` / `ebooks` / `audiobooks` / `sync_points` cleared, and `files/ebooks`, `files/audiobooks` and `files/covers` emptied — at a server change everything in them came from the outgoing server. Row ids are per-server, and `CoverArtHelper` caches at `filesDir/covers/{audiobookId}.jpg` — **id alone** — so another Tandem's artwork would be drawn onto this one's book of the same id |
+| the **server** | `book_pairs` / `ebooks` / `audiobooks` / `sync_points` / `sync_point_words` cleared, and `files/ebooks`, `files/audiobooks` and `files/covers` emptied — at a server change everything in them came from the outgoing server. Row ids are per-server, and `CoverArtHelper` caches at `filesDir/covers/{audiobookId}.jpg` — **id alone** — so another Tandem's artwork would be drawn onto this one's book of the same id |
 | the owner cannot be read | `Unverified`: the browse node says "Tandem couldn't load your library…", search returns nothing, and no media id resolves. Failing open here is the bug |
 
 **This is a check on state, not a hook on sign-out, and that is deliberate — do not "fix" it back.**
@@ -707,9 +707,32 @@ the page turns when the sentence leaves it.
   sentence is marked up to that cut, and a preview of exactly 200 characters
   gets no context after it. While following is paused the mark stays on the
   sentence that was current.
+- **Word mark (issue #836).** Inside the marked sentence, the word being read
+  gets its own stronger mark. The data is per-word start times from
+  `GET /api/files/syncmap/{pairId}/words`, one value per whitespace token of
+  the sentence's `epub_text_preview` (the token rule is `WordTokens`, pinned by
+  the shared `word_tokens_cases.json` parity fixture). They are fetched after
+  the sync map is saved, cached in the `sync_point_words` table (database v24),
+  dropped wherever the sync points are, and fetched once on demand when
+  following starts with none cached. The word is found 150 ms at a time:
+  `ReadAlongController.onAudioPosition` binary-searches the sentence's starts
+  and yields an `Action.Word` only when the token changes. It is drawn with the
+  CSS Custom Highlight API (`CSS.highlights`, registered as `tandem-word`)
+  rather than a Readium decoration: the page search in `WordMark.kt` builds one
+  DOM `Range` per token once per sentence, and each word change is a single
+  `CSS.highlights.set`. The sentence `Decoration` and its 700 ms relayout are
+  unchanged. It falls back to the sentence mark alone, never a wrong word, when
+  the sentence has no word timing (an interpolated point, or a transcript made
+  without words), when the number of ranges the page search built differs from
+  the number of timed words, when the whole sentence cannot be found on the
+  page, or when the WebView has no `CSS.highlights`. The mark is cleared when
+  following stops or pauses for a manual turn, and on Back to audio before the
+  sentence is marked again.
 - **Audio.** The reader attaches its own `MediaController` to the running
-  service and polls every 500 ms, like the player and the mini player. Its
-  pause button announces `CMD_USER_PAUSE` first, like the player's.
+  service and polls every 150 ms (500 ms before the word mark; the player and
+  the mini player still poll at 500 ms). Sentence work is idempotent, so the
+  finer cadence costs one binary search per tick. Its pause button announces
+  `CMD_USER_PAUSE` first, like the player's.
 - **From a selection.** "Read along" in the text-selection toolbar (next to
   Define and Sync to Audio, same availability rule as Sync to Audio) looks the
   selected sentence up in the sync map and starts following from it, without
