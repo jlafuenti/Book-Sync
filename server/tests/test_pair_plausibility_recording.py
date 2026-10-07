@@ -22,7 +22,13 @@ from sqlalchemy import select
 
 from models.book import AudioBook, BookPair, EBook, PairStatus
 from models.library_issue import LibraryCheckResult
-from services.pair_plausibility import CHECK_TYPE, record_pair_plausibility
+from services.pair_plausibility import (
+    CHECK_TYPE,
+    MEASURED_DETAIL_PREFIX,
+    NOT_MEASURED_DETAIL_PREFIX,
+    is_measured_pass,
+    record_pair_plausibility,
+)
 
 
 async def _pair(db, ebook_size, duration, is_abridged=False):
@@ -71,7 +77,7 @@ async def test_a_plausible_pair_records_a_passing_row(db):
     rows = await _rows(db, pair.id)
     assert len(rows) == 1
     assert rows[0].ok is True
-    assert rows[0].detail is None
+    assert rows[0].detail.startswith(NOT_MEASURED_DETAIL_PREFIX)
 
 
 async def test_running_it_twice_updates_the_row_rather_than_duplicating(db):
@@ -100,7 +106,7 @@ async def test_a_pair_that_becomes_plausible_clears_its_finding(db):
     rows = await _rows(db, pair.id)
     assert len(rows) == 1
     assert rows[0].ok is True
-    assert rows[0].detail is None
+    assert rows[0].detail.startswith(NOT_MEASURED_DETAIL_PREFIX)
 
 
 async def test_an_abridged_audiobook_records_no_finding(db):
@@ -201,7 +207,7 @@ async def test_relinking_replaces_a_stale_verdict_for_the_old_file(db):
     rows = await _rows(db, pair.id)
     assert len(rows) == 1
     assert rows[0].ok is True
-    assert rows[0].detail is None
+    assert rows[0].detail.startswith(NOT_MEASURED_DETAIL_PREFIX)
 
 
 # ---------------------------------------------------------------------------
@@ -264,3 +270,80 @@ async def test_no_probe_when_there_is_no_stated_length(db, monkeypatch):
     await record_pair_plausibility(db, pair, eb, ab)
 
     assert calls == []
+
+
+# ---------------------------------------------------------------------------
+# What a stored pass was based on (issue #833)
+# ---------------------------------------------------------------------------
+#
+# Library verify re-checks a stored pass only when it was not measured by a
+# word count, so the row has to say which kind it is. Before #833 every pass
+# was `detail=None`, and a byte-band pass or a "cannot judge" looked exactly
+# like a real words-per-hour measurement.
+
+
+async def test_a_word_count_pass_is_recorded_as_measured(db):
+    pair, eb, ab = await _pair(db, ebook_size=600_000, duration=10 * 3600)
+
+    await record_pair_plausibility(db, pair, eb, ab, word_count=100_000)
+
+    row = (await _rows(db, pair.id))[0]
+    assert row.ok is True
+    assert row.detail.startswith(MEASURED_DETAIL_PREFIX)
+    assert "100,000 words" in row.detail
+    assert "10.0 hours" in row.detail
+
+
+async def test_a_file_size_pass_is_recorded_as_not_measured(db):
+    pair, eb, ab = await _pair(db, ebook_size=600_000, duration=10 * 3600)
+
+    await record_pair_plausibility(db, pair, eb, ab)
+
+    row = (await _rows(db, pair.id))[0]
+    assert row.ok is True
+    assert row.detail.startswith(NOT_MEASURED_DETAIL_PREFIX)
+    assert "file size" in row.detail
+
+
+async def test_a_pass_without_a_length_is_recorded_as_not_measured(db):
+    """No duration yet (#127): the check cannot judge, which is not a pass."""
+    pair, eb, ab = await _pair(db, ebook_size=600_000, duration=None)
+
+    await record_pair_plausibility(db, pair, eb, ab, word_count=220_000)
+
+    row = (await _rows(db, pair.id))[0]
+    assert row.ok is True
+    assert row.detail.startswith(NOT_MEASURED_DETAIL_PREFIX)
+
+
+async def test_an_abridged_pass_is_recorded_as_not_measured(db):
+    pair, eb, ab = await _pair(db, ebook_size=600_000, duration=3 * 3600,
+                               is_abridged=True)
+
+    await record_pair_plausibility(db, pair, eb, ab, word_count=220_000)
+
+    row = (await _rows(db, pair.id))[0]
+    assert row.ok is True
+    assert row.detail.startswith(NOT_MEASURED_DETAIL_PREFIX)
+
+
+async def test_a_failure_keeps_its_explanation(db):
+    """Failing rows read as before: the operator sees them in Troubleshoot."""
+    pair, eb, ab = await _pair(db, ebook_size=600_000, duration=int(6.4 * 3600))
+
+    await record_pair_plausibility(db, pair, eb, ab, word_count=220_000)
+
+    row = (await _rows(db, pair.id))[0]
+    assert row.ok is False
+    assert not row.detail.startswith((MEASURED_DETAIL_PREFIX, NOT_MEASURED_DETAIL_PREFIX))
+    assert "words/hour" in row.detail
+
+
+@pytest.mark.parametrize("ok, detail, expected", [
+    (True, "Measured: 100,000 words in 10.0 hours (~10,000 words/hour)", True),
+    (True, "Not measured: judged on file size alone", False),
+    (True, None, False),            # a row from before #833: basis unknown
+    (False, "Measured: looks like one but failed", False),
+])
+def test_is_measured_pass(ok, detail, expected):
+    assert is_measured_pass(ok, detail) is expected

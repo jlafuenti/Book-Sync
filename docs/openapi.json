@@ -3565,7 +3565,7 @@
       },
       "PlausibilityRecheckSummary": {
         "additionalProperties": false,
-        "description": "What a verify run's pair-plausibility phase did (issues #693, #798).\n`evaluated` is the never-checked pairs that were given a first verdict and\n`failed` how many of those verdicts were failures, so they now appear in\nTroubleshoot's implausible-pair list. `cleared` is stored failures that now\npass; `orphans_removed` is stored rows whose pair no longer exists.",
+        "description": "What a verify run's pair-plausibility phase did (issues #693, #798).\n`evaluated` is the never-checked pairs that were given a first verdict and\n`failed` how many of those verdicts were failures, so they now appear in\nTroubleshoot's implausible-pair list. `cleared` is stored failures that now\npass; `orphans_removed` is stored rows whose pair no longer exists.\n`rechecked` is stored passes that measured nothing (no word count, no\nlength, or recorded before #833) judged again, and `newly_failed` how many\nof those now fail (issue #833).",
         "properties": {
           "cleared": {
             "title": "Cleared",
@@ -3579,8 +3579,18 @@
             "title": "Failed",
             "type": "integer"
           },
+          "newly_failed": {
+            "default": 0,
+            "title": "Newly Failed",
+            "type": "integer"
+          },
           "orphans_removed": {
             "title": "Orphans Removed",
+            "type": "integer"
+          },
+          "rechecked": {
+            "default": 0,
+            "title": "Rechecked",
             "type": "integer"
           }
         },

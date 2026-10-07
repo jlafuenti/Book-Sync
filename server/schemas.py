@@ -1010,12 +1010,17 @@ class PlausibilityRecheckSummary(StrictResponse):
     `evaluated` is the never-checked pairs that were given a first verdict and
     `failed` how many of those verdicts were failures, so they now appear in
     Troubleshoot's implausible-pair list. `cleared` is stored failures that now
-    pass; `orphans_removed` is stored rows whose pair no longer exists."""
+    pass; `orphans_removed` is stored rows whose pair no longer exists.
+    `rechecked` is stored passes that measured nothing (no word count, no
+    length, or recorded before #833) judged again, and `newly_failed` how many
+    of those now fail (issue #833)."""
 
     cleared: int
     orphans_removed: int
     evaluated: int
     failed: int
+    rechecked: int = 0
+    newly_failed: int = 0
 
 
 class LibraryScanProgress(StrictResponse):

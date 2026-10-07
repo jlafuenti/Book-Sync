@@ -73,6 +73,21 @@ MAX_WORDS_PER_HOUR = 20_000
 # ebook or audiobook, so this is the first pair-scoped one.
 CHECK_TYPE = "pair_plausibility"
 
+# What a stored *pass* was based on (issue #833). Library verify leaves a pass
+# alone only when a real word count measured it (the #693 rule); a byte-band
+# pass or a "cannot judge" is an absence of evidence and is re-checked. Before
+# #833 every pass was stored with `detail=None`, so the two looked identical
+# and an abridged edition and a mostly-wrong m4b both sat behind "passes" that
+# had judged nothing. Failing rows keep their explanation and carry neither
+# prefix; verify re-checks every failure regardless.
+MEASURED_DETAIL_PREFIX = "Measured:"
+NOT_MEASURED_DETAIL_PREFIX = "Not measured:"
+
+
+def is_measured_pass(ok: bool, detail: Optional[str]) -> bool:
+    """True for a stored pass that a word count actually measured."""
+    return bool(ok) and bool(detail) and detail.startswith(MEASURED_DETAIL_PREFIX)
+
 
 def _human_duration(seconds: float) -> str:
     """`132` → `"2 minutes"`. The operator reads this in Troubleshoot Library."""
@@ -126,14 +141,37 @@ def check_pair_plausibility(
     plausible words-per-hour rate and an implausible bytes-per-hour one at the
     same time, and the precise signal has to win.
     """
+    ok, detail, _ = _judge(ebook_file_size, duration_seconds, is_abridged,
+                           word_count, real_duration_seconds)
+    return ok, detail
+
+
+def _judge(
+    ebook_file_size: Optional[int],
+    duration_seconds: Optional[float],
+    is_abridged: Optional[bool],
+    word_count: Optional[int],
+    real_duration_seconds: Optional[float],
+) -> Tuple[bool, Optional[str], Optional[str]]:
+    """`check_pair_plausibility`'s logic, plus what a pass was based on.
+
+    Returns `(ok, detail, pass_note)`: `detail` as `check_pair_plausibility`
+    documents it, and for a pass, `pass_note`, starting with
+    `MEASURED_DETAIL_PREFIX` or `NOT_MEASURED_DETAIL_PREFIX` (issue #833).
+    `record_pair_plausibility` stores the note so Library verify can tell a
+    measured pass from one that judged nothing.
+    """
     # An abridgement genuinely has far less audio than the ebook has text, which
     # is exactly the shape this check looks for. #458 names it as the obvious
     # false-positive class and the flag already exists on the row.
     if is_abridged:
-        return True, None
+        return True, None, f"{NOT_MEASURED_DETAIL_PREFIX} the audiobook is marked abridged."
 
     if not duration_seconds:
-        return True, None
+        return True, None, (
+            f"{NOT_MEASURED_DETAIL_PREFIX} the audiobook has no length yet, so "
+            f"there was nothing to compare the ebook against."
+        )
 
     # A padded file states hours its stream does not hold (issue #796); judge
     # on the audio that is there, and say why the length differs from the one
@@ -171,19 +209,29 @@ def check_pair_plausibility(
                     f"than this ebook's text accounts for, which usually means "
                     f"the wrong audiobook was matched."
                 )
-            return False, detail + padding_note
+            return False, detail + padding_note, None
         # The precise signal passed. Its verdict is final — do not second-guess
         # a real word-count measurement with the imprecise byte heuristic
         # below (issue #693).
-        return True, None
+        return True, None, (
+            f"{MEASURED_DETAIL_PREFIX} {word_count:,} words in {length} "
+            f"(~{words_per_hour:,.0f} words/hour).{padding_note}"
+        )
 
     if not ebook_file_size:
-        return True, None
+        return True, None, (
+            f"{NOT_MEASURED_DETAIL_PREFIX} no word count could be taken and the "
+            f"ebook has no recorded size."
+        )
 
     bytes_per_hour = ebook_file_size / hours
 
     if MIN_BYTES_PER_HOUR <= bytes_per_hour <= MAX_BYTES_PER_HOUR:
-        return True, None
+        return True, None, (
+            f"{NOT_MEASURED_DETAIL_PREFIX} no word count could be taken, so this "
+            f"was judged on file size alone ({_human_size(int(bytes_per_hour))} "
+            f"of ebook per hour of audio).{padding_note}"
+        )
 
     # Only reached when no word count was available at all, so the detail
     # says so — an operator reading Troubleshoot Library needs to know this
@@ -205,7 +253,7 @@ def check_pair_plausibility(
             f"this ebook's text accounts for, which usually means the wrong "
             f"audiobook was matched."
         )
-    return False, detail + padding_note
+    return False, detail + padding_note, None
 
 
 async def estimate_word_count(path: Optional[str]) -> Optional[int]:
@@ -289,16 +337,23 @@ async def record_pair_plausibility(db, pair, ebook, audiobook, word_count=None,
     flips the existing row — which is what makes a fixed pair's warning actually
     disappear from Troubleshoot Library, rather than lingering as a stale
     `ok=False` row describing a problem that no longer exists.
+
+    A passing row's `detail` says what the pass was based on (issue #833): a
+    `MEASURED_DETAIL_PREFIX` note for a real words-per-hour measurement, a
+    `NOT_MEASURED_DETAIL_PREFIX` one for a byte-band pass or a "cannot judge".
+    Library verify re-checks the second kind and leaves the first alone.
     """
     if real_duration_seconds is _PROBE:
         real_duration_seconds = await probe_real_duration(audiobook)
-    ok, detail = check_pair_plausibility(
-        ebook_file_size=getattr(ebook, "file_size", None),
-        duration_seconds=getattr(audiobook, "duration_seconds", None),
-        is_abridged=getattr(audiobook, "is_abridged", False),
-        word_count=word_count,
-        real_duration_seconds=real_duration_seconds,
+    ok, detail, pass_note = _judge(
+        getattr(ebook, "file_size", None),
+        getattr(audiobook, "duration_seconds", None),
+        getattr(audiobook, "is_abridged", False),
+        word_count,
+        real_duration_seconds,
     )
+    if ok:
+        detail = pass_note
 
     row = (await db.execute(select(LibraryCheckResult).where(
         LibraryCheckResult.item_type == "pair",
