@@ -20,16 +20,14 @@ async def request_retranscription(
     db: AsyncSession,
     pair_id: int,
     *,
-    priority: int = 100,
     detail: str = "Re-transcription requested",
 ) -> None:
     """Write (or refresh) the pair's rejection row. Flushes; never commits.
 
     The caller commits, then queues the pair: the worker can claim the job the
     moment it is queued and must already see the rejection, or it would reuse
-    the old transcript (docs/request-transactions.md). `priority` is the
-    caller's to pass on to `add_to_queue`; it is accepted here so call sites
-    state both halves of the request together, and it does not affect the row.
+    the old transcript (docs/request-transactions.md). The queue priority is
+    the caller's business: pass it to `add_to_queue`, not here.
     """
     row = (await db.execute(
         select(LibraryCheckResult).where(

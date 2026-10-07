@@ -1326,8 +1326,7 @@ async def word_timing_queue(
     )).scalars().all())
     for pair_id in pair_ids:
         await request_retranscription(
-            db, pair_id, priority=WORD_TIMING_PRIORITY,
-            detail="Re-transcription requested to add word timing",
+            db, pair_id, detail="Re-transcription requested to add word timing",
         )
     # Committed by hand before the side effect (docs/request-transactions.md):
     # the worker can claim a job as soon as it is queued, and must already see
