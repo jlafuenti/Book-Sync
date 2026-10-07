@@ -1,13 +1,17 @@
 # Optional: local (server-side) Whisper transcription.
 #
-# These power the LocalWhisperProvider — running OpenAI Whisper on the Book Sync
-# server itself. torch pulls the large nvidia-cu* CUDA wheels, which is slow to
-# build and unnecessary when transcription is offloaded to a remote/Jetson
-# worker (TRANSCRIPTION_PROVIDER=remote or remote_with_fallback with a reachable
-# remote).
+# These power the LocalWhisperProvider: faster-whisper (CTranslate2) running on
+# the Tandem server itself, with word timing like the remote worker returns.
+# It runs int8 on the CPU by default and needs no GPU. WHISPER_DEVICE=cuda (or
+# auto on a host with a GPU) switches to float16 on CUDA, which also needs the
+# NVIDIA cuBLAS and cuDNN libraries to be present in the image or on the host;
+# faster-whisper's README lists the versions its release expects. They are not
+# installed here.
 #
-# The default server image does NOT install these. To include local Whisper,
-# build with:  docker compose build --build-arg INSTALL_LOCAL_WHISPER=1
-# (see server/Dockerfile).
-torch>=2.14.1
-openai-whisper==20250625
+# The default server image does NOT install this, and neither does a deployment
+# that offloads transcription to a remote worker (TRANSCRIPTION_PROVIDER=remote).
+# To include local Whisper, build with:
+#   docker compose build --build-arg INSTALL_LOCAL_WHISPER=1
+# (see server/Dockerfile), or pull the prebuilt tandem-server:main-local image.
+# The model downloads on first use into APP_DATA_DIR/whisper.
+faster-whisper>=1.1

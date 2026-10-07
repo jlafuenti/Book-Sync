@@ -46,10 +46,10 @@ def test_router_module_imports(module_name):
 def test_transcription_stack_imports_without_ml_deps():
     """
     The default server image is remote-transcription-only: it ships without
-    torch/openai-whisper (they're an opt-in build). The transcription provider
+    faster-whisper (an opt-in build). The transcription provider
     chain must therefore import cleanly without the ML stack — anything that
-    needs torch/whisper is lazy-imported inside a function. This guards against a
-    top-level `import torch`/`import whisper` creeping back in and breaking the
+    needs faster_whisper is lazy-imported inside a function. This guards against a
+    top-level `import faster_whisper` creeping back in and breaking the
     remote build. (numpy/tqdm are base deps for alignment/transcription.)
     """
     from services.transcription import TranscribedSentence, transcribe_audiobook  # noqa: F401
@@ -61,7 +61,7 @@ def test_transcription_stack_imports_without_ml_deps():
 
 
 async def test_local_provider_unavailable_without_whisper(monkeypatch):
-    """LocalWhisperProvider reports unavailable when whisper can't be imported."""
+    """LocalWhisperProvider reports unavailable when faster_whisper can't be imported."""
     import builtins
 
     from services.transcription_providers import LocalWhisperProvider
@@ -69,7 +69,7 @@ async def test_local_provider_unavailable_without_whisper(monkeypatch):
     real_import = builtins.__import__
 
     def _no_whisper(name, *args, **kwargs):
-        if name in ("whisper", "torch"):
+        if name in ("faster_whisper", "ctranslate2"):
             raise ImportError(f"No module named '{name}'")
         return real_import(name, *args, **kwargs)
 
@@ -84,7 +84,7 @@ async def test_local_transcribe_reports_missing_ml_deps(monkeypatch):
     from services.transcription_providers.base import TranscriptionError
 
     def _boom(*args, **kwargs):
-        raise ImportError("No module named 'whisper'")
+        raise ImportError("No module named 'faster_whisper'")
 
     monkeypatch.setattr(tx, "transcribe_audiobook", _boom)
 
