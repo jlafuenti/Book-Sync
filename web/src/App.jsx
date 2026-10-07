@@ -414,7 +414,8 @@ export function AppShell({ user, setUser }) {
                             cannot use it. */}
                         <Route path="/system" element={<RequireRole min="admin"><SystemPage tab="status" /></RequireRole>} />
                         <Route path="/system/status" element={<RequireRole min="admin"><SystemPage tab="status" /></RequireRole>} />
-                        <Route path="/system/unsupported" element={<RequireRole min="editor"><SystemPage tab="unsupported" /></RequireRole>} />
+                        {/* Unsupported files moved into Troubleshoot Library; old links land there. */}
+                        <Route path="/system/unsupported" element={<Navigate to="/system/troubleshoot" replace />} />
                         <Route path="/system/import-sources" element={<RequireRole min="admin"><ImportSourcesPage /></RequireRole>} />
                         <Route path="/system/troubleshoot" element={<RequireRole min="editor"><TroubleshootPage /></RequireRole>} />
 

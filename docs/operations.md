@@ -1040,7 +1040,8 @@ sentence changes: version 3 (issue #763) marks maps that still hold sentences cu
 whose coordinates are fine but whose long sentences read-along marks only in part. **Nothing
 rebuilds on deploy or at startup.**
 
-Three admin-only endpoints drive the rebuild (the System page uses the same ones):
+Three admin-only endpoints drive the rebuild (Troubleshoot Library's Rebuild Sync Maps card uses
+the same ones):
 
 | Endpoint | What it does |
 |---|---|

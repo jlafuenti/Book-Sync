@@ -8,10 +8,12 @@ import {
     getEbook, getAudiobook, updateEbookMetadata, updateAudiobookMetadata,
     repairChapterEncoding, bulkRepairChapterEncoding,
     dismissMultiFileFolder, removeMultiFileTracks, scanLibrary,
-    getSyncMapAudit,
+    getSyncMapAudit, getUnsupportedFiles,
 } from '../api'
 import { useAuth } from '../contexts/AuthContext'
 import EnhancedMetadataModal from '../components/EnhancedMetadataModal'
+import UnsupportedFilesPanel from '../components/UnsupportedFilesPanel'
+import SyncMapRebuildCard from '../components/SyncMapRebuildCard'
 import PrintPageFill from '../components/PrintPageFill'
 import Modal from '../components/Modal'
 import { TourAnchors, TourScreens, useTourAnchor, useTourScreen } from '../tour/anchors'
@@ -591,6 +593,33 @@ function PrintPageCountsSection({ canEdit }) {
 }
 
 /* ── Page ──────────────────────────────────────────────────────────── */
+/**
+ * Unsupported formats (MOBI/AZW3), with the conversion tools that used to be
+ * the System page's Unsupported Files view. Rendered from
+ * `GET /api/library/unsupported` rather than the verification's rows: that
+ * list also holds files already converted whose original is still on disk, and
+ * Delete Original for those has to stay reachable.
+ */
+function UnsupportedFilesSection({ cat, files, canAdmin, onChanged }) {
+    const [open, setOpen] = useState(false)
+    return (
+        <div className="system-card ts-section">
+            <div className="system-card-header system-card-header-clickable" onClick={() => setOpen(o => !o)}>
+                <h3>
+                    <span className={`ts-count-badge ${cat.tone}`}>{files.length}</span>
+                    {cat.label}
+                </h3>
+                <Chevron open={open} />
+            </div>
+            {open && (
+                <div className="system-card-body">
+                    <UnsupportedFilesPanel files={files} canAdmin={canAdmin} onChanged={onChanged} />
+                </div>
+            )}
+        </div>
+    )
+}
+
 function TroubleshootPage() {
     const { hasMinRole } = useAuth()
     const canEdit = hasMinRole('editor')
@@ -600,6 +629,7 @@ function TroubleshootPage() {
     const canOpenSystem = hasMinRole('admin')
 
     const [data, setData] = useState(null)
+    const [unsupportedFiles, setUnsupportedFiles] = useState([])
     const [loading, setLoading] = useState(true)
     const [error, setError] = useState(null)
     const [scan, setScan] = useState(null)
@@ -615,6 +645,10 @@ function TroubleshootPage() {
         try { setData(await getLibraryIssues()) }
         catch (e) { setError(e.message) }
         finally { setLoading(false) }
+        // Separate from the issue list: a failure here should cost only the
+        // unsupported-files section, not the whole page.
+        try { setUnsupportedFiles(await getUnsupportedFiles()) }
+        catch { /* keep the last list */ }
     }, [])
 
     const openDetails = useCallback(async (itemType, itemId) => {
@@ -680,6 +714,11 @@ function TroubleshootPage() {
     const counts = data?.counts || {}
     const total = data?.total || 0
     const activeCats = CATEGORIES.filter(c => (data?.categories?.[c.key]?.length || 0) > 0)
+    // What gets a section: the active categories, except that unsupported
+    // formats follow the unsupported-files list (see UnsupportedFilesSection).
+    const shownCats = CATEGORIES.filter(c => c.key === 'unsupported_format'
+        ? unsupportedFiles.length > 0
+        : (data?.categories?.[c.key]?.length || 0) > 0)
 
     return (
         <div>
@@ -738,13 +777,24 @@ function TroubleshootPage() {
                 </div></div>
             )}
 
-            {activeCats.map(cat => (
+            {shownCats.map(cat => cat.key === 'unsupported_format' ? (
+                <UnsupportedFilesSection key={cat.key} cat={cat} files={unsupportedFiles}
+                    canAdmin={hasMinRole('admin')} onChanged={load} />
+            ) : (
                 <IssueSection key={cat.key} cat={cat} rows={data.categories[cat.key]}
                     canEdit={canEdit} canRetranscribe={hasMinRole('admin')}
                     onChanged={load} onOpenDetails={openDetails} />
             ))}
 
             <SyncMapAuditSection canEdit={canEdit} />
+
+            {/* Rebuild sync maps made by an older sentence splitter (admin
+                only, issue #774); moved here from the System page. */}
+            {hasMinRole('admin') && (
+                <div style={{ marginBottom: 16 }}>
+                    <SyncMapRebuildCard />
+                </div>
+            )}
 
             <PrintPageCountsSection canEdit={canEdit} />
 

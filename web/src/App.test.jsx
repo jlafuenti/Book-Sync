@@ -178,7 +178,8 @@ describe('AppShell — role-gated routes', () => {
         ['/system', 'system-stub', ['admin', 'superadmin'], ['user', 'editor']],
         ['/system/status', 'system-stub', ['admin'], ['user', 'editor']],
         ['/system/import-sources', 'import-sources-stub', ['admin'], ['user', 'editor']],
-        ['/system/unsupported', 'system-stub', ['editor', 'admin'], ['user']],
+        // Unsupported files now live in Troubleshoot; old links land there.
+        ['/system/unsupported', 'troubleshoot-stub', ['editor', 'admin'], ['user']],
         ['/system/troubleshoot', 'troubleshoot-stub', ['editor', 'admin'], ['user']],
     ]
 

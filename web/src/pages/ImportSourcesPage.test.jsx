@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { MemoryRouter } from 'react-router-dom'
 import ImportSourcesPage from './ImportSourcesPage'
 
 // Issue #216: `last_sync_at` is naive UTC. Parsed as local time it lands in
@@ -51,7 +52,7 @@ afterEach(() => vi.restoreAllMocks())
 describe('ImportSourcesPage last-sync label (issue #216)', () => {
     it('measures "last sync" from the UTC instant, not the local-parsed one', async () => {
         listSourcesMock.mockResolvedValue([source({ last_sync_at: '2026-08-22T09:03:00' })])
-        render(<ImportSourcesPage />)
+        render(<MemoryRouter><ImportSourcesPage /></MemoryRouter>)
 
         // Five hours before "now" — never "Just now", whatever the browser zone.
         expect(await screen.findByText('5h ago')).toBeInTheDocument()
@@ -59,7 +60,7 @@ describe('ImportSourcesPage last-sync label (issue #216)', () => {
 
     it('says "Never synced" when the source has never run', async () => {
         listSourcesMock.mockResolvedValue([source()])
-        render(<ImportSourcesPage />)
+        render(<MemoryRouter><ImportSourcesPage /></MemoryRouter>)
 
         expect(await screen.findByText('Never synced')).toBeInTheDocument()
     })
@@ -70,7 +71,7 @@ describe('Audible connect dialog (issue #279)', () => {
     it('opens as a labelled dialog and Escape closes it, restoring focus', async () => {
         listSourcesMock.mockResolvedValue([source({ connected: false })])
         audibleLoginStartMock.mockResolvedValue({ login_url: 'https://example.invalid/login', state_token: 'tok' })
-        render(<ImportSourcesPage />)
+        render(<MemoryRouter><ImportSourcesPage /></MemoryRouter>)
 
         const trigger = await screen.findByRole('button', { name: 'Connect Audible' })
         trigger.focus()
@@ -85,5 +86,26 @@ describe('Audible connect dialog (issue #279)', () => {
         fireEvent.keyDown(document, { key: 'Escape' })
         await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
         expect(document.activeElement).toBe(trigger)
+    })
+})
+
+
+describe('ImportSourcesPage navigation and copy', () => {
+    const acsm = () => source({ source_key: 'acsm', display_name: 'ACSM', supports_auto_sync: false })
+
+    it('has a way back to the System page', async () => {
+        listSourcesMock.mockResolvedValue([source()])
+        render(<MemoryRouter><ImportSourcesPage /></MemoryRouter>)
+
+        const back = await screen.findByRole('link', { name: /Back to System/ })
+        expect(back).toHaveAttribute('href', '/system/status')
+    })
+
+    it('never suggests Nook, which is not supported', async () => {
+        listSourcesMock.mockResolvedValue([source(), acsm()])
+        render(<MemoryRouter><ImportSourcesPage /></MemoryRouter>)
+
+        await screen.findByText('Kindle')
+        expect(screen.queryByText(/Nook/)).toBeNull()
     })
 })

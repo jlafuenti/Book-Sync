@@ -145,13 +145,13 @@ created pairs are queued for transcription immediately.
 
 ## Converting unsupported ebooks
 
-`.mobi` and `.azw3` files are surfaced as *unsupported format* under **System → Unsupported** and
-in **System → Troubleshoot Library**. Converting one runs Calibre's `ebook-convert` in the server
+`.mobi` and `.azw3` files are surfaced as *unsupported format* in **System → Troubleshoot
+Library**, whose section also converts them all at once. Converting one runs Calibre's `ebook-convert` in the server
 container, writing an `.epub` sibling next to the original (5-minute timeout). Failures are
 reported specifically for the two cases worth acting on:
 
 - **DRM-protected** — `ebook-convert` cannot convert it; you need a DRM-free copy. For books you
-  purchased as `.acsm` downloads (Google Play Books, Nook), the supported import path is described
+  purchased as `.acsm` downloads (Google Play Books), the supported import path is described
   in [import-sources.md](import-sources.md).
 - **Corrupt or an unsupported MOBI variant** — the source file needs replacing.
 

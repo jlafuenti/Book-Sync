@@ -10,7 +10,11 @@ const {
     getLibraryScanProgressMock, dismissMultiFileFolderMock, removeMultiFileTracksMock,
     scanLibraryMock, getSyncMapAuditMock, startLibraryScanMock, getPrintPageFillStatusMock,
     requeuePairMock, retranscribePairMock,
+    getUnsupportedFilesMock, getSyncMapRebuildStatusMock, convertAllUnsupportedFilesMock,
 } = vi.hoisted(() => ({
+    getUnsupportedFilesMock: vi.fn(),
+    getSyncMapRebuildStatusMock: vi.fn(),
+    convertAllUnsupportedFilesMock: vi.fn(),
     requeuePairMock: vi.fn(),
     retranscribePairMock: vi.fn(),
     getPrintPageFillStatusMock: vi.fn(),
@@ -53,7 +57,18 @@ vi.mock('../api', () => ({
     getPrintPageFillStatus: getPrintPageFillStatusMock,
     startPrintPageFill: vi.fn(),
     cancelPrintPageFill: vi.fn(),
+    // The unsupported-files panel and the sync-map rebuild card moved here
+    // from the System page.
+    getUnsupportedFiles: getUnsupportedFilesMock,
+    convertAllUnsupportedFiles: convertAllUnsupportedFilesMock,
+    deleteUnsupportedSource: vi.fn(),
+    forceDeleteUnsupportedFile: vi.fn(),
+    forceDeleteAllUnsupportedFiles: vi.fn(),
+    getSyncMapRebuildStatus: getSyncMapRebuildStatusMock,
+    startSyncMapRebuild: vi.fn(),
+    cancelSyncMapRebuild: vi.fn(),
 }))
+vi.mock('../components/EbookReader', () => ({ default: () => null }))
 
 const { hasMinRoleMock } = vi.hoisted(() => ({ hasMinRoleMock: vi.fn(() => true) }))
 vi.mock('../contexts/AuthContext', () => ({ useAuth: () => ({ hasMinRole: hasMinRoleMock }) }))
@@ -85,6 +100,9 @@ beforeEach(() => {
     removeMultiFileTracksMock.mockReset().mockResolvedValue({ deleted: 12 })
     scanLibraryMock.mockReset().mockResolvedValue({ new_ebooks: 0, new_audiobooks: 0, auto_matched_pairs: 0, multi_file_folders: 1, message: '' })
     getSyncMapAuditMock.mockReset()
+    getUnsupportedFilesMock.mockReset().mockResolvedValue([])
+    getSyncMapRebuildStatusMock.mockReset().mockResolvedValue({ outdated: 0, total: 0, running: false, results: [] })
+    convertAllUnsupportedFilesMock.mockReset()
 })
 
 describe('TroubleshootPage chapter encoding repair', () => {
@@ -653,5 +671,93 @@ describe('TroubleshootPage transcripts covering only part of their audio', () =>
         fireEvent.click(await screen.findByRole('button', { name: 'Cancel' }))
 
         expect(retranscribePairMock).not.toHaveBeenCalled()
+    })
+})
+
+
+// ---------------------------------------------------------------------------
+// Moved from the System page: unsupported files and the sync-map rebuild
+// ---------------------------------------------------------------------------
+
+const MOBI = {
+    id: 51, filename: 'Bartleby the Scrivener.mobi', title: 'Bartleby the Scrivener',
+    author: 'Herman Melville', format: 'mobi', file_size: 2048,
+    already_converted: false, epub_ebook_id: null,
+}
+
+describe('TroubleshootPage unsupported formats section', () => {
+    it('offers the batch conversion the System page used to have', async () => {
+        getUnsupportedFilesMock.mockResolvedValue([MOBI])
+        getLibraryIssuesMock.mockResolvedValue(issuesWithChapterEncodingBad([], {
+            unsupported_format: [{ item_type: 'ebook', item_id: 51, title: 'Bartleby the Scrivener',
+                detail: 'MOBI needs conversion to EPUB' }],
+        }))
+        renderPage()
+
+        fireEvent.click(await screen.findByText(/Unsupported formats \(MOBI\/AZW3\)/))
+
+        expect(await screen.findByRole('button', { name: 'Convert All' })).toBeInTheDocument()
+        expect(screen.getByRole('button', { name: 'Convert All & Delete Original' })).toBeInTheDocument()
+        expect(screen.getByRole('button', { name: 'Force Delete All' })).toBeInTheDocument()
+        // One list, not the category rows plus the panel's table.
+        expect(screen.getAllByText('Bartleby the Scrivener')).toHaveLength(1)
+    })
+
+    it('stays visible for a converted file whose original is still on disk', async () => {
+        // The verification lists only unconverted files, but Delete Original
+        // for a converted one has to stay reachable.
+        getUnsupportedFilesMock.mockResolvedValue([{ ...MOBI, already_converted: true }])
+        getLibraryIssuesMock.mockResolvedValue(issuesWithChapterEncodingBad([]))
+        renderPage()
+
+        fireEvent.click(await screen.findByText(/Unsupported formats \(MOBI\/AZW3\)/))
+
+        expect(await screen.findByRole('button', { name: 'Delete Original' })).toBeInTheDocument()
+    })
+
+    it('does not appear when there are no unsupported files', async () => {
+        getLibraryIssuesMock.mockResolvedValue(issuesWithChapterEncodingBad([]))
+        renderPage()
+
+        await screen.findByText(/No issues detected/)
+        await waitFor(() => expect(getUnsupportedFilesMock).toHaveBeenCalled())
+        expect(screen.queryByText(/Unsupported formats/)).toBeNull()
+    })
+
+    it('reloads the issue list after Convert All', async () => {
+        getUnsupportedFilesMock.mockResolvedValue([MOBI])
+        convertAllUnsupportedFilesMock.mockResolvedValue({ succeeded: ['x'], failed: [], total: 1, realign_failures: [] })
+        getLibraryIssuesMock.mockResolvedValue(issuesWithChapterEncodingBad([]))
+        renderPage()
+
+        fireEvent.click(await screen.findByText(/Unsupported formats \(MOBI\/AZW3\)/))
+        const before = getLibraryIssuesMock.mock.calls.length
+        fireEvent.click(await screen.findByRole('button', { name: 'Convert All' }))
+
+        await waitFor(() => expect(getLibraryIssuesMock.mock.calls.length).toBeGreaterThan(before))
+    })
+})
+
+describe('TroubleshootPage sync-map rebuild card (admin only)', () => {
+    it('appears for an admin', async () => {
+        getLibraryIssuesMock.mockResolvedValue(issuesWithChapterEncodingBad([]))
+        renderPage()
+
+        expect(await screen.findByText('Rebuild Sync Maps')).toBeInTheDocument()
+        expect(getSyncMapRebuildStatusMock).toHaveBeenCalled()
+    })
+
+    it('does not appear, or fetch, for an editor', async () => {
+        hasMinRoleMock.mockImplementation((role) => role !== 'admin')
+        try {
+            getLibraryIssuesMock.mockResolvedValue(issuesWithChapterEncodingBad([]))
+            renderPage()
+
+            await screen.findByText(/No issues detected/)
+            expect(screen.queryByText('Rebuild Sync Maps')).toBeNull()
+            expect(getSyncMapRebuildStatusMock).not.toHaveBeenCalled()
+        } finally {
+            hasMinRoleMock.mockImplementation(() => true)
+        }
     })
 })
