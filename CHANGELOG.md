@@ -29,8 +29,6 @@ operator must do by hand rather than read about afterwards.
   sits beside Audiobookshelf and Updates beside the disk breakdown, Import Sources has a Back to
   System button, and Nook is no longer listed as an import source, since it isn't supported.
 
-### Changed
-
 - The server's local transcription provider now runs on faster-whisper instead of openai-whisper
   (#843), and returns word timing the same way the Jetson worker does: each sentence keeps the
   words it was built from, grouped by the worker's rules. It runs int8 on the CPU, or float16 on
