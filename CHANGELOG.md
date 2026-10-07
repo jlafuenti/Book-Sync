@@ -38,6 +38,15 @@ operator must do by hand rather than read about afterwards.
   server image with the local provider built in, as `tandem-server:main-local` beside the plain
   `main`.
 
+### Fixed
+
+- A transcription that finished while the server was re-attached to it no longer fails with
+  "Failed to fetch cached transcription result" (#847). The worker used to report the job done
+  about a second before the result was fetchable, and the server treated the resulting 404 as
+  final, discarding a complete transcript. The worker now makes the result fetchable before it
+  reports the job done, and the server retries the fetch for a few seconds before giving up. With
+  word timing the result takes longer to serialise, which is what widened the window.
+
 ### Upgrade notes
 
 - The local transcription provider changed engine (#843). A server image you build yourself with

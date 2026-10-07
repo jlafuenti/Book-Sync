@@ -68,6 +68,14 @@ def _sentence_from_payload(s: dict) -> TranscribedSentence:
 REATTACH_POLL_INTERVAL_SEC = 10
 REATTACH_MAX_POLL_ERRORS = 6            # ~1 min unreachable at 10 s
 
+# After a re-attached job reports done, the transcript is fetched from
+# /v1/result. The worker can report done a moment before that result is
+# fetchable: it serialises a long transcript (per-word timing makes it bigger)
+# around the same time, about a second for a 25-hour book (#847). A single 404
+# there used to throw a finished transcript away, so the fetch is retried.
+RESULT_FETCH_ATTEMPTS = 6
+RESULT_FETCH_RETRY_SEC = 2.0
+
 WAIT_FOR_IDLE_POLL_INTERVAL_SEC = 30
 WAIT_FOR_IDLE_MAX_POLL_ERRORS = 10      # ~5 min unreachable at 30 s
 
@@ -236,6 +244,43 @@ class RemoteWhisperProvider(TranscriptionProvider):
             completed_through_sec=completed,
             progress=data.get("progress", 0.0),
         )
+
+    async def _fetch_result_with_retries(self, filename: str, audio_path: str):
+        """GET the cached result of a job that has just reported done (#847).
+
+        Returns ``(response, error)`` after at most ``RESULT_FETCH_ATTEMPTS``
+        tries, sleeping ``RESULT_FETCH_RETRY_SEC`` between them. Anything but a
+        200 is retried: a 404 because the worker may still be caching the
+        result, a 5xx or a transport error because the worker is busy doing so.
+        ``response`` is the last answer received (``None`` if there was never
+        one) and ``error`` the last transport error, if the final try raised.
+        """
+        response = None
+        error: Optional[Exception] = None
+        for attempt in range(1, RESULT_FETCH_ATTEMPTS + 1):
+            try:
+                async with httpx.AsyncClient() as result_client:
+                    response = await result_client.get(
+                        f"{self.remote_url}/v1/result/{filename}",
+                        params=self._checkpoint_params(audio_path),
+                        timeout=60.0,
+                        headers=self._headers,
+                    )
+                error = None
+                if response.status_code == 200:
+                    return response, None
+                reason = f"HTTP {response.status_code}"
+            except httpx.RequestError as e:
+                error = e
+                reason = f"transport error: {e}"
+            if attempt < RESULT_FETCH_ATTEMPTS:
+                logger.info(
+                    f"Result for {filename} is not fetchable yet ({reason}); "
+                    f"retrying in {RESULT_FETCH_RETRY_SEC}s "
+                    f"(attempt {attempt}/{RESULT_FETCH_ATTEMPTS})."
+                )
+                await asyncio.sleep(RESULT_FETCH_RETRY_SEC)
+        return response if error is None else None, error
 
     async def transcribe(
         self,
@@ -448,14 +493,10 @@ class RemoteWhisperProvider(TranscriptionProvider):
 
                         # Transcription finished — fetch the cached result.
                         logger.info(f"Transcription of {filename} complete on remote. Fetching result...")
-                        async with httpx.AsyncClient() as result_client:
-                            result_resp = await result_client.get(
-                                f"{self.remote_url}/v1/result/{filename}",
-                                params=self._checkpoint_params(audio_path),
-                                timeout=60.0,
-                                headers=self._headers,
-                            )
-                        if result_resp.status_code == 200:
+                        result_resp, result_error = await self._fetch_result_with_retries(
+                            filename, audio_path
+                        )
+                        if result_resp is not None and result_resp.status_code == 200:
                             data = result_resp.json()
                         else:
                             # No result, and the job is no longer active. If the
@@ -469,6 +510,15 @@ class RemoteWhisperProvider(TranscriptionProvider):
                                      "completed_through_sec": paused_state.get(
                                          "completed_through_sec", 0)},
                                     filename,
+                                )
+                            if result_resp is None:
+                                # Only transport errors, never an answer from the
+                                # worker: retriable, not a verdict on the result.
+                                raise ProviderUnavailableError(
+                                    f"Could not reach the remote worker to fetch the "
+                                    f"result of {filename} after "
+                                    f"{RESULT_FETCH_ATTEMPTS} attempts — will retry: "
+                                    f"{result_error}"
                                 )
                             raise TranscriptionError(
                                 f"Failed to fetch cached transcription result: "
