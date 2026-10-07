@@ -108,6 +108,7 @@ PREEMPTIVE_RELOAD_THRESHOLD_MB = 1200  # Reload model if available memory below 
 MAX_CHUNKS_BETWEEN_RELOADS = 15     # Force model reload after this many chunks
 CHECKPOINT_DIR = "/tmp/booksync_checkpoints"
 OVERSIZED_CHUNK_TOLERANCE = 1.5     # ffmpeg returned this much more audio than requested -> reject
+MAX_SENTENCE_WORDS = 50             # Longer "sentences" (no punctuation) are split at their biggest pause
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -129,10 +130,18 @@ INSTANCE_ID = uuid.uuid4().hex
 
 @dataclass
 class TranscribedSentence:
-    """A sentence with timing information."""
+    """A sentence with timing information.
+
+    `words` holds the words the sentence was built from, each a dict of
+    {"text", "start_ms", "end_ms", "probability"}. It defaults to empty so a
+    checkpoint written before word timestamps existed still loads with `**s`,
+    and so a segment without word data (the character-proration fallback)
+    produces a sentence with `words: []`.
+    """
     text: str
     start_ms: int
     end_ms: int
+    words: list = field(default_factory=list)
 
 
 @dataclass
@@ -659,6 +668,153 @@ def _group_segments_into_sentences(segments_list: list) -> List[TranscribedSente
     return sentences
 
 
+def _glue_words(segments: list) -> List[dict]:
+    """
+    Flatten the segments' words into one ordered list of word dicts.
+
+    faster-whisper emits hyphenated compounds, and some punctuation, as
+    separate pieces whose text has no leading space (" parchment", "-pale").
+    A piece without a leading space belongs to the word before it, even when
+    that word is in the previous segment: a segment boundary can fall inside
+    a hyphenated word. Only when there is no previous word at all does an
+    unspaced piece start one. The glued word keeps the first piece's start and
+    takes the last piece's end and probability.
+    """
+    pieces: List[list] = []  # [raw text, start_ms, end_ms, probability]
+    for segment in segments:
+        for w in segment.words:
+            raw = w.word
+            if not raw:
+                continue
+            start_ms, end_ms = int(w.start * 1000), int(w.end * 1000)
+            probability = float(w.probability)
+            if pieces and not raw[0].isspace():
+                prev = pieces[-1]
+                prev[0] += raw
+                prev[2] = end_ms
+                prev[3] = probability
+            else:
+                pieces.append([raw, start_ms, end_ms, probability])
+
+    words = []
+    for raw, start_ms, end_ms, probability in pieces:
+        text = raw.strip()
+        if text:
+            words.append({
+                "text": text,
+                "start_ms": start_ms,
+                "end_ms": end_ms,
+                "probability": probability,
+            })
+    return words
+
+
+def _split_at_largest_gaps(words: List[dict]) -> List[List[dict]]:
+    """
+    Cut a run of words into pieces of at most MAX_SENTENCE_WORDS.
+
+    Whisper sometimes goes a long way without punctuation, and one "sentence"
+    of a hundred words is useless as a sync point. Cut where the speaker
+    paused longest (`next.start - prev.end`), and recurse on each side until
+    everything fits. `max` returns the first of equal gaps, so ties go to the
+    earliest.
+    """
+    if len(words) <= MAX_SENTENCE_WORDS:
+        return [words]
+    cut = max(
+        range(1, len(words)),
+        key=lambda i: words[i]["start_ms"] - words[i - 1]["end_ms"],
+    )
+    return _split_at_largest_gaps(words[:cut]) + _split_at_largest_gaps(words[cut:])
+
+
+def _sentences_from_words(words: List[dict]) -> List[TranscribedSentence]:
+    """One TranscribedSentence per piece of `words` once the word cap is applied."""
+    return [
+        TranscribedSentence(
+            text=" ".join(w["text"] for w in piece),
+            start_ms=piece[0]["start_ms"],
+            end_ms=piece[-1]["end_ms"],
+            words=piece,
+        )
+        for piece in _split_at_largest_gaps(words)
+    ]
+
+
+def _sentences_from_word_segments(segments: list) -> List[TranscribedSentence]:
+    """Sentences for a run of consecutive segments that all carry words."""
+    words = _glue_words(segments)
+    if not words:
+        return []
+
+    # Joined on single spaces, so every word boundary is a space and NLTK's
+    # (text-preserving) sentences map back onto whole runs of words.
+    joined = " ".join(w["text"] for w in words)
+    ends = []
+    pos = 0
+    for w in words:
+        pos += len(w["text"])
+        ends.append(pos)
+        pos += 1
+
+    sentences: List[TranscribedSentence] = []
+    cursor = 0   # where to look for the next sentence in `joined`
+    first = 0    # index of the first word not yet assigned to a sentence
+    for sent_text in nltk.sent_tokenize(joined):
+        sent_text = sent_text.strip()
+        if not sent_text:
+            continue
+        if first >= len(words):
+            break
+        found = joined.find(sent_text, cursor)
+        if found >= 0:
+            cursor = found + len(sent_text)
+            last = first
+            while last < len(words) and ends[last] <= cursor:
+                last += 1
+            last = max(last, first + 1)
+        else:
+            # A tokenizer that rewrote the text. Fall back to counting words.
+            last = min(first + max(1, len(sent_text.split())), len(words))
+        sentences.extend(_sentences_from_words(words[first:last]))
+        first = last
+
+    if first < len(words):  # words the tokenizer's sentences did not account for
+        sentences.extend(_sentences_from_words(words[first:]))
+    return sentences
+
+
+def _group_words_into_sentences(segments_list: list) -> List[TranscribedSentence]:
+    """
+    Group faster-whisper segments into sentences from their word timestamps.
+
+    Sentences are found by running NLTK over the words of the whole chunk, not
+    one segment at a time, so a sentence that straddles a segment boundary
+    stays whole, and each sentence's timing is its first word's start and its
+    last word's end rather than a character-count guess. Each sentence keeps
+    the words it was built from.
+
+    A segment with no words (the model was run without word timestamps, or
+    returned none for it) goes through _group_segments_into_sentences instead,
+    in order, with `words: []`.
+    """
+    sentences: List[TranscribedSentence] = []
+    run: list = []  # consecutive segments that carry words
+
+    for segment in segments_list:
+        if getattr(segment, "words", None):
+            run.append(segment)
+            continue
+        if run:
+            sentences.extend(_sentences_from_word_segments(run))
+            run = []
+        sentences.extend(_group_segments_into_sentences([segment]))
+
+    if run:
+        sentences.extend(_sentences_from_word_segments(run))
+    return sentences
+
+
 def _chunk_decode_cmd(file: str, start_sec: int, duration_sec: int, sr: int,
                       fast_seek: bool) -> list:
     """The ffmpeg command that decodes one chunk to 16-bit mono PCM."""
@@ -883,6 +1039,7 @@ def _transcribe_file(
                     vad_filter=VAD_FILTER,
                     condition_on_previous_text=False,
                     language=pinned_language,
+                    word_timestamps=True,
                 )
 
                 # Detect once, then pin. `info` is populated as soon as
@@ -917,11 +1074,14 @@ def _transcribe_file(
                             )
 
                 # Group segments into sentences and offset timestamps
-                chunk_sentences = _group_segments_into_sentences(chunk_segments)
+                chunk_sentences = _group_words_into_sentences(chunk_segments)
                 offset_ms = start_sec * 1000
                 for s in chunk_sentences:
                     s.start_ms += offset_ms
                     s.end_ms += offset_ms
+                    for w in s.words:
+                        w["start_ms"] += offset_ms
+                        w["end_ms"] += offset_ms
                     all_sentences.append(s)
 
                 # Release references before next chunk
@@ -1607,7 +1767,8 @@ async def transcribe(
     Transcribe an uploaded audio file.
 
     Accepts any audio format supported by ffmpeg (mp3, m4a, m4b, flac, wav, ogg, etc).
-    Returns a list of sentences with start_ms and end_ms timestamps.
+    Returns a list of sentences with start_ms and end_ms timestamps, each with
+    the `words` it was built from (text, start_ms, end_ms, probability).
 
     `language` (optional form field) forces an ISO 639-1 language code for this
     job, overriding the worker's WHISPER_LANGUAGE; omitting it detects once on
