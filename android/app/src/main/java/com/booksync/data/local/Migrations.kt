@@ -215,3 +215,21 @@ val MIGRATION_22_23 = object : Migration(22, 23) {
         addColumnIfMissing(db, "ALTER TABLE bookmarks ADD COLUMN epubTextPreview TEXT")
     }
 }
+
+/** v23 -> v24: the `sync_point_words` table (issue #836).
+ *
+ *  Per-word start times for the read-along word mark, one row per sync point
+ *  that has them. A cache of a server read: nothing here is user data, and a
+ *  pair with no rows simply gets the sentence mark alone until the next fetch. */
+val MIGRATION_23_24 = object : Migration(23, 24) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `sync_point_words` (" +
+                "`bookPairId` INTEGER NOT NULL, " +
+                "`epubChapter` INTEGER NOT NULL, " +
+                "`epubSentenceIndex` INTEGER NOT NULL, " +
+                "`wordStarts` TEXT NOT NULL, " +
+                "PRIMARY KEY(`bookPairId`, `epubChapter`, `epubSentenceIndex`))"
+        )
+    }
+}

@@ -51,6 +51,7 @@ class LibraryRepository @Inject constructor(
     private val eBookDao: EBookDao,
     private val audioBookDao: AudioBookDao,
     private val syncPointDao: SyncPointDao,
+    private val syncPointWordsDao: SyncPointWordsDao,
     private val bookmarkDao: BookmarkDao,
     private val userProgressDao: UserProgressDao,
     private val acknowledgedItemDao: AcknowledgedItemDao,
@@ -128,6 +129,8 @@ class LibraryRepository @Inject constructor(
             if (cacheIsStale) {
                 log("refreshPairs — pair ${pair.id} sync map v$cachedVersion -> v$remoteVersion; dropping cached points")
                 syncPointDao.deletePointsForPair(pair.id)
+                // Word timing belongs to one map version, like the points (issue #836).
+                syncPointWordsDao.deleteForPair(pair.id)
             }
 
             BookPairEntity(

@@ -319,6 +319,26 @@ data class SyncMapResponse(
     val sync_points: List<SyncPointDto> = emptyList()
 )
 
+/**
+ * Per-word timing for the sentences that have it (issue #836).
+ * [word_starts] holds one audio-ms value per whitespace token of the point's
+ * `epub_text_preview`, non-decreasing. A point missing from the list has no
+ * word timing (an interpolated point, or a transcript made without words).
+ */
+@Serializable
+data class SyncPointWordsDto(
+    val epub_chapter: Int,
+    val epub_sentence_index: Int,
+    val word_starts: List<Int> = emptyList()
+)
+
+@Serializable
+data class SyncMapWordsResponse(
+    val sync_map_id: Int,
+    val version: Int,
+    val points: List<SyncPointWordsDto> = emptyList()
+)
+
 // ============ Bookmark ============
 //
 // Only the history log has its own DTO. Position writes and reads use

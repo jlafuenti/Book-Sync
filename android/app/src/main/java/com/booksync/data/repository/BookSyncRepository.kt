@@ -211,6 +211,12 @@ class BookSyncRepository @Inject constructor(
     /** See [MediaDownloadRepository.ensureSyncMapCached]. */
     suspend fun ensureSyncMapCached(pairId: Int): Boolean = downloads.ensureSyncMapCached(pairId)
 
+    /** See [MediaDownloadRepository.ensureSyncPointWords]. */
+    suspend fun ensureSyncPointWords(pairId: Int): Boolean = downloads.ensureSyncPointWords(pairId)
+
+    /** See [MediaDownloadRepository.getSyncPointWords]. */
+    suspend fun getSyncPointWords(pairId: Int): Map<Pair<Int, Int>, IntArray> = downloads.getSyncPointWords(pairId)
+
     /** See [MediaDownloadRepository.downloadSyncMapWithRetry]. */
     suspend fun downloadSyncMapWithRetry(pairId: Int): Boolean = downloads.downloadSyncMapWithRetry(pairId)
 

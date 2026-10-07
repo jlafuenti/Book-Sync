@@ -1,0 +1,47 @@
+[
+  {
+    "name": "plain sentence",
+    "text": "The quick brown fox.",
+    "expected_tokens": ["The", "quick", "brown", "fox."]
+  },
+  {
+    "name": "leading and trailing spaces",
+    "text": "  hello world  ",
+    "expected_tokens": ["hello", "world"]
+  },
+  {
+    "name": "no-break space between words",
+    "text": "one two three",
+    "expected_tokens": ["one", "two", "three"]
+  },
+  {
+    "name": "thin space between words",
+    "text": "alpha beta gamma",
+    "expected_tokens": ["alpha", "beta", "gamma"]
+  },
+  {
+    "name": "tab and newline",
+    "text": "a\tb\nc",
+    "expected_tokens": ["a", "b", "c"]
+  },
+  {
+    "name": "em dash stays attached to its word",
+    "text": "word—next end",
+    "expected_tokens": ["word—next", "end"]
+  },
+  {
+    "name": "curly quotes stay attached",
+    "text": "“Hello,” she said.",
+    "expected_tokens": ["“Hello,”", "she", "said."]
+  },
+  {
+    "name": "double space",
+    "text": "a  b",
+    "expected_tokens": ["a", "b"]
+  },
+  {
+    "name": "empty string",
+    "text": "",
+    "expected_tokens": []
+  }
+]

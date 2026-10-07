@@ -2,6 +2,7 @@ package com.booksync.data.repository
 
 import com.booksync.data.local.dao.BookPairDao
 import com.booksync.data.local.dao.SyncPointDao
+import com.booksync.data.local.dao.SyncPointWordsDao
 import com.booksync.data.local.entity.BookPairEntity
 import com.booksync.data.remote.BookSyncApi
 import com.booksync.data.remote.AudioBookResponse
@@ -117,6 +118,18 @@ class SyncMapVersionTest {
         val entity = saved.captured.single()
         assertFalse("stale cache must not read as downloaded", entity.syncMapDownloaded)
         assertNull("stale cache must not claim a version", entity.syncMapVersion)
+    }
+
+    @Test
+    fun `refreshPairs drops the cached word timing with the points`() = runTest {
+        val wordsDao = mockk<SyncPointWordsDao>(relaxed = true)
+        coEvery { api.getPairs(any(), any()) } returns page(remotePair(syncMapVersion = 4))
+        coEvery { bookPairDao.getPairById(42) } returns cachedPair(syncMapVersion = 3)
+
+        buildRepository(api = api, bookPairDao = bookPairDao, syncPointDao = syncPointDao, syncPointWordsDao = wordsDao)
+            .refreshPairs()
+
+        coVerify { wordsDao.deleteForPair(42) }
     }
 
     @Test

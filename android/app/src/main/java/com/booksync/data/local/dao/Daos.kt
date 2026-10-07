@@ -231,6 +231,22 @@ interface SyncPointDao {
     suspend fun storageStats(): SyncMapStorageStats
 }
 
+/** Cached per-word timing (issue #836); see [SyncPointWordsEntity]. */
+@Dao
+interface SyncPointWordsDao {
+    @Query("SELECT * FROM sync_point_words WHERE bookPairId = :pairId")
+    suspend fun getForPair(pairId: Int): List<SyncPointWordsEntity>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertAll(rows: List<SyncPointWordsEntity>)
+
+    @Query("DELETE FROM sync_point_words WHERE bookPairId = :pairId")
+    suspend fun deleteForPair(pairId: Int)
+
+    @Query("SELECT COUNT(*) FROM sync_point_words WHERE bookPairId = :pairId")
+    suspend fun countForPair(pairId: Int): Int
+}
+
 /**
  * Result of [SyncPointDao.storageStats] (issue #678).
  *

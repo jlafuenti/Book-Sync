@@ -88,6 +88,23 @@ data class SyncPointEntity(
     override val confidence: Float = 0f
 ) : MatchablePoint
 
+/**
+ * Per-word start times for one sync point (issue #836), cached beside
+ * [SyncPointEntity]. [wordStarts] is the audio-ms start of each whitespace
+ * token of the point's text preview, comma-joined and non-decreasing. Only
+ * points that have word timing get a row.
+ */
+@Entity(
+    tableName = "sync_point_words",
+    primaryKeys = ["bookPairId", "epubChapter", "epubSentenceIndex"]
+)
+data class SyncPointWordsEntity(
+    val bookPairId: Int,
+    val epubChapter: Int,
+    val epubSentenceIndex: Int,
+    val wordStarts: String
+)
+
 @Entity(tableName = "bookmarks", primaryKeys = ["scopeKey", "bookPairId"])
 data class BookmarkEntity(
     /** Part of the primary key: two accounts can each hold a bookmark for one pair. */
