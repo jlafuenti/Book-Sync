@@ -123,7 +123,8 @@ services:
       # (`remote_with_fallback`) has nothing to fall back to. Use `remote` and
       # point System -> Transcription Settings at the Jetson worker. Only switch
       # to `remote_with_fallback` on an image built with
-      # `--build-arg INSTALL_LOCAL_WHISPER=1`.
+      # `--build-arg INSTALL_LOCAL_WHISPER=1` (or the published
+      # `tandem-server:main-local` image).
       - TRANSCRIPTION_PROVIDER=remote
       - EBOOK_DIR=/data/ebooks
       - AUDIOBOOK_DIR=/data/audiobooks

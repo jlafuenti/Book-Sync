@@ -16,9 +16,10 @@ PyJWT==2.15.1
 bcrypt==4.3.0
 python-multipart==0.0.32
 aiofiles==25.1.0
-# numpy + tqdm are needed by services/alignment.py and services/transcription.py
-# (imported at module load even on the remote-transcription path). Local Whisper
-# itself — torch + openai-whisper, which pull the multi-GB CUDA wheels — is an
+# numpy is needed by services/alignment.py and services/transcription.py
+# (imported at module load even on the remote-transcription path); tqdm is a
+# long-standing pin that faster-whisper's model download also uses. Local
+# Whisper itself — faster-whisper — is an
 # opt-in build: see requirements-local.txt and the INSTALL_LOCAL_WHISPER build
 # arg in the Dockerfile. Not needed when transcription is offloaded to a remote
 # (Jetson) worker.

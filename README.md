@@ -64,7 +64,7 @@ layouts unlike theirs.
 | You need | Details |
 |---|---|
 | A server | x86-64 Linux host with Docker and Docker Compose. Postgres + FastAPI + nginx; no GPU needed for the server itself. Disk for your library, and a backup mount off the host disk. |
-| Somewhere to transcribe | Either a CUDA GPU host running the [Jetson worker](jetson/README.md) (an Orin Nano 8 GB is the reference; `medium` is the default model), or a server image built with the local Whisper stack, which is multi-GB and slow on CPU. Transcription is optional — without it you get a library and two readers, but no cross-format sync. |
+| Somewhere to transcribe | Either a CUDA GPU host running the [Jetson worker](jetson/README.md) (an Orin Nano 8 GB is the reference; `medium` is the default model), or the server image with local Whisper (`tandem-server:main-local`, or built with `INSTALL_LOCAL_WHISPER=1`), which runs faster-whisper on the CPU at roughly real time. Transcription is optional — without it you get a library and two readers, but no cross-format sync. |
 | A browser | Any current desktop or mobile browser. Installable as a PWA. |
 | Android 8.0+ | API 26 or newer, for the Android app. Optional — the web app works on a phone. |
 
@@ -321,9 +321,10 @@ the first-boot values.
 ### Transcription: remote by default, local optional
 
 The default server image is **remote-transcription-only** — it does **not** install the local
-Whisper stack (`torch` + `openai-whisper`), whose CUDA wheels are multi-GB and slow to build.
-Point transcription at the Jetson worker (`TRANSCRIPTION_PROVIDER=remote`; the default is
-`remote_with_fallback`). To run Whisper on the server itself instead, build with the local stack:
+Whisper stack (faster-whisper). Point transcription at the Jetson worker
+(`TRANSCRIPTION_PROVIDER=remote`; the default is `remote_with_fallback`). To run Whisper on the
+server itself instead, follow the `tandem-server:main-local` image that CI publishes beside
+`tandem-server:main`, or build with the local stack:
 
 ```bash
 docker compose build --build-arg INSTALL_LOCAL_WHISPER=1

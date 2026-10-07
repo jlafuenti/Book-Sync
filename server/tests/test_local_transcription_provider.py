@@ -7,8 +7,8 @@ independently. Here a chunk is a full hour, so one chunk that opens on music or
 a foreign-language epigraph mis-detects and comes back as an hour of
 transliterated garbage, which alignment then silently interpolates across.
 
-torch/openai-whisper aren't installed in the test image (the default server
-image doesn't ship them either), so `whisper` is stubbed in `sys.modules` and
+faster-whisper isn't installed in the test image (the default server image
+doesn't ship it either), so `faster_whisper` is stubbed in `sys.modules` and
 the device probe is patched out.
 """
 
@@ -43,17 +43,20 @@ class _FakeWhisperModel:
 
     def transcribe(self, audio, **kwargs):
         self.kwargs.append(kwargs)
-        return {"segments": [], "language": self._detected}
+        # faster-whisper returns (segment iterator, info)
+        return iter(()), types.SimpleNamespace(language=self._detected)
 
 
 @pytest.fixture
-def fake_whisper(monkeypatch):
-    """Install a fake `whisper` module and a stubbed ffmpeg pipeline."""
+def fake_whisper(monkeypatch, tmp_path):
+    """Install a fake `faster_whisper` module and a stubbed ffmpeg pipeline."""
     def _install(duration=3700.0, detected_language="fr"):
         model = _FakeWhisperModel(detected_language)
-        module = types.ModuleType("whisper")
-        module.load_model = lambda name, device=None: model
-        monkeypatch.setitem(sys.modules, "whisper", module)
+        module = types.ModuleType("faster_whisper")
+        module.WhisperModel = lambda name, **kwargs: model
+        monkeypatch.setitem(sys.modules, "faster_whisper", module)
+
+        monkeypatch.setattr(transcription_service.settings, "app_data_dir", str(tmp_path))
 
         monkeypatch.setattr(transcription_service, "_get_whisper_device", lambda: "cpu")
         monkeypatch.setattr(transcription_service, "_get_audio_duration", lambda path: duration)

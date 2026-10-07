@@ -51,8 +51,8 @@ Notes:
   against a global interpreter with unpinned pytest or missing prod deps (e.g. `audible`)
   produces failures that don't exist in CI. Tests that need optional heavy deps should
   `pytest.importorskip(...)` so a missing dep skips instead of breaking collection.
-  `requirements.txt` no longer carries the heavy transcription stack (torch /
-  openai-whisper live in `requirements-local.txt`), so CI installs it directly.
+  `requirements.txt` no longer carries the transcription stack (faster-whisper
+  lives in `requirements-local.txt`), so CI installs it directly.
 - Don't create virtualenvs under `server/tests/`. They sit inside `testpaths`, so
   collection crawls their site-packages; `norecursedirs` in `pytest.ini` guards against it
   and `.gitignore` keeps them untracked, but `server/.venv` is the right home.

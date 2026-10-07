@@ -91,15 +91,18 @@ RUN pip install --no-cache-dir --upgrade pip "setuptools<71" wheel poetry-core &
 ENV NLTK_DATA=/usr/local/share/nltk_data
 RUN python -m nltk.downloader -d /usr/local/share/nltk_data punkt_tab
 
-# Local (server-side) Whisper — torch + openai-whisper — is opt-in because torch
-# pulls multi-GB nvidia-cu* CUDA wheels that are pure build cost when
-# transcription is offloaded to a remote/Jetson worker. Default build skips them.
+# Local (server-side) Whisper — faster-whisper, int8 on the CPU — is opt-in
+# because it is dead weight when transcription is offloaded to a remote/Jetson
+# worker. It no longer pulls torch or the CUDA wheels; the model itself
+# downloads on first use into APP_DATA_DIR/whisper, not into the image. CUDA
+# needs the NVIDIA cuBLAS/cuDNN libraries too, which this image does not add.
 # Enable with:  docker compose build --build-arg INSTALL_LOCAL_WHISPER=1
+# CI publishes the same thing as tandem-server:main-local.
 ARG INSTALL_LOCAL_WHISPER=false
 RUN if [ "$INSTALL_LOCAL_WHISPER" = "true" ] || [ "$INSTALL_LOCAL_WHISPER" = "1" ]; then \
         pip install --no-cache-dir -r requirements-local.txt ; \
     else \
-        echo "Skipping local Whisper (torch/openai-whisper) — remote-transcription-only image." ; \
+        echo "Skipping local Whisper (faster-whisper) — remote-transcription-only image." ; \
     fi
 
 # DRM plugins (DeACSM + DeDRM) are opt-in and NOT installed in the default
