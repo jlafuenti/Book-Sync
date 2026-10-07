@@ -1,46 +1,51 @@
 [
   {
-    "name": "plain sentence",
-    "text": "The quick brown fox.",
-    "expected_tokens": ["The", "quick", "brown", "fox."]
+    "name": "plain_sentence",
+    "text": "The red fox ran home.",
+    "expected_tokens": ["The", "red", "fox", "ran", "home."]
   },
   {
-    "name": "leading and trailing spaces",
-    "text": "  hello world  ",
-    "expected_tokens": ["hello", "world"]
+    "name": "leading_and_trailing_spaces",
+    "text": "  The red fox  ",
+    "expected_tokens": ["The", "red", "fox"]
   },
   {
-    "name": "no-break space between words",
-    "text": "one two three",
-    "expected_tokens": ["one", "two", "three"]
+    "name": "no_break_space",
+    "text": "alpha beta gamma",
+    "expected_tokens": ["alpha", "beta", "gamma"]
   },
   {
-    "name": "thin space between words",
+    "name": "thin_space",
     "text": "alpha beta gamma",
     "expected_tokens": ["alpha", "beta", "gamma"]
   },
   {
-    "name": "tab and newline",
-    "text": "a\tb\nc",
-    "expected_tokens": ["a", "b", "c"]
+    "name": "tab_and_newline",
+    "text": "alpha\tbeta\ngamma\r\ndelta",
+    "expected_tokens": ["alpha", "beta", "gamma", "delta"]
   },
   {
-    "name": "em dash stays attached to its word",
-    "text": "word—next end",
-    "expected_tokens": ["word—next", "end"]
+    "name": "em_dash_attached_to_a_word",
+    "text": "wait—what happened",
+    "expected_tokens": ["wait—what", "happened"]
   },
   {
-    "name": "curly quotes stay attached",
+    "name": "em_dash_with_spaces_is_its_own_token",
+    "text": "wait — what",
+    "expected_tokens": ["wait", "—", "what"]
+  },
+  {
+    "name": "curly_quotes_attached",
     "text": "“Hello,” she said.",
     "expected_tokens": ["“Hello,”", "she", "said."]
   },
   {
-    "name": "double space",
-    "text": "a  b",
-    "expected_tokens": ["a", "b"]
+    "name": "double_space",
+    "text": "alpha  beta",
+    "expected_tokens": ["alpha", "beta"]
   },
   {
-    "name": "empty string",
+    "name": "empty_string",
     "text": "",
     "expected_tokens": []
   }
