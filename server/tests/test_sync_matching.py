@@ -52,6 +52,14 @@ def test_normalize_for_search_golden(case):
     assert _normalize_for_search(case["input"]) == case["expected"]
 
 
+@pytest.mark.parametrize("case", _load("word_tokens_cases.json"), ids=lambda c: c["name"])
+def test_word_tokens_golden(case):
+    """A sentence's tokens are the maximal runs of non-whitespace under Unicode
+    White_Space — `str.split()`. `sync_points.word_starts` has one entry per
+    such token (issue #835), so Android must split the same way."""
+    assert case["text"].split() == case["expected_tokens"]
+
+
 @pytest.mark.parametrize("case", _load("match_cases.json"), ids=lambda c: c["name"])
 def test_match_text_to_sync_points_golden(case):
     points = [

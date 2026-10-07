@@ -12,6 +12,7 @@ matcher that is hand-duplicated between the Python server and the Android client
 | `next_up_cases.json` | — (client-side rule; the web's `lib/nextUp.test.js` is the other half) | `computeNextUp` (`ui/home/NextUp.kt`) |
 | `audio_to_epub_cases.json` | `services/sync_engine.py::audio_to_epub` | `SyncMatcher.pointForAudioPosition` (via `BookSyncRepository.audioToEpubText`) |
 | `reader_progress_cases.json` | — (client-side rule; the web's `lib/readerProgress.test.js` is the other half) | `ReaderProgress` (`ui/reader/ReaderProgress.kt`) |
+| `word_tokens_cases.json` | `str.split()` (what `services/word_timing.py::word_starts_for` tokenises with) | the same split, `(?U)\s+` — see below |
 
 Because the two implementations are maintained by hand, they can drift silently (this is
 exactly what issues #46 and #41 call out). Both sides are now enforced: the Python suite
@@ -62,6 +63,14 @@ unbreakable. (Phase 2 — the Android `match_cases.json` half — landed with #4
   resolution across ebook/print pagination, reading-speed sampling, time-left estimate). No
   Python half: the rule is client-side, shared between `web/src/lib/readerProgress.js` and
   `ReaderProgress.kt`.
+- `word_tokens_cases.json` (issue #835): `[{ "name", "text", "expected_tokens": [str, ...] }]`.
+  `sync_points.word_starts` holds one start time per token of the sentence, so the client must
+  find the same tokens the server did. A token is a maximal run of non-whitespace under
+  Unicode White_Space, i.e. Python's `str.split()`. A Java/Kotlin `Regex` must be built with
+  the `(?U)` flag (`(?U)\s+`) — without it `\s` is ASCII-only and a no-break space (U+00A0) or
+  thin space (U+2009) stops separating words. Leading and trailing whitespace produces no
+  empty token, and the empty string produces no tokens at all (`Regex.split` yields `[""]`;
+  `trim()` and drop empties, or use `split` then `filter { it.isNotEmpty() }`).
 - `normalize_cases.json`: `[{ "input": str, "expected": str }]`.
 - `match_cases.json`: `[{ "name", "sync_points": [{chapter, sentence_index, preview,
   confidence?}], "epub_text", "chapter_hint", "expected_chapter": int|null,
