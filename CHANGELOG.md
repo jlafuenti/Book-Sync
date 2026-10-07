@@ -16,6 +16,15 @@ operator must do by hand rather than read about afterwards.
 
 ## [Unreleased]
 
+### Added
+
+- The System page has a new Word timing card (#835), admin-only. It shows how many transcripts
+  carry word-level timing and how many of the rest are already waiting in the transcription queue.
+  Transcripts made before the worker returned word timing can only get it by being transcribed
+  again, so "Queue the rest for re-transcription" queues them all at low priority, behind ordinary
+  requests, after a confirmation. It costs a full transcription per book: hours each, and weeks for
+  a large library. Running it twice queues nothing new.
+
 ### Changed
 
 - The web app now builds with Vite 8 (#516), which bundles with Rolldown instead of Rollup and

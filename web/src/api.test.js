@@ -2145,6 +2145,37 @@ describe('getTranscript() (issue #713)', () => {
     })
 })
 
+describe('word timing coverage (issue #835)', () => {
+    it('getWordTimingStatus GETs the counts', async () => {
+        const body = { with_words: 7, without_words: 3, queued: 1 }
+        const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => body })
+        vi.stubGlobal('fetch', fetchMock)
+        const { getWordTimingStatus } = await import('./api')
+        expect(await getWordTimingStatus()).toEqual(body)
+        expect(fetchMock.mock.calls[0][0]).toBe('/api/troubleshoot/word-timing')
+        expect(fetchMock.mock.calls[0][1].method).toBeUndefined()
+    })
+
+    it('queueWordTiming POSTs to the queue endpoint', async () => {
+        const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => ({ queued: 3 }) })
+        vi.stubGlobal('fetch', fetchMock)
+        const { queueWordTiming } = await import('./api')
+        expect(await queueWordTiming()).toEqual({ queued: 3 })
+        expect(fetchMock.mock.calls[0][0]).toBe('/api/troubleshoot/word-timing/queue')
+        expect(fetchMock.mock.calls[0][1].method).toBe('POST')
+    })
+
+    it('puts the HTTP status and the server reason on the error', async () => {
+        vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+            ok: false, status: 404, json: async () => ({ detail: 'Not Found' }),
+        }))
+        const { getWordTimingStatus } = await import('./api')
+        const err = await getWordTimingStatus().catch((e) => e)
+        expect(err.status).toBe(404)
+        expect(err.message).toBe('Not Found')
+    })
+})
+
 describe('sync-map rebuild (issue #774)', () => {
     const status = { current_version: 3, outdated: 2, total: 5, running: false }
 

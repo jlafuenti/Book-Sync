@@ -43,6 +43,7 @@ vi.mock('../api', async (importOriginal) => {
         getSettings: settingsMock,
         getCalibreStatus: calibreMock,
         getSyncMapRebuildStatus: vi.fn().mockResolvedValue({ outdated: 0, total: 0, running: false, results: [] }),
+        getWordTimingStatus: vi.fn().mockResolvedValue({ with_words: 0, without_words: 0, queued: 0 }),
         getUsers: getUsersMock,
     }
 })
