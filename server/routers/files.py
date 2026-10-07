@@ -20,8 +20,8 @@ from config import settings
 from database import get_db
 from models.user import User
 from models.book import EBook, AudioBook, BookPair
-from models.sync_map import SyncMap
-from schemas import SyncMapResponse
+from models.sync_map import SyncMap, SyncPoint
+from schemas import SyncMapResponse, SyncMapWordsResponse, SyncPointWordsResponse
 from routers.auth import get_current_user, session_is_live
 from utils import safe_join
 
@@ -293,3 +293,47 @@ async def download_sync_map(
         )
 
     return sync_map
+
+
+@router.get("/syncmap/{pair_id}/words", response_model=SyncMapWordsResponse)
+async def download_sync_map_words(
+    pair_id: int,
+    db: AsyncSession = Depends(get_db, scope="function"),
+    _: User = Depends(get_current_user),
+):
+    """Per-token audio start times for a pair's sync map (issue #835).
+
+    Only sentences that have them are listed — an interpolated sentence, or a
+    map built from a transcript without word timing, has none — so a client
+    that gets an empty list simply has no word-level data for this pair. Kept
+    apart from the map endpoint so that response does not grow.
+    """
+    sync_map = (await db.execute(
+        select(SyncMap.id, SyncMap.version).where(SyncMap.book_pair_id == pair_id)
+    )).one_or_none()
+    if not sync_map:
+        raise HTTPException(
+            status_code=404,
+            detail="Sync map not found. Has transcription been completed for this pair?",
+        )
+
+    rows = (await db.execute(
+        select(
+            SyncPoint.epub_chapter, SyncPoint.epub_sentence_index, SyncPoint.word_starts
+        )
+        .where(SyncPoint.sync_map_id == sync_map.id, SyncPoint.word_starts.is_not(None))
+        .order_by(SyncPoint.epub_chapter, SyncPoint.epub_sentence_index)
+    )).all()
+
+    return SyncMapWordsResponse(
+        sync_map_id=sync_map.id,
+        version=sync_map.version,
+        points=[
+            SyncPointWordsResponse(
+                epub_chapter=chapter,
+                epub_sentence_index=sentence,
+                word_starts=[int(x) for x in starts.split(",") if x],
+            )
+            for chapter, sentence, starts in rows
+        ],
+    )
