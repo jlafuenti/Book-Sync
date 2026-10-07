@@ -2584,7 +2584,11 @@ class ReaderActivity : AppCompatActivity() {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
                 while (true) {
                     val audioMs = ctrl.currentPosition.toInt()
-                    readAlongTime.text = formatAudioTime(audioMs.toLong())
+                    // Written only on change: setText invalidates the whole
+                    // view even for identical text, and at this cadence that
+                    // kept the reader redrawing while nothing moved.
+                    val label = formatAudioTime(audioMs.toLong())
+                    if (readAlongTime.text != label) readAlongTime.text = label
                     readAlong.onAudioPosition(audioMs, System.currentTimeMillis())
                         .forEach { onReadAlongAction(it) }
                     delay(READ_ALONG_POLL_MS)

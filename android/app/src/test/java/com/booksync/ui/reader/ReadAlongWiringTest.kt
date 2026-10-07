@@ -395,6 +395,13 @@ class ReadAlongWiringTest {
         val poll = activity.substringAfter("private fun startReadAlongPoll(").substringBefore("\n    }")
         assertTrue(poll.contains("readAlong.onAudioPosition(audioMs, System.currentTimeMillis())"))
         assertTrue(poll.contains("onReadAlongAction("))
+        // setText invalidates the view even when the text is unchanged; at 150 ms
+        // that redrew the reader (WebView included) seven times a second while
+        // paused. The label changes once a second, so write it only then.
+        assertTrue(
+            "the time label must be written only when its text changes",
+            poll.contains("if (readAlongTime.text != label) readAlongTime.text = label"),
+        )
         val handler = activity.substringAfter("private fun onReadAlongAction(").substringBefore("\n    }")
         assertTrue(handler.contains("is ReadAlongController.Action.Decorate -> onReadAlongDecorate(action.point)"))
         assertTrue(handler.contains("is ReadAlongController.Action.Word -> onReadAlongWord(action)"))
