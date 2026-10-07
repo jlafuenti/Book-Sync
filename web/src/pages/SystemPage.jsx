@@ -15,6 +15,7 @@ import { UserManagementSection } from './UserManagementPage'
 import EbookReader from '../components/EbookReader'
 import Modal from '../components/Modal'
 import SyncMapRebuildCard from '../components/SyncMapRebuildCard'
+import WordTimingCard from '../components/WordTimingCard'
 import UpdateCheckBanner from '../components/UpdateCheckBanner'
 import UpdateCheckSettings from '../components/UpdateCheckSettings'
 import GoogleBooksSettings from '../components/GoogleBooksSettings'
@@ -1556,6 +1557,13 @@ function SystemPage({ tab }) {
                     {canAdmin && (
                         <div style={{ marginBottom: 24 }}>
                             <SyncMapRebuildCard />
+                        </div>
+                    )}
+
+                    {/* Word-timing coverage and bulk re-transcription (admin only, issue #835) */}
+                    {canAdmin && (
+                        <div style={{ marginBottom: 24 }}>
+                            <WordTimingCard />
                         </div>
                     )}
 
