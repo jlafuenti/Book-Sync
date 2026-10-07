@@ -15,6 +15,8 @@ from typing import List, Tuple, Optional, TYPE_CHECKING
 from rapidfuzz import fuzz
 import numpy as np
 
+from services.word_timing import word_starts_for
+
 if TYPE_CHECKING:
     # Type-hint-only imports: transcription pulls in torch/whisper and
     # epub_parser pulls in ebooklib/nltk; alignment only needs the dataclass
@@ -37,6 +39,11 @@ class AlignedPoint:
     audio_start_ms: int
     audio_end_ms: int
     confidence: float  # 0.0 to 1.0, how confident is the match
+    #: Audio start (ms) of each whitespace token of the sentence (issue #835),
+    #: from the transcript's word timing. Only a directly matched point whose
+    #: transcript sentence carried words has it; an interpolated or demoted
+    #: point, whose audio range is a guess, has None.
+    word_starts: Optional[List[int]] = None
 
 
 # ---------------------------------------------------------------------------
@@ -830,6 +837,7 @@ def _repair_outliers(
                 f"audio={p.audio_start_ms}ms vs neighbor median {median}ms"
             )
             p.confidence = 0.0
+            p.word_starts = None
 
     last_ms = 0
     for p in aligned_points:
@@ -837,6 +845,7 @@ def _repair_outliers(
             p.audio_start_ms = last_ms
             p.audio_end_ms = max(p.audio_end_ms, last_ms)
             p.confidence = 0.0
+            p.word_starts = None
         last_ms = p.audio_start_ms
     return aligned_points
 
@@ -965,6 +974,10 @@ def _align_texts_impl(
                 audio_start_ms=ws.start_ms,
                 audio_end_ms=ws.end_ms,
                 confidence=confidence,
+                word_starts=(
+                    word_starts_for(epub_sent.text, ws.words, ws.start_ms, ws.end_ms)
+                    if getattr(ws, "words", None) else None
+                ),
             ))
         else:
             # Interpolate timestamp from nearest matched neighbors
