@@ -27,7 +27,16 @@ from sqlalchemy import select
 from models.book import AudioBook, BookPair, EBook, PairStatus
 from models.library_issue import LibraryCheckResult
 from services import library_verify
-from services.pair_plausibility import CHECK_TYPE
+from services.pair_plausibility import (
+    CHECK_TYPE,
+    MEASURED_DETAIL_PREFIX,
+    NOT_MEASURED_DETAIL_PREFIX,
+    record_pair_plausibility,
+)
+
+# A stored pass that a real word count measured (issue #833). Only these are
+# exempt from re-checking; a pass with no basis, or one not measured, is not.
+MEASURED = f"{MEASURED_DETAIL_PREFIX} 120,000 words in 10.0 hours (~12,000 words/hour)"
 
 
 async def _pair(db, *, ebook_size, duration, title="A Book"):
@@ -98,7 +107,7 @@ async def test_a_stale_false_positive_is_cleared(db, monkeypatch):
     assert result.orphans_removed == 0
     row = await _row(db, pair.id)
     assert row.ok is True
-    assert row.detail is None
+    assert row.detail.startswith(MEASURED_DETAIL_PREFIX)
 
 
 # ---------------------------------------------------------------------------
@@ -133,13 +142,14 @@ async def test_a_genuine_positive_stays_flagged(db, monkeypatch):
 
 
 async def test_a_passing_pair_is_not_recheck(db, monkeypatch):
-    """Only ok=False rows are candidates. A passing row's pair must never even
+    """A measured pass is not a candidate (issue #833 narrows #693's rule to
+    passes a word count actually measured). Its pair must never even
     reach `estimate_word_count` — re-checking it with a freshly computed word
     count could newly flag an old pair that has synced fine for months."""
     passing_pair, passing_eb, passing_ab = await _pair(
         db, ebook_size=600_000, duration=10 * 3600, title="Passing Book")
     row = LibraryCheckResult(item_type="pair", item_id=passing_pair.id,
-                             check_type=CHECK_TYPE, ok=True, detail=None)
+                             check_type=CHECK_TYPE, ok=True, detail=MEASURED)
     db.add(row)
     await db.commit()
 
@@ -162,7 +172,7 @@ async def test_a_passing_pair_is_not_recheck(db, monkeypatch):
 
     passing_row = await _row(db, passing_pair.id)
     assert passing_row.ok is True
-    assert passing_row.detail is None
+    assert passing_row.detail == MEASURED
 
 
 # ---------------------------------------------------------------------------
@@ -268,7 +278,7 @@ async def test_a_never_checked_plausible_pair_gets_a_passing_row(db, monkeypatch
     row = await _fresh_row(db, pair_id)
     assert row is not None
     assert row.ok is True
-    assert row.detail is None
+    assert row.detail.startswith(MEASURED_DETAIL_PREFIX)
 
 
 async def test_a_never_checked_pair_without_a_duration_skips_the_word_count(db, monkeypatch):
@@ -300,20 +310,20 @@ async def test_a_stored_passing_row_is_never_reevaluated(db, monkeypatch):
     pair, eb, ab = await _pair(db, ebook_size=2_800_000, duration=132)
     pair_id = pair.id
     db.add(LibraryCheckResult(item_type="pair", item_id=pair.id, check_type=CHECK_TYPE,
-                              ok=True, detail=None))
+                              ok=True, detail=MEASURED))
     await db.commit()
 
     async def fake_estimate_word_count(path):
-        raise AssertionError("a stored pass must not be re-evaluated")
+        raise AssertionError("a measured pass must not be re-evaluated")
 
     monkeypatch.setattr(library_verify, "estimate_word_count", fake_estimate_word_count)
 
     result = await library_verify._recheck_pair_plausibility()
 
-    assert (result.evaluated, result.failed, result.cleared) == (0, 0, 0)
+    assert (result.evaluated, result.failed, result.cleared, result.rechecked) == (0, 0, 0, 0)
     row = await _fresh_row(db, pair_id)
     assert row.ok is True
-    assert row.detail is None
+    assert row.detail == MEASURED
 
 
 async def test_both_kinds_are_handled_in_one_run(db, monkeypatch):
@@ -326,7 +336,7 @@ async def test_both_kinds_are_handled_in_one_run(db, monkeypatch):
     flagged_path = flagged_eb.file_path
     passing, _, _ = await _pair(db, ebook_size=600_000, duration=10 * 3600, title="Passing Book")
     db.add(LibraryCheckResult(item_type="pair", item_id=passing.id, check_type=CHECK_TYPE,
-                              ok=True, detail=None))
+                              ok=True, detail=MEASURED))
     unchecked, unchecked_eb, _ = await _pair(
         db, ebook_size=2_800_000, duration=132, title="Unchecked Book")
     gone, _, _ = await _pair(db, ebook_size=1_200_000, duration=132, title="Gone Book")
@@ -365,6 +375,7 @@ async def test_the_summary_is_exposed_in_progress(db, monkeypatch):
 
     assert library_verify.get_progress()["plausibility_recheck"] == {
         "cleared": 0, "orphans_removed": 0, "evaluated": 1, "failed": 1,
+        "rechecked": 0, "newly_failed": 0,
     }
 
 
@@ -384,3 +395,149 @@ async def test_a_second_run_does_not_evaluate_the_same_pair_as_new(db, monkeypat
 
     assert first.evaluated == 1
     assert second.evaluated == 0
+
+
+# ---------------------------------------------------------------------------
+# Passes that were never measured are re-checked (issue #833)
+# ---------------------------------------------------------------------------
+
+
+async def _created_without_evidence(db, *, ebook_size, duration, title):
+    """A pair recorded the way pair creation records it, with nothing to judge
+    on: no duration yet (#127) or no word count, so the stored row is a pass."""
+    pair, eb, ab = await _pair(db, ebook_size=ebook_size, duration=duration, title=title)
+    await record_pair_plausibility(db, pair, eb, ab, word_count=None,
+                                   real_duration_seconds=None)
+    await db.commit()
+    row = await _row(db, pair.id)
+    assert row.ok is True
+    assert row.detail.startswith(NOT_MEASURED_DETAIL_PREFIX)
+    return pair, eb, ab
+
+
+async def test_an_abridged_edition_recorded_without_a_length_is_caught(db, monkeypatch):
+    """The issue's first case: created before the audiobook had a length, so
+    the stored pass judged nothing. Once the length is known, ~220,000 words
+    against 6.4 hours is ~34,000 words/hour, an abridgement, and verify must
+    list it."""
+    pair, eb, ab = await _created_without_evidence(
+        db, ebook_size=1_500_000, duration=None, title="Abridged Audio")
+    pair_id = pair.id
+    ab.duration_seconds = int(6.4 * 3600)
+    await db.commit()
+
+    async def fake_estimate_word_count(path):
+        return 220_000
+
+    monkeypatch.setattr(library_verify, "estimate_word_count", fake_estimate_word_count)
+
+    result = await library_verify._recheck_pair_plausibility()
+
+    assert (result.rechecked, result.newly_failed) == (1, 1)
+    row = await _fresh_row(db, pair_id)
+    assert row.ok is False
+    assert "words/hour" in row.detail
+
+
+async def test_a_file_size_pass_is_measured_once_a_word_count_exists(db, monkeypatch):
+    """The issue's second case in shape: a byte-band pass (no word count at
+    creation) hid ~3,200 words/hour, far more audio than the text explains."""
+    pair, eb, ab = await _created_without_evidence(
+        db, ebook_size=1_500_000, duration=int(55.9 * 3600), title="Too Much Audio")
+    pair_id = pair.id
+
+    async def fake_estimate_word_count(path):
+        return 179_000
+
+    monkeypatch.setattr(library_verify, "estimate_word_count", fake_estimate_word_count)
+
+    result = await library_verify._recheck_pair_plausibility()
+
+    assert (result.rechecked, result.newly_failed) == (1, 1)
+    assert (await _fresh_row(db, pair_id)).ok is False
+
+
+async def test_a_plausible_unmeasured_pass_becomes_measured(db, monkeypatch):
+    pair, eb, ab = await _created_without_evidence(
+        db, ebook_size=600_000, duration=10 * 3600, title="Fine Book")
+    pair_id = pair.id
+
+    async def fake_estimate_word_count(path):
+        return 100_000
+
+    monkeypatch.setattr(library_verify, "estimate_word_count", fake_estimate_word_count)
+
+    result = await library_verify._recheck_pair_plausibility()
+
+    assert (result.rechecked, result.newly_failed) == (1, 0)
+    row = await _fresh_row(db, pair_id)
+    assert row.ok is True
+    assert row.detail.startswith(MEASURED_DETAIL_PREFIX)
+
+
+async def test_a_legacy_pass_is_rechecked_once(db, monkeypatch):
+    """Rows from before #833 say nothing about their basis. Judge them once;
+    the measured verdict that replaces them is then left alone."""
+    pair, eb, ab = await _pair(db, ebook_size=600_000, duration=10 * 3600)
+    pair_id = pair.id
+    db.add(LibraryCheckResult(item_type="pair", item_id=pair.id, check_type=CHECK_TYPE,
+                              ok=True, detail=None))
+    await db.commit()
+    calls = []
+
+    async def fake_estimate_word_count(path):
+        calls.append(path)
+        return 100_000
+
+    monkeypatch.setattr(library_verify, "estimate_word_count", fake_estimate_word_count)
+
+    first = await library_verify._recheck_pair_plausibility()
+    second = await library_verify._recheck_pair_plausibility()
+
+    assert (first.rechecked, second.rechecked) == (1, 0)
+    assert len(calls) == 1
+    assert (await _fresh_row(db, pair_id)).detail.startswith(MEASURED_DETAIL_PREFIX)
+
+
+async def test_an_unparseable_ebook_is_tried_again_next_run(db, monkeypatch):
+    """No word count is a gap in the evidence, not a fact about the book: the
+    row stays unmeasured and the next verify tries again."""
+    pair, eb, ab = await _created_without_evidence(
+        db, ebook_size=600_000, duration=10 * 3600, title="Broken EPUB")
+    pair_id = pair.id
+    calls = []
+
+    async def fake_estimate_word_count(path):
+        calls.append(path)
+        return None
+
+    monkeypatch.setattr(library_verify, "estimate_word_count", fake_estimate_word_count)
+
+    await library_verify._recheck_pair_plausibility()
+    await library_verify._recheck_pair_plausibility()
+
+    assert len(calls) == 2
+    row = await _fresh_row(db, pair_id)
+    assert row.ok is True
+    assert row.detail.startswith(NOT_MEASURED_DETAIL_PREFIX)
+
+
+async def test_an_abridged_pass_is_reconfirmed_without_a_parse(db, monkeypatch):
+    pair, eb, ab = await _pair(db, ebook_size=600_000, duration=3 * 3600, title="Abridged")
+    ab.is_abridged = True
+    await db.commit()
+    await record_pair_plausibility(db, pair, eb, ab, real_duration_seconds=None)
+    await db.commit()
+    pair_id = pair.id
+
+    async def fake_estimate_word_count(path):
+        raise AssertionError("an abridged audiobook is not judged, so no parse")
+
+    monkeypatch.setattr(library_verify, "estimate_word_count", fake_estimate_word_count)
+
+    result = await library_verify._recheck_pair_plausibility()
+
+    assert (result.rechecked, result.newly_failed) == (1, 0)
+    row = await _fresh_row(db, pair_id)
+    assert row.ok is True
+    assert row.detail.startswith(NOT_MEASURED_DETAIL_PREFIX)

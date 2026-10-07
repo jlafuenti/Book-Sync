@@ -22,11 +22,18 @@ place already walking the whole library on an operator's request, so its last
 phase, `_recheck_pair_plausibility`, does two things:
 
 * It re-runs the check for pairs whose stored row currently says `ok == False`.
-  A passing pair's row is never touched, because re-checking it with a freshly
-  computed word count could newly flag an old pair that has synced fine for
-  months, which is a behaviour change nobody asked for. A stored row whose pair
-  has since been deleted is removed in the same pass, since it would otherwise
-  sit there forever.
+  A pass that a real word count measured is never touched, because re-checking
+  it with a freshly computed word count could newly flag an old pair that has
+  synced fine for months, which is a behaviour change nobody asked for. A
+  stored row whose pair has since been deleted is removed in the same pass,
+  since it would otherwise sit there forever.
+* It re-runs the check for passes that measured nothing (issue #833): a
+  byte-band pass taken without a word count, a "cannot judge" stored because
+  the audiobook had no length yet, an abridged pass, and every pass from before
+  #833, which recorded no basis at all. Like a pair with no row, such a pass is
+  an absence of evidence rather than a history worth protecting; production had
+  an abridged edition and a mostly-wrong m4b hiding behind passes of this kind.
+  `pair_plausibility.is_measured_pass` tells the two apart.
 * It evaluates pairs with **no** stored row at all (issue #798). The check
   shipped long after the first pairs were made, so every older pair has no
   verdict, and so would a pair from any path that never recorded one;
@@ -41,7 +48,7 @@ import logging
 import os
 from typing import NamedTuple, Optional
 
-from sqlalchemy import delete as sa_delete, exists, select
+from sqlalchemy import delete as sa_delete, exists, or_, select
 
 from database import async_session
 from models.book import AudioBook, BookPair, EBook
@@ -51,7 +58,9 @@ from services.audio_integrity import check_audio_integrity
 from services.ebook_integrity import check_ebook_integrity
 from services.pair_plausibility import (
     CHECK_TYPE as PAIR_PLAUSIBILITY_CHECK_TYPE,
+    MEASURED_DETAIL_PREFIX,
     estimate_word_count,
+    is_measured_pass,
     record_pair_plausibility,
 )
 from services.transcript_timing import (
@@ -181,22 +190,27 @@ class PlausibilityRecheck(NamedTuple):
     """What the pair-plausibility phase did. `cleared` and `orphans_removed` are
     the stored-row work (#693); `evaluated` is how many never-checked pairs were
     given a first verdict (#798) and `failed` how many of those verdicts were
-    failures."""
+    failures. `rechecked` is how many passes that measured nothing were judged
+    again (#833) and `newly_failed` how many of those now fail."""
 
     cleared: int = 0
     orphans_removed: int = 0
     evaluated: int = 0
     failed: int = 0
+    rechecked: int = 0
+    newly_failed: int = 0
 
 
 async def _recheck_pair_plausibility() -> PlausibilityRecheck:
-    """Re-check stored failing pair-plausibility rows; evaluate never-checked pairs.
+    """Re-check stored failing and unmeasured pair-plausibility rows; evaluate
+    never-checked pairs.
 
-    Two kinds of target, both judged by `record_pair_plausibility` with a word
-    count taken only when the audiobook has a duration (the rule at pair
-    creation): pairs whose stored verdict is `ok == False`, and pairs with no
-    stored verdict at all (issue #798). Stored passing rows are never touched —
-    see the module docstring for why.
+    Three kinds of target, all judged by `record_pair_plausibility` with a word
+    count taken only when the audiobook has a duration and is not abridged (the
+    check judges nothing otherwise): pairs whose stored verdict is
+    `ok == False`, passes that measured nothing (issue #833), and pairs with no
+    stored verdict at all (issue #798). A pass a word count measured is never
+    touched — see the module docstring for why.
 
     Opens its own session per pair and commits itself (this is background work,
     not a helper: `docs/request-transactions.md`), the same pattern
@@ -205,9 +219,10 @@ async def _recheck_pair_plausibility() -> PlausibilityRecheck:
 
     Returns a `PlausibilityRecheck`: pairs that flipped from failing to passing,
     stored rows deleted because their pair no longer exists, never-checked pairs
-    that were given a verdict, and how many of those failed. The same numbers
-    are published as `plausibility_recheck` in the scan's progress state, and
-    the caller logs them.
+    that were given a verdict and how many of those failed, and unmeasured
+    passes judged again and how many of those now fail. The same numbers are
+    published as `plausibility_recheck` in the scan's progress state, and the
+    caller logs them.
     """
     async with async_session() as db:
         failing_rows = (await db.execute(
@@ -216,6 +231,19 @@ async def _recheck_pair_plausibility() -> PlausibilityRecheck:
                 LibraryCheckResult.check_type == PAIR_PLAUSIBILITY_CHECK_TYPE,
                 LibraryCheckResult.ok == False,  # noqa: E712
             )
+        )).scalars().all()
+        # Passes with no measurement behind them (issue #833); `detail IS NULL`
+        # is every pass recorded before #833, judged once and then measured.
+        unmeasured_rows = (await db.execute(
+            select(LibraryCheckResult).where(
+                LibraryCheckResult.item_type == "pair",
+                LibraryCheckResult.check_type == PAIR_PLAUSIBILITY_CHECK_TYPE,
+                LibraryCheckResult.ok == True,  # noqa: E712
+                or_(
+                    LibraryCheckResult.detail.is_(None),
+                    ~LibraryCheckResult.detail.startswith(MEASURED_DETAIL_PREFIX),
+                ),
+            ).order_by(LibraryCheckResult.item_id)
         )).scalars().all()
         unchecked_pair_ids = (await db.execute(
             select(BookPair.id).where(
@@ -229,13 +257,14 @@ async def _recheck_pair_plausibility() -> PlausibilityRecheck:
         # Snapshot the ids now — each target below opens its own session, so
         # the ORM objects here would be stale by the time it runs. A row id of
         # None marks a never-checked pair.
-        targets = [(row.id, row.item_id) for row in failing_rows]
-        targets += [(None, pair_id) for pair_id in unchecked_pair_ids]
+        targets = [(row.id, row.item_id, "failing") for row in failing_rows]
+        targets += [(row.id, row.item_id, "unmeasured") for row in unmeasured_rows]
+        targets += [(None, pair_id, "unchecked") for pair_id in unchecked_pair_ids]
 
     _set(phase_index=_RECHECK_PHASE, phase_label=_PHASES[_RECHECK_PHASE],
          current=0, total=len(targets))
-    cleared = orphans_removed = evaluated = failed = 0
-    for i, (row_id, pair_id) in enumerate(targets, start=1):
+    cleared = orphans_removed = evaluated = failed = rechecked = newly_failed = 0
+    for i, (row_id, pair_id, kind) in enumerate(targets, start=1):
         if _cancelled():
             break
         async with async_session() as db:
@@ -270,6 +299,16 @@ async def _recheck_pair_plausibility() -> PlausibilityRecheck:
                 if already is not None:
                     _set(current=i)
                     continue
+            elif kind == "unmeasured":
+                # Pair creation may have recorded a measured verdict since the
+                # snapshot; that one is not this branch's to re-judge.
+                current = (await db.execute(
+                    select(LibraryCheckResult.ok, LibraryCheckResult.detail).where(
+                        LibraryCheckResult.id == row_id)
+                )).first()
+                if current is not None and is_measured_pass(current.ok, current.detail):
+                    _set(current=i)
+                    continue
 
             ebook = (await db.execute(
                 select(EBook).where(EBook.id == pair.ebook_id)
@@ -284,23 +323,28 @@ async def _recheck_pair_plausibility() -> PlausibilityRecheck:
                 continue
 
             word_count = None
-            if audiobook.duration_seconds:
+            if audiobook.duration_seconds and not audiobook.is_abridged:
                 # Real file I/O + CPU work; estimate_word_count always runs it
                 # via asyncio.to_thread internally, never directly on this
-                # event loop.
+                # event loop. Skipped where the check judges nothing anyway.
                 word_count = await estimate_word_count(ebook.file_path)
             ok = await record_pair_plausibility(
                 db, pair, ebook, audiobook, word_count=word_count)
             await db.commit()
-            if row_id is None:
+            if kind == "unchecked":
                 evaluated += 1
                 if not ok:
                     failed += 1
+            elif kind == "unmeasured":
+                rechecked += 1
+                if not ok:
+                    newly_failed += 1
             elif ok:
                 cleared += 1
         _set(current=i)
 
-    result = PlausibilityRecheck(cleared, orphans_removed, evaluated, failed)
+    result = PlausibilityRecheck(cleared, orphans_removed, evaluated, failed,
+                                 rechecked, newly_failed)
     _set(plausibility_recheck=result._asdict())
     return result
 
@@ -412,8 +456,10 @@ async def _run_scan() -> None:
         if any(recheck):
             logger.info(
                 "[verify] pair_plausibility: evaluated %d never-checked pair(s), "
-                "%d failed; re-check cleared %d, removed %d orphan row(s)",
+                "%d failed; re-judged %d unmeasured pass(es), %d now fail; "
+                "re-check cleared %d, removed %d orphan row(s)",
                 recheck.evaluated, recheck.failed,
+                recheck.rechecked, recheck.newly_failed,
                 recheck.cleared, recheck.orphans_removed,
             )
 

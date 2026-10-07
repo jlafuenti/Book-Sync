@@ -46,6 +46,24 @@ operator must do by hand rather than read about afterwards.
   in-memory result cache. The trade-off: an item moved to the top while another was running
   waits until the interrupted one finishes, exactly as it would have without the restart.
 
+- Library verify now re-checks pair-plausibility passes that never measured anything (#833).
+  Verify leaves a stored pass alone so it can't newly flag a pair that has synced fine (#693),
+  but a pass didn't record what it was based on. A pass judged on file size alone (no word
+  count), or a "cannot judge" stored because the audiobook had no length yet, looked exactly like
+  a real words-per-hour measurement and was never revisited. On a real library that hid an
+  abridged edition and an audiobook file that was mostly other books. Each stored pass now says
+  whether a word count measured it, and verify re-checks the ones that weren't. Passes measured
+  by a word count are still never re-judged. The cost: a book whose EPUB can't be parsed is
+  re-parsed on every verify, a few seconds each.
+
+### Upgrade notes
+
+- The first Library verify after this deploy re-checks every stored pair-plausibility pass once,
+  because passes recorded before it don't say what they were based on. That is one EPUB parse
+  per pair, so expect the last phase to take noticeably longer that one time. Any pair it finds
+  implausible appears under "Pairs whose audio length does not fit the ebook" in Troubleshoot; nothing
+  is changed automatically.
+
 ## [0.10.0] - 2026-10-04
 
 ### Added
