@@ -16,13 +16,16 @@ operator must do by hand rather than read about afterwards.
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-10-07
+
 ### Added
 
 - The server now stores per-word timing from the transcription worker (#835). Each transcript
   keeps the start and end of every word beside its sentences, and aligning a book turns that into
   one audio start time per word of each matched ebook sentence. It is stored with the sync map and
   served by a new endpoint, `GET /api/files/syncmap/{pair_id}/words`; the existing sync map
-  response is unchanged. Nothing in the apps uses it yet, and neither position matcher reads it.
+  response is unchanged. The Android app's read-along (0.11.0) uses it to mark the word being
+  read; the web reader does not yet, and neither position matcher reads it.
   A transcript made before this has no word timing and cannot be given any without
   transcribing the audio again.
 - Admin endpoints to add word timing to an existing library (#835):
@@ -49,6 +52,11 @@ operator must do by hand rather than read about afterwards.
   downloads the whole app on its first load after this deploy. `@vitejs/plugin-react` goes to
   5.2, not 6, because version 6's optional Babel 8 chain still collides with `vite-plugin-pwa`'s
   Babel 7 one in npm's resolver.
+- Dependency updates from Dependabot: on the server FastAPI 0.142, Uvicorn 0.54, SQLAlchemy 2.1.3,
+  PyJWT 2.15.1, cryptography 50.0.2 and tzdata 2026.5 (#828), with matching FastAPI and Uvicorn
+  floors for the worker (#820, #821); source-map-js 1.2.2 in the web build, which fixes a
+  denial-of-service advisory in that build-time dependency (#827); plus vitest 5.0.3 (#822), the
+  torch floor for the optional local-Whisper image (#826) and a GitHub Actions update (#825).
 
 ### Fixed
 
@@ -92,7 +100,7 @@ operator must do by hand rather than read about afterwards.
   never done automatically.
 - The first Library verify after this deploy re-checks every stored pair-plausibility pass once,
   because passes recorded before it don't say what they were based on. That is one EPUB parse
-  per pair, so expect the last phase to take noticeably longer that one time. Any pair it finds
+  per pair: about 3½ minutes for ~375 pairs on a real library, that one time. Any pair it finds
   implausible appears under "Pairs whose audio length does not fit the ebook" in Troubleshoot; nothing
   is changed automatically.
 
