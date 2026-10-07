@@ -2603,7 +2603,25 @@ class ReaderActivity : AppCompatActivity() {
             is ReadAlongController.Action.Decorate -> onReadAlongDecorate(action.point)
             is ReadAlongController.Action.Word -> onReadAlongWord(action)
             is ReadAlongController.Action.Jump -> Unit // only the visibility check yields a jump
+            is ReadAlongController.Action.TurnForward -> Unit // only onWordOffPage yields a turn
         }
+    }
+
+    /**
+     * Turns the page forward when [verdict] (the JSON string [wordMarkSetScript]
+     * answers) says the current word sits past the right edge (issue #841): the
+     * sentence continues on the next page, and waiting for the next sentence's
+     * visibility check would leave the word running off the bottom. The
+     * controller allows one turn per sentence and arms the echo window, so the
+     * locator this emits is not read as a manual turn. The word ranges stay
+     * valid: a page turn within a chapter keeps the same document.
+     */
+    private fun turnIfWordOffPage(point: SyncPointEntity, verdict: String?) {
+        if (verdict?.trim()?.trim('"') != "right") return
+        val nav = navigator ?: return
+        readAlong.onWordOffPage(point, System.currentTimeMillis()) ?: return
+        Log.d(TAG, "read-along: word is on the next page, turning")
+        nav.goForward(animated = false)
     }
 
     /**
@@ -2625,7 +2643,9 @@ class ReaderActivity : AppCompatActivity() {
         }
         wordMarkWanted = action.tokenIndex
         if (wordMarkTokenCount == starts.size && sameSentencePoint(wordMarkPoint, action.point)) {
-            lifecycleScope.launch { nav.evaluateJavascript(wordMarkSetScript(action.tokenIndex)) }
+            lifecycleScope.launch {
+                turnIfWordOffPage(action.point, nav.evaluateJavascript(wordMarkSetScript(action.tokenIndex)))
+            }
         }
     }
 
@@ -2668,7 +2688,9 @@ class ReaderActivity : AppCompatActivity() {
                 )
                 return@launch
             }
-            if (wordMarkWanted >= 0) nav.evaluateJavascript(wordMarkSetScript(wordMarkWanted))
+            if (wordMarkWanted >= 0) {
+                turnIfWordOffPage(point, nav.evaluateJavascript(wordMarkSetScript(wordMarkWanted)))
+            }
         }
     }
 
@@ -2833,6 +2855,7 @@ class ReaderActivity : AppCompatActivity() {
                 }
                 is ReadAlongController.Action.Jump -> jumpToSentence(action.point)
                 is ReadAlongController.Action.Word -> Unit // the next poll tick reports the word
+                is ReadAlongController.Action.TurnForward -> Unit // never part of a back-to-audio
             }
         }
     }

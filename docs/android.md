@@ -728,6 +728,13 @@ the page turns when the sentence leaves it.
   page, or when the WebView has no `CSS.highlights`. The mark is cleared when
   following stops or pauses for a manual turn, and on Back to audio before the
   sentence is marked again.
+- **Page turn on the word (issue #841).** `wordMarkSetScript` also reports
+  whether the word it painted lies in the current column, past the right edge,
+  or past the left edge. A word past the right edge means the sentence runs onto
+  the next page, so the reader turns forward at once
+  (`ReadAlongController.onWordOffPage`: one turn per sentence, and it arms the
+  same echo window as a jump). The sentence-start visibility check above stays
+  as it was and is what turns the page for sentences without word timing.
 - **Audio.** The reader attaches its own `MediaController` to the running
   service and polls every 150 ms (500 ms before the word mark; the player and
   the mini player still poll at 500 ms). Sentence work is idempotent, so the
