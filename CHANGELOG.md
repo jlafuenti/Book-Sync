@@ -49,6 +49,12 @@ operator must do by hand rather than read about afterwards.
   downloads the whole app on its first load after this deploy. `@vitejs/plugin-react` goes to
   5.2, not 6, because version 6's optional Babel 8 chain still collides with `vite-plugin-pwa`'s
   Babel 7 one in npm's resolver.
+- The server's local transcription provider now runs on faster-whisper instead of openai-whisper
+  (#843), and returns word timing the same way the Jetson worker does: each sentence keeps the
+  words it was built from, grouped by the worker's rules. It runs int8 on the CPU, or float16 on
+  CUDA when the GPU libraries are present, and no longer pulls torch. CI now also publishes the
+  server image with the local provider built in, as `tandem-server:main-local` beside the plain
+  `main`.
 
 ### Fixed
 
@@ -80,6 +86,16 @@ operator must do by hand rather than read about afterwards.
 
 ### Upgrade notes
 
+- The local transcription provider changed engine (#843). A server image you build yourself with
+  `INSTALL_LOCAL_WHISPER=1` has to be rebuilt to pick it up: `requirements-local.txt` now lists
+  `faster-whisper` and no longer lists torch or openai-whisper. The model is downloaded on first
+  use into `APP_DATA_DIR/whisper`, not shipped in the image, so the first local job needs network
+  access and disk for the model. Models cached by the old provider are not reused. CUDA also needs
+  the NVIDIA cuBLAS and cuDNN libraries in the image or on the host; without them set
+  `WHISPER_DEVICE=cpu`.
+- A new image tag exists, `tandem-server:main-local` (and `<version>-local`, `latest-local`),
+  which is the server with local Whisper built in. A deployment that transcribes on the server can
+  follow it instead of building; everything else keeps following `main`.
 - Migration `0033_word_timing` adds one nullable column to `audio_transcripts` and one to
   `sync_points`. On Postgres that is a catalog-only change, so it is instant whatever the table
   size, and nothing is backfilled.

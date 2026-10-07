@@ -60,15 +60,36 @@ in the web UI, which is what the queue actually reads.
 | Mode | Behavior |
 |---|---|
 | `remote` | Send every job to the worker at `TRANSCRIPTION_REMOTE_URL`. Fails if it's unreachable. |
-| `local` | Run Whisper in the server container. Requires an image built with the local stack. |
+| `local` | Run Whisper in the server container. Requires the local-Whisper image (`tandem-server:main-local`, or a build with the local stack). |
 | `remote_with_fallback` *(default)* | Try the remote worker, fall back to local Whisper. |
 
-**The default server image has no local Whisper.** `torch` + `openai-whisper` CUDA wheels are
-multi-GB, so they're opt-in at build time:
+**The default server image has no local Whisper.** The local provider runs
+[faster-whisper](https://github.com/SYSTRAN/faster-whisper) (CTranslate2), which is opt-in so a
+deployment that transcribes on a remote worker does not carry it. There are two ways to get it:
 
-```bash
-docker compose build --build-arg INSTALL_LOCAL_WHISPER=1
-```
+- **Follow the published local image.** CI publishes the server a second time with the local stack
+  built in, under the same name with a `-local` suffix: `tandem-server:main-local` tracks `main`
+  (and a release adds `<version>-local` and `latest-local`). Use it in place of
+  `tandem-server:main` in a deployment that transcribes on the server.
+- **Build it yourself:**
+
+  ```bash
+  docker compose build --build-arg INSTALL_LOCAL_WHISPER=1
+  ```
+
+The local provider runs `WHISPER_MODEL` with int8 quantisation on the CPU, or float16 on CUDA when
+`WHISPER_DEVICE` is `cuda` or `auto` and CTranslate2 can see a GPU. CUDA also needs the NVIDIA
+cuBLAS and cuDNN libraries, which the image does not add; see faster-whisper's README for the
+versions it expects. The model is downloaded on first use into `APP_DATA_DIR/whisper`, so keep that
+on the data volume and the first job pays the download once. Expect roughly real time on a modern
+8-core CPU with `medium`, so a 10-hour book is about 10 hours, and several times faster on a CUDA
+GPU; measure on your own hardware (see "How long it takes").
+
+Like the worker, the local provider returns word timing: each sentence is built from the words
+whisper timed, and keeps them, so a transcript made locally can be aligned to per-word times
+exactly as one made by the worker. Pauses split overlong sentences, and a hyphenated word that
+whisper emits in pieces is one word. Transcripts made by an older local provider have no word
+timing (see "Word timing" above).
 
 Without that, `remote_with_fallback` has nothing to fall back *to*, so it behaves as `remote`:
 a remote outage is **retried** on the ladder below and, only if the ladder runs out, fails the
