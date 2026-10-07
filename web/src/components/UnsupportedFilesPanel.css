@@ -1,0 +1,29 @@
+/* Unsupported files panel (Troubleshoot Library). Moved from SystemPage.css
+   with the panel: the Troubleshoot route does not load the System page's
+   stylesheet. */
+.system-file-format-badge {
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 0.72rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    background: var(--bg-input, var(--bg-secondary));
+    color: var(--text-secondary);
+}
+
+.system-file-converted { color: var(--success); font-weight: 500; font-size: 0.83rem; }
+.system-file-pending   { color: var(--text-muted); font-size: 0.83rem; }
+
+.system-file-msg {
+    font-size: 0.78rem;
+    margin-top: 4px;
+}
+.system-file-msg.success { color: var(--success); }
+.system-file-msg.error   { color: var(--error); }
+
+@media (max-width: 768px) {
+    .system-file-format-badge {
+        font-size: 0.65rem;
+        padding: 1px 6px;
+    }
+}

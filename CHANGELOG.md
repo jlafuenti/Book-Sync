@@ -18,6 +18,19 @@ operator must do by hand rather than read about afterwards.
 
 ### Changed
 
+- The System page is reorganised so library maintenance lives in Troubleshoot Library. The
+  Unsupported Files view and the Rebuild Sync Maps card move there. Unsupported files now have a
+  single section with every action the old view had: convert one or all, keep or delete
+  originals, delete an original already converted, and force-delete. Old `/system/unsupported`
+  links open Troubleshoot. On the System page, the Troubleshoot Library entry now shows how many
+  issues are open before you click in. Issues already queued for the re-transcription that fixes
+  them are left out of that number and named in its tooltip, so the word-timing backfill doesn't
+  read as hundreds of problems; the Troubleshoot page itself still lists them all. Hardcover now
+  sits beside Audiobookshelf and Updates beside the disk breakdown, Import Sources has a Back to
+  System button, and Nook is no longer listed as an import source, since it isn't supported.
+
+### Changed
+
 - The server's local transcription provider now runs on faster-whisper instead of openai-whisper
   (#843), and returns word timing the same way the Jetson worker does: each sentence keeps the
   words it was built from, grouped by the worker's rules. It runs int8 on the CPU, or float16 on

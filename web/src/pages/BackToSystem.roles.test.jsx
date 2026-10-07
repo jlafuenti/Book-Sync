@@ -2,16 +2,15 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import TroubleshootPage from './TroubleshootPage'
-import SystemPage from './SystemPage'
 import { roleMeets } from '../roles'
 
 /**
  * "Back to System" must not be a dead end (issue #283 follow-up).
  *
- * Troubleshoot and Unsupported are editor-reachable, but the System landing
- * page is admin-only. Both views offered a "Back to System" control that, for an
- * editor, either redirects to the home page or flips to a status view that
- * cannot load — found by clicking it on the deployed branch.
+ * Troubleshoot is editor-reachable, but the System landing page is admin-only.
+ * Its "Back to System" control, for an editor, redirected to the home page —
+ * found by clicking it on the deployed branch. (The Unsupported Files view had
+ * the same problem; it has since moved into Troubleshoot.)
  *
  * Gating a route without gating everything that points at it just moves the
  * dead end somewhere less obvious.
@@ -84,22 +83,6 @@ describe('Troubleshoot — Back to System', () => {
         authRef.role = 'admin'
         render(<MemoryRouter><TroubleshootPage /></MemoryRouter>)
         await waitFor(() => expect(issuesMock).toHaveBeenCalled())
-        expect(screen.getByText('Back to System')).toBeInTheDocument()
-    })
-})
-
-describe('Unsupported files — Back to System', () => {
-    it('is hidden from an editor, whose status view would not load', async () => {
-        authRef.role = 'editor'
-        render(<MemoryRouter><SystemPage tab="unsupported" /></MemoryRouter>)
-        await waitFor(() => expect(unsupportedMock).toHaveBeenCalled())
-        expect(screen.queryByText('Back to System')).toBeNull()
-    })
-
-    it('is offered to an admin', async () => {
-        authRef.role = 'admin'
-        render(<MemoryRouter><SystemPage tab="unsupported" /></MemoryRouter>)
-        await waitFor(() => expect(unsupportedMock).toHaveBeenCalled())
         expect(screen.getByText('Back to System')).toBeInTheDocument()
     })
 })

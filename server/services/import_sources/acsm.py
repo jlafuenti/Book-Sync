@@ -300,8 +300,9 @@ def _fulfill_acsm(acsm_path: Path, out_dir: Path) -> Path:
     if not is_adobe_id_authorized():
         raise RuntimeError(
             "ACSM source is not authorized with Adobe yet. Open the Import "
-            "Sources page and click 'Authorize Adobe' on the Google Play / "
-            "Nook card — anonymous authorization is enough for most books."
+            "Sources page and click 'Authorize Adobe' on the "
+            f"{AcsmSource.DISPLAY_NAME} card — anonymous authorization is "
+            "enough for most books."
         )
 
     # Output extension is unknown until we see the downloaded bytes.
@@ -650,7 +651,9 @@ async def process_file(db: AsyncSession, source_path: Path, original_filename: s
 
 class AcsmSource(SourceAdapter):
     SOURCE_KEY = "acsm"
-    DISPLAY_NAME = "Google Play / Nook (ACSM upload)"
+    # Nook is not a supported source, so the card does not offer it, though
+    # `_detect_source_from_meta` still tags a Nook-looking file internally.
+    DISPLAY_NAME = "Google Play (ACSM upload)"
     BOOK_TYPE = "ebook"
     SUPPORTS_AUTO_SYNC = True  # auto-sync = poll the watched folder
 

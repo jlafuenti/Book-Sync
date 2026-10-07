@@ -8,12 +8,9 @@ import { roleMeets } from '../roles'
  * Issue #283: the status view's reads are admin-only server-side now.
  *
  * The route guard in App.jsx already keeps non-admins off `/system/status`, so
- * this is the second layer — but it earns its place: `/system/unsupported`
- * renders this same component and *is* reachable by editors, so a change to
- * which tab triggers `loadStatus()` would start firing admin-only reads from an
- * editor's session. The failure would surface as "Failed to load system status"
- * on a page the editor is entitled to use, which reads as a broken app rather
- * than as a permission boundary.
+ * this is the second layer. (`/system/unsupported` used to render this same
+ * component for editors; it now redirects to Troubleshoot, where the
+ * unsupported-files panel lives.)
  */
 
 const {
@@ -101,14 +98,6 @@ describe('the status reads are admin-only', () => {
         expect(diskMock).not.toHaveBeenCalled()
     })
 
-    it('leaves the unsupported tab working for an editor', async () => {
-        // GET /api/library/unsupported is editor-level on purpose: it drives
-        // conversion, which is library maintenance rather than infrastructure.
-        authRef.role = 'editor'
-        renderPage('unsupported')
-        await waitFor(() => expect(unsupportedMock).toHaveBeenCalled())
-        expect(diskMock).not.toHaveBeenCalled()
-    })
 })
 
 /**
@@ -147,12 +136,6 @@ describe('the calibre probe follows the same gate', () => {
         expect(calibreMock).not.toHaveBeenCalled()
     })
 
-    it('does not fire from the one tab an editor can open', async () => {
-        authRef.role = 'editor'
-        renderPage('unsupported')
-        await waitFor(() => expect(unsupportedMock).toHaveBeenCalled())
-        expect(calibreMock).not.toHaveBeenCalled()
-    })
 })
 
 /**
@@ -162,13 +145,11 @@ describe('the calibre probe follows the same gate', () => {
  * second layer.
  */
 describe('the word-timing card is admin-only (issue #835)', () => {
-    it('appears for an admin, under the rebuild card', async () => {
+    it('appears for an admin', async () => {
         authRef.role = 'admin'
         renderPage('status')
-        const rebuild = await screen.findByText('Rebuild Sync Maps')
-        const word = await screen.findByText('Word timing')
+        expect(await screen.findByText('Word timing')).toBeInTheDocument()
         expect(wordTimingMock).toHaveBeenCalled()
-        expect(rebuild.compareDocumentPosition(word) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     })
 
     it('does not appear, or fetch, for an editor', async () => {
@@ -180,27 +161,13 @@ describe('the word-timing card is admin-only (issue #835)', () => {
     })
 })
 
-describe('the sync-map rebuild card is admin-only', () => {
-    it('appears for an admin', async () => {
+// The sync-map rebuild card moved to Troubleshoot Library (covered in
+// TroubleshootPage.test.jsx); the System page no longer mounts or fetches it.
+describe('the sync-map rebuild card has left the System page', () => {
+    it('is not shown, and its status is not fetched', async () => {
         authRef.role = 'admin'
         renderPage('status')
-        expect(await screen.findByText('Rebuild Sync Maps')).toBeInTheDocument()
-        expect(await screen.findByText('All sync maps are up to date.')).toBeInTheDocument()
-        expect(rebuildStatusMock).toHaveBeenCalled()
-    })
-
-    it('does not appear, or fetch, for an editor', async () => {
-        authRef.role = 'editor'
-        renderPage('status')
-        await new Promise(r => setTimeout(r, 0))
-        expect(screen.queryByText('Rebuild Sync Maps')).not.toBeInTheDocument()
-        expect(rebuildStatusMock).not.toHaveBeenCalled()
-    })
-
-    it('does not appear, or fetch, from the tab an editor can open', async () => {
-        authRef.role = 'editor'
-        renderPage('unsupported')
-        await waitFor(() => expect(unsupportedMock).toHaveBeenCalled())
+        await screen.findByText('Word timing')
         expect(screen.queryByText('Rebuild Sync Maps')).not.toBeInTheDocument()
         expect(rebuildStatusMock).not.toHaveBeenCalled()
     })

@@ -142,3 +142,21 @@ def test_home_is_not_root_for_the_adobe_account_dir(monkeypatch, tmp_path):
     monkeypatch.setenv("USERPROFILE", str(tmp_path))
     assert "root" not in acsm._adobe_id_path().parts[:2]
     assert os.fspath(acsm._adobe_id_path()).startswith(os.fspath(tmp_path))
+
+
+def test_the_source_is_not_presented_as_supporting_nook():
+    """Nook is not a supported import source, so the card title on the Import
+    Sources page (`DISPLAY_NAME`, served live by `GET /api/import/sources`) and
+    the authorize hint must not offer it. Detection still tags a Nook-looking
+    file `nook` internally; that is bookkeeping, not a promise."""
+    assert "nook" not in acsm.AcsmSource.DISPLAY_NAME.lower()
+    assert "Google Play" in acsm.AcsmSource.DISPLAY_NAME
+
+
+def test_the_authorize_hint_names_the_card_as_it_is_titled(monkeypatch, tmp_path):
+    monkeypatch.setattr(acsm, "is_adobe_id_authorized", lambda: False)
+    with pytest.raises(RuntimeError) as exc:
+        acsm._fulfill_acsm(tmp_path / "x.acsm", tmp_path)
+    message = str(exc.value)
+    assert "nook" not in message.lower()
+    assert acsm.AcsmSource.DISPLAY_NAME in message

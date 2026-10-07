@@ -3,23 +3,19 @@ import { Link } from 'react-router-dom'
 import {
     getDiskUsage, getSettings, updateSettings, testRemoteConnection,
     generateTranscriptionRemoteKey,
-    testAbsConnection, testHardcoverConnection, enrichLibraryFromAbs, getUnsupportedFiles,
-    convertUnsupportedFile, convertAllUnsupportedFiles, deleteUnsupportedSource,
-    forceDeleteUnsupportedFile, forceDeleteAllUnsupportedFiles,
-    getCalibreStatus, getEbooks, getAudiobooks, getPairs, getTranscriptionQueue,
+    testAbsConnection, testHardcoverConnection, enrichLibraryFromAbs,
+    getCalibreStatus, getLibraryIssues, getEbooks, getAudiobooks, getPairs, getTranscriptionQueue,
     getBackupStatus, listBackups, restoreBackup, createBackup, deleteBackup, downloadBackup,
     getUsers, getUpdateStatus,
 } from '../api'
 import { useAuth } from '../contexts/AuthContext'
 import { UserManagementSection } from './UserManagementPage'
-import EbookReader from '../components/EbookReader'
-import Modal from '../components/Modal'
-import SyncMapRebuildCard from '../components/SyncMapRebuildCard'
 import WordTimingCard from '../components/WordTimingCard'
 import UpdateCheckBanner from '../components/UpdateCheckBanner'
 import UpdateCheckSettings from '../components/UpdateCheckSettings'
 import GoogleBooksSettings from '../components/GoogleBooksSettings'
 import useIsMobile from '../hooks/useIsMobile'
+import { summarizeTroubleshoot } from '../lib/troubleshootSummary'
 import { TourAnchors, TourScreens, useTourAnchor, useTourScreen } from '../tour/anchors'
 import './SystemPage.css'
 
@@ -149,44 +145,6 @@ function CalibreStatusCard() {
                     {checking ? '…' : 'Check'}
                 </button>
             </div>
-        </div>
-    )
-}
-
-/* ── UnsupportedFilesCard ──────────────────────────────────────────── */
-function UnsupportedFilesCard({ count, onViewItems }) {
-    const hasItems = count > 0
-    return (
-        <div className="system-status-card">
-            <div className="system-status-card-left">
-                <div className={`system-status-icon-sm ${hasItems ? 'error' : 'ok'}`}>
-                    {hasItems ? (
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="18" height="18">
-                            <circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="12" /><line x1="12" y1="16" x2="12.01" y2="16" />
-                        </svg>
-                    ) : (
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="18" height="18">
-                            <polyline points="20 6 9 17 4 12" />
-                        </svg>
-                    )}
-                </div>
-                <div>
-                    <h5 className="system-status-title">Unsupported Files</h5>
-                    <p className="system-status-desc">
-                        {count === null ? 'Loading…' :
-                         hasItems ? <><span className="system-status-count-error">{count} items</span> require conversion</> :
-                         'No unsupported files found'}
-                    </p>
-                </div>
-            </div>
-            {hasItems && (
-                <button className="system-status-link" onClick={onViewItems}>
-                    VIEW ITEMS
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="12" height="12">
-                        <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" /><polyline points="15 3 21 3 21 9" /><line x1="10" y1="14" x2="21" y2="3" />
-                    </svg>
-                </button>
-            )}
         </div>
     )
 }
@@ -774,249 +732,6 @@ export function DetailedBreakdown({ stats }) {
     )
 }
 
-/* ── UnsupportedFilesTab ───────────────────────────────────────────── */
-export function UnsupportedFilesTab({ canAdmin }) {
-    const [files, setFiles] = useState([])
-    const [loading, setLoading] = useState(true)
-    const [error, setError] = useState(null)
-    const [busyIds, setBusyIds] = useState(new Set())
-    const [batchBusy, setBatchBusy] = useState(false)
-    const [batchResult, setBatchResult] = useState(null)
-    const [fileMessages, setFileMessages] = useState({})
-    const [previewFile, setPreviewFile] = useState(null)
-    const [forceDeleteConfirm, setForceDeleteConfirm] = useState(null) // null | { file } | 'all'
-
-    useEffect(() => { loadFiles() }, [])
-
-    const loadFiles = async () => {
-        setLoading(true); setError(null)
-        try { setFiles(await getUnsupportedFiles()) }
-        catch (err) { setError(err.message) }
-        finally { setLoading(false) }
-    }
-
-    const setFileBusy = (id, busy) => setBusyIds(prev => {
-        const next = new Set(prev); busy ? next.add(id) : next.delete(id); return next
-    })
-    const setFileMsg = (id, msg) => setFileMessages(prev => ({ ...prev, [id]: msg }))
-
-    const handleConvert = async (file, deleteSource) => {
-        setFileBusy(file.id, true); setFileMsg(file.id, null)
-        try {
-            const result = await convertUnsupportedFile(file.id, deleteSource)
-            // A converted file whose pairs were re-pointed also needs its sync
-            // map rebuilt on the new EPUB's axis (issue #101). The conversion
-            // succeeds either way, so a failure here is a warning, not an error
-            // — but it must not pass silently: the pair's stored coordinates no
-            // longer describe its ebook until it is transcribed or re-aligned.
-            if (result?.realign_error) {
-                setFileMsg(file.id, {
-                    type: 'error',
-                    text: `Converted, but the sync map could not be rebuilt: ${result.realign_error}`,
-                })
-            } else {
-                setFileMsg(file.id, { type: 'success', text: deleteSource ? 'Converted & deleted' : 'Converted to EPUB' })
-            }
-            await loadFiles()
-        } catch (err) { setFileMsg(file.id, { type: 'error', text: err.message }) }
-        finally { setFileBusy(file.id, false) }
-    }
-
-    const handleDeleteSource = async (file) => {
-        setFileBusy(file.id, true); setFileMsg(file.id, null)
-        try { await deleteUnsupportedSource(file.id); await loadFiles() }
-        catch (err) { setFileMsg(file.id, { type: 'error', text: err.message }) }
-        finally { setFileBusy(file.id, false) }
-    }
-
-    const handleForceDelete = async (file) => {
-        setFileBusy(file.id, true); setFileMsg(file.id, null); setForceDeleteConfirm(null)
-        try { await forceDeleteUnsupportedFile(file.id); await loadFiles() }
-        catch (err) { setFileMsg(file.id, { type: 'error', text: err.message }) }
-        finally { setFileBusy(file.id, false) }
-    }
-
-    const handleForceDeleteAll = async () => {
-        setBatchBusy(true); setBatchResult(null); setForceDeleteConfirm(null)
-        try {
-            const result = await forceDeleteAllUnsupportedFiles()
-            setBatchResult({ type: 'success', text: `Force deleted ${result.total} file${result.total !== 1 ? 's' : ''}.` })
-            await loadFiles()
-        } catch (err) { setBatchResult({ type: 'error', text: err.message }) }
-        finally { setBatchBusy(false) }
-    }
-
-    const handleBatchConvert = async (deleteSource) => {
-        setBatchBusy(true); setBatchResult(null)
-        try {
-            const result = await convertAllUnsupportedFiles(deleteSource)
-            const realignFailures = result.realign_failures || []
-            const msg = `Converted ${result.succeeded.length} of ${result.total}.`
-                + (result.failed.length > 0 ? ` ${result.failed.length} failed.` : '')
-                + (realignFailures.length > 0 ? ` ${realignFailures.length} sync map${realignFailures.length !== 1 ? 's' : ''} not rebuilt.` : '')
-            setBatchResult({
-                type: result.failed.length > 0 || realignFailures.length > 0 ? 'error' : 'success',
-                text: msg,
-                detail: result,
-            })
-            await loadFiles()
-        } catch (err) { setBatchResult({ type: 'error', text: err.message }) }
-        finally { setBatchBusy(false) }
-    }
-
-    const formatBytes = (bytes) => {
-        if (!bytes) return '—'
-        if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
-        return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
-    }
-
-    const unconverted = files.filter(f => !f.already_converted)
-
-    return (
-        <div>
-            <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap', alignItems: 'center' }}>
-                <button className="btn btn-secondary" onClick={loadFiles} disabled={loading || batchBusy}>Refresh</button>
-                {canAdmin && unconverted.length > 0 && (
-                    <>
-                        <button className="btn btn-primary" onClick={() => handleBatchConvert(false)} disabled={batchBusy}>
-                            {batchBusy ? 'Converting…' : 'Convert All'}
-                        </button>
-                        <button className="btn btn-danger" onClick={() => handleBatchConvert(true)} disabled={batchBusy}>
-                            {batchBusy ? 'Converting…' : 'Convert All & Delete Original'}
-                        </button>
-                    </>
-                )}
-                {canAdmin && files.length > 0 && (
-                    <button className="btn btn-danger" onClick={() => setForceDeleteConfirm('all')} disabled={batchBusy}>
-                        Force Delete All
-                    </button>
-                )}
-            </div>
-
-            {batchResult && (
-                <div className={`alert alert-${batchResult.type}`} style={{ marginBottom: 16 }}>
-                    {batchResult.text}
-                    {batchResult.detail?.failed?.length > 0 && (
-                        <ul style={{ marginTop: 8, paddingLeft: 20, fontSize: '0.8rem' }}>
-                            {batchResult.detail.failed.map((f, i) => <li key={i}>{f.filename}: {f.error}</li>)}
-                        </ul>
-                    )}
-                    {batchResult.detail?.realign_failures?.length > 0 && (
-                        <ul style={{ marginTop: 8, paddingLeft: 20, fontSize: '0.8rem' }}>
-                            {batchResult.detail.realign_failures.map((f, i) => (
-                                <li key={i}>Sync map for pair {f.pair_id} not rebuilt: {f.error}</li>
-                            ))}
-                        </ul>
-                    )}
-                </div>
-            )}
-
-            <div className="system-card">
-                <div className="system-card-header">
-                    <h3>MOBI / AZW3 Files</h3>
-                </div>
-                <div className="system-card-body" style={{ paddingTop: 10, paddingBottom: 10 }}>
-                    <p className="system-card-desc" style={{ marginBottom: 0 }}>
-                        MOBI and AZW3 files cannot be read directly. Convert them to EPUB using Calibre or the built-in Python converter.
-                    </p>
-                </div>
-                {loading ? (
-                    <div style={{ padding: 32, textAlign: 'center' }}><div className="spinner" /></div>
-                ) : error ? (
-                    <div className="alert alert-error" style={{ margin: 16 }}>{error}</div>
-                ) : files.length === 0 ? (
-                    <div style={{ padding: 32, textAlign: 'center', color: 'var(--text-muted)' }}>No unsupported files found.</div>
-                ) : (
-                    // Convert/Delete live in the last column, off the right
-                    // edge of a phone; the card clips, so this scrolls
-                    // instead of hiding them (issue #271).
-                    <div className="table-wrapper table-wrapper--flush">
-                        <table className="data-table">
-                            <thead>
-                                <tr>
-                                    <th>File</th><th>Format</th><th>Size</th><th>Status</th>
-                                    {canAdmin && <th>Actions</th>}
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {files.map(file => (
-                                    <tr key={file.id}>
-                                        <td>
-                                            <div style={{ fontWeight: 500 }}>{file.title || file.filename}</div>
-                                            {file.author && <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>{file.author}</div>}
-                                            {fileMessages[file.id] && (
-                                                <div className={`system-file-msg ${fileMessages[file.id].type}`}>{fileMessages[file.id].text}</div>
-                                            )}
-                                        </td>
-                                        <td><span className="system-file-format-badge">{file.format}</span></td>
-                                        <td style={{ color: 'var(--text-secondary)' }}>{formatBytes(file.file_size)}</td>
-                                        <td>
-                                            {file.already_converted
-                                                ? <span className="system-file-converted">Converted</span>
-                                                : <span className="system-file-pending">Not converted</span>}
-                                        </td>
-                                        {canAdmin && (
-                                            <td>
-                                                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                                                    {!file.already_converted && (
-                                                        <>
-                                                            <button className="btn btn-sm btn-primary" onClick={() => handleConvert(file, false)} disabled={busyIds.has(file.id)}>
-                                                                {busyIds.has(file.id) ? '…' : 'Convert'}
-                                                            </button>
-                                                            <button className="btn btn-sm btn-secondary" onClick={() => handleConvert(file, true)} disabled={busyIds.has(file.id)}>
-                                                                {busyIds.has(file.id) ? '…' : 'Convert & Delete'}
-                                                            </button>
-                                                        </>
-                                                    )}
-                                                    {file.already_converted && (
-                                                        <>
-                                                            {file.epub_ebook_id && (
-                                                                <button className="btn btn-sm btn-secondary" onClick={() => setPreviewFile(file)} disabled={busyIds.has(file.id)}>Preview</button>
-                                                            )}
-                                                            <button className="btn btn-sm btn-danger" onClick={() => handleDeleteSource(file)} disabled={busyIds.has(file.id)}>
-                                                                {busyIds.has(file.id) ? '…' : 'Delete Original'}
-                                                            </button>
-                                                        </>
-                                                    )}
-                                                    <button className="btn btn-sm btn-danger" onClick={() => setForceDeleteConfirm({ file })} disabled={busyIds.has(file.id)}>
-                                                        {busyIds.has(file.id) ? '…' : 'Force Delete'}
-                                                    </button>
-                                                </div>
-                                            </td>
-                                        )}
-                                    </tr>
-                                ))}
-                            </tbody>
-                        </table>
-                    </div>
-                )}
-            </div>
-
-            {previewFile?.epub_ebook_id && (
-                <EbookReader ebookId={previewFile.epub_ebook_id} bookTitle={previewFile.title || previewFile.filename} onClose={() => setPreviewFile(null)} />
-            )}
-
-            {forceDeleteConfirm && (
-                <Modal onClose={() => setForceDeleteConfirm(null)} labelledBy="force-delete-title">
-                        <h3 id="force-delete-title" style={{ marginTop: 0 }}>Confirm Force Delete</h3>
-                        <p>
-                            {forceDeleteConfirm === 'all'
-                                ? 'All unsupported files will be permanently deleted from the filesystem and the library.'
-                                : <>The file <strong>{forceDeleteConfirm.file.filename}</strong> will be permanently deleted from the filesystem and the library.</>}
-                            {' '}This cannot be undone.
-                        </p>
-                        <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-                            <button className="btn btn-secondary" onClick={() => setForceDeleteConfirm(null)}>Cancel</button>
-                            <button className="btn btn-danger" onClick={() => forceDeleteConfirm === 'all' ? handleForceDeleteAll() : handleForceDelete(forceDeleteConfirm.file)}>
-                                Delete
-                            </button>
-                        </div>
-                </Modal>
-            )}
-        </div>
-    )
-}
-
 /* ── BackupSection ─────────────────────────────────────────────────── */
 // Backup location + last run, retention/schedule config (admin), a manual
 // backup creator, and per-row restore/delete/download (superadmin). See
@@ -1301,24 +1016,44 @@ export function BackupSection() {
     )
 }
 
+/* ── TroubleshootBadge ─────────────────────────────────────────────── */
+/* How much of Troubleshoot Library still needs someone, before clicking in.
+   Items already queued for the fix (a re-transcription) are left out of the
+   number and named in the tooltip instead (`summarizeTroubleshoot`). Nothing
+   at all while the list is loading or failed to load. */
+function TroubleshootBadge({ summary }) {
+    if (!summary) return null
+    const queuedNote = summary.queued > 0
+        ? `${summary.queued} more already queued for a fix`
+        : null
+    if (summary.open === 0) {
+        return (
+            <span className="system-ts-badge ok" title={queuedNote || undefined}>No open issues</span>
+        )
+    }
+    return (
+        <span className="system-ts-badge warning"
+            title={[`${summary.open} open`, queuedNote].filter(Boolean).join(' · ')}>
+            {summary.open} open
+        </span>
+    )
+}
+
 /* ── SystemPage ────────────────────────────────────────────────────── */
-function SystemPage({ tab }) {
+function SystemPage() {
     const { hasMinRole } = useAuth()
     const canAdmin = hasMinRole('admin')
     const isMobile = useIsMobile()
 
-    // Show unsupported files view vs main status view
-    const [showUnsupported, setShowUnsupported] = useState(tab === 'unsupported')
-    useEffect(() => { setShowUnsupported(tab === 'unsupported') }, [tab])
-
     // Synced collapsible state for paired cards
     const [libraryOpen, setLibraryOpen] = useState(false)
     const [absOpen, setAbsOpen] = useState(false)
+    const [diskOpen, setDiskOpen] = useState(false)
 
     // Status data
     const [stats, setStats] = useState(null)
     const [counts, setCounts] = useState(null)
-    const [unsupportedCount, setUnsupportedCount] = useState(null)
+    const [queueItems, setQueueItems] = useState([])
     const [statusLoading, setStatusLoading] = useState(true)
     const [statusError, setStatusError] = useState(null)
 
@@ -1334,13 +1069,12 @@ function SystemPage({ tab }) {
         setStatusLoading(true)
         setStatusError(null)
         try {
-            const [diskData, ebooks, audiobooks, pairs, queue, unsupported] = await Promise.all([
+            const [diskData, ebooks, audiobooks, pairs, queue] = await Promise.all([
                 getDiskUsage(),
                 getEbooks(),
                 getAudiobooks(),
                 getPairs(),
                 getTranscriptionQueue(),
-                getUnsupportedFiles(),
             ])
             setStats(diskData)
             setCounts({
@@ -1350,7 +1084,7 @@ function SystemPage({ tab }) {
                 pendingQueue: queue.filter(q => q.status === 'pending').length,
                 inProgressQueue: queue.filter(q => q.status === 'in_progress').length,
             })
-            setUnsupportedCount(unsupported.length)
+            setQueueItems(queue)
         } catch (err) {
             setStatusError('Failed to load system status')
             console.error(err)
@@ -1360,14 +1094,27 @@ function SystemPage({ tab }) {
     }, [])
 
     useEffect(() => {
-        // `canAdmin` as well as the tab: the status reads are admin-only
-        // server-side now (issue #283), and /system/unsupported is reachable by
-        // editors. The route guard already keeps non-admins off the status view,
-        // so this is belt and braces -- but firing a read that can only 403 and
-        // then showing "Failed to load system status" is a bad way to express a
-        // permission boundary.
-        if (!showUnsupported && canAdmin) loadStatus()
-    }, [showUnsupported, canAdmin, loadStatus])
+        // The status reads are admin-only server-side (issue #283). The route
+        // guard already keeps non-admins off this page, so this is belt and
+        // braces -- but firing a read that can only 403 and then showing
+        // "Failed to load system status" is a bad way to express a permission
+        // boundary.
+        if (canAdmin) loadStatus()
+    }, [canAdmin, loadStatus])
+
+    // Troubleshoot Library's open issues, for the badge on its entry card. A
+    // side fetch like the two below: the badge is a convenience, and the list
+    // failing must not blank the dashboard -- it just shows no badge.
+    const [troubleshootIssues, setTroubleshootIssues] = useState(null)
+    const loadTroubleshootIssues = useCallback(() => {
+        if (!canAdmin) return
+        Promise.resolve()
+            .then(() => getLibraryIssues())
+            .then(setTroubleshootIssues)
+            .catch(() => setTroubleshootIssues(null))
+    }, [canAdmin])
+    useEffect(() => { loadTroubleshootIssues() }, [loadTroubleshootIssues])
+    const troubleshoot = troubleshootIssues ? summarizeTroubleshoot(troubleshootIssues, queueItems) : null
 
     // Pending registrations (issue #282). Kept out of `loadStatus`'s
     // Promise.all deliberately: this is a convenience count, and a 403 or an
@@ -1375,26 +1122,26 @@ function SystemPage({ tab }) {
     // "Failed to load system status".
     const [pendingUsers, setPendingUsers] = useState(0)
     useEffect(() => {
-        if (showUnsupported || !canAdmin) return
+        if (!canAdmin) return
         let cancelled = false
         Promise.resolve()
             .then(() => getUsers('pending'))
             .then(list => { if (!cancelled) setPendingUsers(list.length) })
             .catch(() => {})
         return () => { cancelled = true }
-    }, [showUnsupported, canAdmin])
+    }, [canAdmin])
 
     // Update check (issue #463). A side fetch for the same reason as the
     // pending count above: it is advisory, and GitHub being down — or the
     // endpoint failing — must never blank the dashboard.
     const [updateStatus, setUpdateStatus] = useState(null)
     const loadUpdateStatus = useCallback(() => {
-        if (showUnsupported || !canAdmin) return
+        if (!canAdmin) return
         Promise.resolve()
             .then(() => getUpdateStatus())
             .then(setUpdateStatus)
             .catch(() => {})
-    }, [showUnsupported, canAdmin])
+    }, [canAdmin])
     useEffect(() => { loadUpdateStatus() }, [loadUpdateStatus])
 
     // The prompt's two answers. Enabling makes the server run one check at once,
@@ -1413,36 +1160,13 @@ function SystemPage({ tab }) {
     const totalBooks = counts ? counts.ebooks + counts.audiobooks : 0
     const pairRate = counts ? Math.round(counts.pairs / Math.max(counts.ebooks, 1) * 100) : 0
 
-    /* ── Unsupported Files view ── */
-    if (showUnsupported) {
-        return (
-            <div>
-                {/* Editors reach this view directly and cannot load the status
-                    view behind it, so the way back would show them an empty
-                    page (issue #283). */}
-                {canAdmin && (
-                <div style={{ marginBottom: 20 }}>
-                    <button className="btn btn-secondary" onClick={() => setShowUnsupported(false)}
-                        style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="14" height="14">
-                            <polyline points="15 18 9 12 15 6" />
-                        </svg>
-                        Back to System
-                    </button>
-                </div>
-                )}
-                <UnsupportedFilesTab canAdmin={canAdmin} />
-            </div>
-        )
-    }
-
     /* ── Main Status view ── */
     return (
         <div>
             {/* Refresh button — top right */}
             <div className="system-toolbar">
                 <div className="system-toolbar-right">
-                    <button className="btn btn-secondary" onClick={() => { loadStatus(); loadUpdateStatus() }} disabled={statusLoading} style={{ fontSize: '0.8rem' }}>
+                    <button className="btn btn-secondary" onClick={() => { loadStatus(); loadUpdateStatus(); loadTroubleshootIssues() }} disabled={statusLoading} style={{ fontSize: '0.8rem' }}>
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="14" height="14" style={{ marginRight: 4 }}>
                             <polyline points="23 4 23 10 17 10" /><polyline points="1 20 1 14 7 14" />
                             <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
@@ -1514,13 +1238,8 @@ function SystemPage({ tab }) {
                         </div>
                     </div>
 
-                    {/* Calibre + Unsupported side by side */}
-                    <div className="system-two-col" style={{ marginBottom: 24 }}>
+                    <div style={{ marginBottom: 24 }}>
                         <CalibreStatusCard />
-                        <UnsupportedFilesCard
-                            count={unsupportedCount}
-                            onViewItems={() => setShowUnsupported(true)}
-                        />
                     </div>
 
                     {/* Import Sources entry point */}
@@ -1529,7 +1248,7 @@ function SystemPage({ tab }) {
                             <div>
                                 <h5 className="system-status-title">Import Sources</h5>
                                 <p className="system-status-desc">
-                                    Pull books from Audible, Google Play, and Nook.
+                                    Pull books from Audible and Google Play.
                                 </p>
                             </div>
                         </div>
@@ -1542,7 +1261,10 @@ function SystemPage({ tab }) {
                     <div className="system-status-card" ref={troubleshootCardAnchorRef} style={{ marginBottom: 24 }}>
                         <div className="system-status-card-left">
                             <div>
-                                <h5 className="system-status-title">Troubleshoot Library</h5>
+                                <h5 className="system-status-title">
+                                    Troubleshoot Library
+                                    <TroubleshootBadge summary={troubleshoot} />
+                                </h5>
                                 <p className="system-status-desc">
                                     Find and fix corrupt, encrypted, or missing files.
                                 </p>
@@ -1552,13 +1274,6 @@ function SystemPage({ tab }) {
                             OPEN
                         </Link>
                     </div>
-
-                    {/* Rebuild sync maps built by an older sentence splitter (admin only, issue #774) */}
-                    {canAdmin && (
-                        <div style={{ marginBottom: 24 }}>
-                            <SyncMapRebuildCard />
-                        </div>
-                    )}
 
                     {/* Word-timing coverage and bulk re-transcription (admin only, issue #835) */}
                     {canAdmin && (
@@ -1600,15 +1315,15 @@ function SystemPage({ tab }) {
                         )}
                     </div>
 
-                    {/* ABS + Detailed Breakdown side by side — synced on desktop, independent on mobile */}
+                    {/* ABS + Hardcover side by side (both metadata sources) — synced on desktop, independent on mobile */}
                     <div className="system-two-col">
                         {isMobile ? (
                             <>
                                 <CollapsibleCard title="Audiobookshelf Integration">
                                     <ABSSettingsSection />
                                 </CollapsibleCard>
-                                <CollapsibleCard title="Detailed Disk Breakdown">
-                                    <DetailedBreakdown stats={stats} />
+                                <CollapsibleCard title="Hardcover Integration">
+                                    <HardcoverSettingsSection />
                                 </CollapsibleCard>
                             </>
                         ) : (
@@ -1617,19 +1332,37 @@ function SystemPage({ tab }) {
                                     open={absOpen} onToggle={() => setAbsOpen(o => !o)}>
                                     <ABSSettingsSection />
                                 </CollapsibleCard>
-                                <CollapsibleCard title="Detailed Disk Breakdown"
+                                <CollapsibleCard title="Hardcover Integration"
                                     open={absOpen} onToggle={() => setAbsOpen(o => !o)}>
-                                    <DetailedBreakdown stats={stats} />
+                                    <HardcoverSettingsSection />
                                 </CollapsibleCard>
                             </>
                         )}
                     </div>
 
-                    {/* ── Section: Hardcover Integration (metadata match provider) ── */}
-                    <div style={{ marginBottom: 24 }}>
-                        <CollapsibleCard title="Hardcover Integration">
-                            <HardcoverSettingsSection />
-                        </CollapsibleCard>
+                    {/* Detailed Breakdown + Updates side by side (issue #463) — synced on desktop, independent on mobile */}
+                    <div className="system-two-col">
+                        {isMobile ? (
+                            <>
+                                <CollapsibleCard title="Detailed Disk Breakdown">
+                                    <DetailedBreakdown stats={stats} />
+                                </CollapsibleCard>
+                                <CollapsibleCard title="Updates">
+                                    <UpdateCheckSettings />
+                                </CollapsibleCard>
+                            </>
+                        ) : (
+                            <>
+                                <CollapsibleCard title="Detailed Disk Breakdown"
+                                    open={diskOpen} onToggle={() => setDiskOpen(o => !o)}>
+                                    <DetailedBreakdown stats={stats} />
+                                </CollapsibleCard>
+                                <CollapsibleCard title="Updates"
+                                    open={diskOpen} onToggle={() => setDiskOpen(o => !o)}>
+                                    <UpdateCheckSettings />
+                                </CollapsibleCard>
+                            </>
+                        )}
                     </div>
 
                     {/* ── Section: Google Books key (issue #739) ── */}
@@ -1638,15 +1371,6 @@ function SystemPage({ tab }) {
                             <GoogleBooksSettings />
                         </CollapsibleCard>
                     </div>
-
-                    {/* ── Section: Updates (admin only, issue #463) ── */}
-                    {canAdmin && (
-                        <div style={{ marginTop: 8, marginBottom: 24 }}>
-                            <CollapsibleCard title="Updates">
-                                <UpdateCheckSettings />
-                            </CollapsibleCard>
-                        </div>
-                    )}
 
                     {/* ── Section: Backups (admin only) — collapsed by default ── */}
                     {canAdmin && (

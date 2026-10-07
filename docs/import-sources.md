@@ -11,9 +11,9 @@ account, on their own hardware, for personal format-shifting between the ebook
 and audiobook they already own. No keys, licenses, or copyrighted content are
 in this repository.
 
-## ACSM (Adobe ADEPT) — Google Play Books, Nook
+## ACSM (Adobe ADEPT) — Google Play Books
 
-Clicking "Download EPUB" on a DRM title at these vendors yields a small `.acsm`
+Clicking "Download EPUB" on a DRM title at Google Play Books yields a small `.acsm`
 license file, not the book. The importer (`server/services/import_sources/acsm.py`)
 accepts `.acsm` files two ways — web upload, or a watched inbox folder at
 `$IMPORTS_DIR/acsm/inbox/` polled every minute — and converts each into an EPUB

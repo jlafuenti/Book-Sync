@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
+import { Link } from 'react-router-dom'
 import {
     listImportSources,
     updateImportSourceConfig,
@@ -464,7 +465,7 @@ function AcsmCard({ source, jobs, onChange, onTriggerSync, onUploaded, onRefresh
                                     : 'Drag .acsm or .epub files here'}
                         </div>
                         <div className="acsm-dropzone-hint">
-                            Or click to browse. Google Play / Nook downloads are
+                            Or click to browse. Google Play downloads are
                             converted to DRM-free EPUB on the server.
                         </div>
                         <input
@@ -674,6 +675,19 @@ function KindleIcon() {
 
 /* ── Page ────────────────────────────────────────────────────────── */
 
+function BackToSystem() {
+    return (
+        <div style={{ marginBottom: 16 }}>
+            <Link to="/system/status" className="btn btn-secondary" style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="14" height="14">
+                    <polyline points="15 18 9 12 15 6" />
+                </svg>
+                Back to System
+            </Link>
+        </div>
+    )
+}
+
 export default function ImportSourcesPage() {
     const [sources, setSources] = useState([])
     const [jobsBySource, setJobsBySource] = useState({})
@@ -733,6 +747,7 @@ export default function ImportSourcesPage() {
     if (loading) {
         return (
             <div className="import-page">
+                <BackToSystem />
                 <div className="import-page-header">
                     <h2>Import Sources</h2>
                 </div>
@@ -746,6 +761,7 @@ export default function ImportSourcesPage() {
 
     return (
         <div className="import-page">
+            <BackToSystem />
             <div className="import-page-header">
                 <h2>Import Sources</h2>
                 <p>
@@ -796,7 +812,7 @@ export default function ImportSourcesPage() {
                     </p>
                     <p>
                         If you want hands-off ebook syncing, switching new purchases to
-                        Google Play or Nook is the easiest path: their downloads come as
+                        Google Play is the easiest path: its downloads come as
                         <code> .acsm</code> files that this server can convert to DRM-free
                         EPUB automatically (drop them in the card above).
                     </p>
