@@ -26,6 +26,28 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
+_WORD_KEYS = ("text", "start_ms", "end_ms", "probability")
+
+
+def _sentence_from_payload(s: dict) -> TranscribedSentence:
+    """Build a `TranscribedSentence` from one sentence of a worker response.
+
+    `words` (issue #835) is optional: a worker that predates word timing omits
+    it, and the sentence then carries no words. Only the documented word keys
+    are kept, so an extra field a newer worker adds never reaches storage, and a
+    word missing its text or timing is dropped rather than failing the job.
+    """
+    return TranscribedSentence(
+        text=s.get("text", ""),
+        start_ms=s.get("start_ms", 0),
+        end_ms=s.get("end_ms", 0),
+        words=[
+            {k: w[k] for k in _WORD_KEYS if k in w}
+            for w in (s.get("words") or [])
+            if all(k in w for k in _WORD_KEYS[:3])
+        ],
+    )
+
 # ---------------------------------------------------------------------------
 # Bounds on the two "poll the worker until it says the right thing" loops
 # (issue #195)
@@ -248,14 +270,7 @@ class RemoteWhisperProvider(TranscriptionProvider):
                 logger.info(f"Found cached result for {filename} on remote server — skipping upload.")
                 data = cached_check.json()
                 sentences_data = data.get("sentences", [])
-                return [
-                    TranscribedSentence(
-                        text=s.get("text", ""),
-                        start_ms=s.get("start_ms", 0),
-                        end_ms=s.get("end_ms", 0),
-                    )
-                    for s in sentences_data
-                ]
+                return [_sentence_from_payload(s) for s in sentences_data]
         except httpx.RequestError as e:
             logger.debug(f"Pre-flight cached result check failed (will proceed with upload): {e}")
 
@@ -536,13 +551,7 @@ class RemoteWhisperProvider(TranscriptionProvider):
             # Parse successful response
             sentences_data = data.get("sentences", [])
 
-            sentences = []
-            for s in sentences_data:
-                sentences.append(TranscribedSentence(
-                    text=s.get("text", ""),
-                    start_ms=s.get("start_ms", 0),
-                    end_ms=s.get("end_ms", 0),
-                ))
+            sentences = [_sentence_from_payload(s) for s in sentences_data]
 
             logger.info(
                 f"Remote transcription complete: {len(sentences)} sentences in "
