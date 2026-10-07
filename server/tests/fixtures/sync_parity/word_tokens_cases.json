@@ -1,0 +1,52 @@
+[
+  {
+    "name": "plain_sentence",
+    "text": "The red fox ran home.",
+    "expected_tokens": ["The", "red", "fox", "ran", "home."]
+  },
+  {
+    "name": "leading_and_trailing_spaces",
+    "text": "  The red fox  ",
+    "expected_tokens": ["The", "red", "fox"]
+  },
+  {
+    "name": "no_break_space",
+    "text": "alpha beta gamma",
+    "expected_tokens": ["alpha", "beta", "gamma"]
+  },
+  {
+    "name": "thin_space",
+    "text": "alpha beta gamma",
+    "expected_tokens": ["alpha", "beta", "gamma"]
+  },
+  {
+    "name": "tab_and_newline",
+    "text": "alpha\tbeta\ngamma\r\ndelta",
+    "expected_tokens": ["alpha", "beta", "gamma", "delta"]
+  },
+  {
+    "name": "em_dash_attached_to_a_word",
+    "text": "wait—what happened",
+    "expected_tokens": ["wait—what", "happened"]
+  },
+  {
+    "name": "em_dash_with_spaces_is_its_own_token",
+    "text": "wait — what",
+    "expected_tokens": ["wait", "—", "what"]
+  },
+  {
+    "name": "curly_quotes_attached",
+    "text": "“Hello,” she said.",
+    "expected_tokens": ["“Hello,”", "she", "said."]
+  },
+  {
+    "name": "double_space",
+    "text": "alpha  beta",
+    "expected_tokens": ["alpha", "beta"]
+  },
+  {
+    "name": "empty_string",
+    "text": "",
+    "expected_tokens": []
+  }
+]

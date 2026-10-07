@@ -194,6 +194,9 @@ async def save_sync_map_with_result(
             audio_start_ms=point.audio_start_ms,
             audio_end_ms=point.audio_end_ms,
             confidence=point.confidence,
+            word_starts=(
+                ",".join(map(str, point.word_starts)) if point.word_starts else None
+            ),
         )
         db.add(sp)
 

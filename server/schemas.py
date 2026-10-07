@@ -418,6 +418,23 @@ class SyncMapResponse(BaseModel):
         from_attributes = True
 
 
+class SyncPointWordsResponse(BaseModel):
+    """One sentence's per-token audio start times (issue #835)."""
+    epub_chapter: int
+    epub_sentence_index: int
+    #: Audio start in ms of each whitespace-separated token of the sentence,
+    #: in order (tokens as `str.split()` yields them).
+    word_starts: List[int]
+
+
+class SyncMapWordsResponse(BaseModel):
+    """Word timing for a pair's sync map, apart from `SyncMapResponse` so that
+    payload stays as small as it was. Only sentences that have timing appear."""
+    sync_map_id: int
+    version: int
+    points: List[SyncPointWordsResponse] = []
+
+
 class SyncMapSummaryResponse(BaseModel):
     """Lightweight sync map response without the full point list."""
     id: int
@@ -1201,6 +1218,19 @@ class SyncMapRebuildPairResult(StrictResponse):
     old_multiline_points: Optional[int]
     bookmarks: Optional[int]
     bookmarks_remapped: Optional[int]
+
+
+class WordTimingStatus(StrictResponse):
+    """How much of the library has word timing (issue #835)."""
+
+    with_words: int
+    without_words: int
+    #: Of `without_words`, the pairs with a pending or running queue item.
+    queued: int
+
+
+class WordTimingQueued(StrictResponse):
+    queued: int
 
 
 class SyncMapRebuildStatus(StrictResponse):

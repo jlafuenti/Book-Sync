@@ -18,6 +18,19 @@ operator must do by hand rather than read about afterwards.
 
 ### Added
 
+- The server now stores per-word timing from the transcription worker (#835). Each transcript
+  keeps the start and end of every word beside its sentences, and aligning a book turns that into
+  one audio start time per word of each matched ebook sentence. It is stored with the sync map and
+  served by a new endpoint, `GET /api/files/syncmap/{pair_id}/words`; the existing sync map
+  response is unchanged. Nothing in the apps uses it yet, and neither position matcher reads it.
+  A transcript made before this has no word timing and cannot be given any without
+  transcribing the audio again.
+- Admin endpoints to add word timing to an existing library (#835):
+  `GET /api/troubleshoot/word-timing` counts transcripts with and without it, and
+  `POST /api/troubleshoot/word-timing/queue` queues every transcribed pair without it for a fresh
+  transcription, at a lower priority than ordinary requests so a book you start by hand does not
+  wait behind it. It costs a full transcription per book; see
+  [docs/operations.md](docs/operations.md), "Adding word timing to an existing library".
 - The System page has a new Word timing card (#835), admin-only. It shows how many transcripts
   carry word-level timing and how many of the rest are already waiting in the transcription queue.
   Transcripts made before the worker returned word timing can only get it by being transcribed
@@ -67,6 +80,16 @@ operator must do by hand rather than read about afterwards.
 
 ### Upgrade notes
 
+- Migration `0033_word_timing` adds one nullable column to `audio_transcripts` and one to
+  `sync_points`. On Postgres that is a catalog-only change, so it is instant whatever the table
+  size, and nothing is backfilled.
+- Word timing only arrives from a transcription worker that runs the matching change (the worker
+  in `jetson/`). A server on this version with an older worker keeps working and stores no words.
+  Deploy the worker first if you want new transcriptions to carry them.
+- To give books you have already transcribed word timing, an admin queues them with
+  `POST /api/troubleshoot/word-timing/queue` (check `GET /api/troubleshoot/word-timing` first). It
+  re-transcribes every one of them, which is weeks of worker time on a large library, so it is
+  never done automatically.
 - The first Library verify after this deploy re-checks every stored pair-plausibility pass once,
   because passes recorded before it don't say what they were based on. That is one EPUB parse
   per pair, so expect the last phase to take noticeably longer that one time. Any pair it finds

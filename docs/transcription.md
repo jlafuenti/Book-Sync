@@ -28,6 +28,30 @@ Both the server and Jetson images bake NLTK's `punkt_tab` sentence tokenizer in 
 (into `/usr/local/share/nltk_data`, named by `NLTK_DATA`), so a running container needs no
 outbound network for step 3 or for the EPUB side of step 4 — only the build host does.
 
+## Word timing
+
+A worker that supports it returns, for every transcript sentence, the words it heard:
+`words: [{"text", "start_ms", "end_ms", "probability"}]`, where the words' `text` values are the
+sentence's `text.split()`. The server keeps the sentence-level fields exactly where they were
+(`audio_transcripts.sentences_json`) and stores the words in a column of their own,
+`audio_transcripts.words_json`: a JSON array parallel to the sentences, one entry per sentence,
+each `[[text, start_ms, end_ms], ...]` (probability is dropped). It is NULL when the worker sent no
+words.
+
+At alignment, each ebook sentence the aligner matched directly is tokenised with `str.split()` and
+its tokens are anchored to the heard words (`services/word_timing.py`): a token that agrees with a
+heard word takes that word's start, and the tokens between two anchors are spread over the time
+between them by length. The result, one audio start per token, is stored comma-separated in
+`sync_points.word_starts` and served by `GET /api/files/syncmap/{pair_id}/words`. A sentence where
+fewer than half the tokens could be anchored, an interpolated sentence and a demoted one have no
+word timing and are left out of that response.
+
+**Transcripts made before this have no words, and cannot be given any without transcribing the
+audio again.** Re-aligning such a pair works as before and produces a map without word timing. An
+admin can queue the whole library for a fresh transcription from the API
+(`POST /api/troubleshoot/word-timing/queue`; see [operations.md](operations.md), "Adding word
+timing to an existing library").
+
 ## Provider modes
 
 `TRANSCRIPTION_PROVIDER` — env var for the first boot, then **System → Transcription Settings**

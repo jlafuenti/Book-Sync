@@ -108,6 +108,12 @@ class SyncPoint(Base):
     audio_text: Mapped[str] = mapped_column(Text, nullable=True)
     # Alignment confidence 0..1; 0 means interpolated (not directly matched)
     confidence: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    #: Audio start (ms) of each whitespace-separated token of the ebook
+    #: sentence, comma-joined (issue #835). Derived from the transcript's word
+    #: timing when the map is aligned; NULL for an interpolated or demoted
+    #: point and for any map built without word timing. It has no position
+    #: semantics: neither sync matcher reads it.
+    word_starts: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     # Relationships
     sync_map = relationship("SyncMap", back_populates="sync_points")

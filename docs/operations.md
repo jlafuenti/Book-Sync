@@ -569,6 +569,30 @@ an atomic claim (`UPDATE ... WHERE id=:id AND status='pending' RETURNING id`, or
 so startup recovery only touches rows owned by a dead process, and the library job guard moved to a
 row or a Postgres advisory lock. Do that work before removing the guard, not after.
 
+## Adding word timing to an existing library
+
+A transcript made before the worker returned word timing (issue #835) has none, and it cannot be
+added without transcribing the audio again. New transcriptions pick it up on their own, once the
+worker runs the matching change. For the books you already have, an admin can queue them all:
+
+```
+GET  /api/troubleshoot/word-timing         -> {"with_words": 12, "without_words": 340, "queued": 0}
+POST /api/troubleshoot/word-timing/queue   -> {"queued": 340}
+```
+
+The POST queues every transcribed pair that has no word timing and is not already queued, at
+priority 200. Ordinary requests queue at 100 and the queue takes the smaller number first, so a
+book you start by hand is not made to wait behind the backfill. Each pair also gets the admin
+rejection a per-pair "Re-transcribe from scratch" writes, so the old transcript is set aside until
+the new one replaces it; the old sync map keeps working until then, and a failed or cancelled job
+loses nothing.
+
+**This is weeks of worker time on a large library**: it is one full transcription per book, one
+book at a time. Expect to leave it running, and consider the off-hours window if the worker is
+shared. Running the POST twice queues nothing new. To stop, cancel items from the Transcription
+queue page; a cancelled pair stays rejected, so queue it again (or use the per-pair button) when
+you want it done.
+
 ## Restart policies
 
 Every service in `docker-compose.example.yml` carries `restart: unless-stopped`. Keep it that way

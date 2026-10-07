@@ -5276,6 +5276,33 @@
         "title": "SyncMapResponse",
         "type": "object"
       },
+      "SyncMapWordsResponse": {
+        "description": "Word timing for a pair's sync map, apart from `SyncMapResponse` so that\npayload stays as small as it was. Only sentences that have timing appear.",
+        "properties": {
+          "points": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/SyncPointWordsResponse"
+            },
+            "title": "Points",
+            "type": "array"
+          },
+          "sync_map_id": {
+            "title": "Sync Map Id",
+            "type": "integer"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "sync_map_id",
+          "version"
+        ],
+        "title": "SyncMapWordsResponse",
+        "type": "object"
+      },
       "SyncPointResponse": {
         "properties": {
           "audio_end_ms": {
@@ -5335,6 +5362,33 @@
           "audio_end_ms"
         ],
         "title": "SyncPointResponse",
+        "type": "object"
+      },
+      "SyncPointWordsResponse": {
+        "description": "One sentence's per-token audio start times (issue #835).",
+        "properties": {
+          "epub_chapter": {
+            "title": "Epub Chapter",
+            "type": "integer"
+          },
+          "epub_sentence_index": {
+            "title": "Epub Sentence Index",
+            "type": "integer"
+          },
+          "word_starts": {
+            "items": {
+              "type": "integer"
+            },
+            "title": "Word Starts",
+            "type": "array"
+          }
+        },
+        "required": [
+          "epub_chapter",
+          "epub_sentence_index",
+          "word_starts"
+        ],
+        "title": "SyncPointWordsResponse",
         "type": "object"
       },
       "TestAbsRequest": {
@@ -6677,6 +6731,45 @@
         "title": "VerifyRow",
         "type": "object"
       },
+      "WordTimingQueued": {
+        "additionalProperties": false,
+        "properties": {
+          "queued": {
+            "title": "Queued",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "queued"
+        ],
+        "title": "WordTimingQueued",
+        "type": "object"
+      },
+      "WordTimingStatus": {
+        "additionalProperties": false,
+        "description": "How much of the library has word timing (issue #835).",
+        "properties": {
+          "queued": {
+            "title": "Queued",
+            "type": "integer"
+          },
+          "with_words": {
+            "title": "With Words",
+            "type": "integer"
+          },
+          "without_words": {
+            "title": "Without Words",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "with_words",
+          "without_words",
+          "queued"
+        ],
+        "title": "WordTimingStatus",
+        "type": "object"
+      },
       "WorkerVersionStatus": {
         "additionalProperties": false,
         "description": "The transcription worker's version against this server's.\n\n`status` is behind | current | unknown; `reason` says why unknown\n(not_configured, unreachable, unauthorized, unreported, unrecognised_version).",
@@ -7563,6 +7656,54 @@
           }
         ],
         "summary": "Download Sync Map",
+        "tags": [
+          "files"
+        ]
+      }
+    },
+    "/api/files/syncmap/{pair_id}/words": {
+      "get": {
+        "description": "Per-token audio start times for a pair's sync map (issue #835).\n\nOnly sentences that have them are listed — an interpolated sentence, or a\nmap built from a transcript without word timing, has none — so a client\nthat gets an empty list simply has no word-level data for this pair. Kept\napart from the map endpoint so that response does not grow.",
+        "operationId": "download_sync_map_words_api_files_syncmap__pair_id__words_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pair_id",
+            "required": true,
+            "schema": {
+              "title": "Pair Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SyncMapWordsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Download Sync Map Words",
         "tags": [
           "files"
         ]
@@ -13111,6 +13252,60 @@
           }
         ],
         "summary": "Sync Map Rebuild Cancel",
+        "tags": [
+          "troubleshoot"
+        ]
+      }
+    },
+    "/api/troubleshoot/word-timing": {
+      "get": {
+        "description": "How many transcribed pairs have word timing, and how many of those that\ndo not are already queued for a fresh transcription (issue #835). Pairs\nthat were never transcribed are not counted: there is nothing to upgrade.",
+        "operationId": "word_timing_status_api_troubleshoot_word_timing_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WordTimingStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Word Timing Status",
+        "tags": [
+          "troubleshoot"
+        ]
+      }
+    },
+    "/api/troubleshoot/word-timing/queue": {
+      "post": {
+        "description": "Queue every transcribed pair that lacks word timing for a fresh\ntranscription, behind everything else (priority 200).\n\nA transcript made before word timing cannot be upgraded; the audio has to go\nthrough the worker again, which is hours per book, so this is weeks of\nworker time for a large library. Each pair gets the same admin rejection as\na per-pair re-transcribe, so the old transcript is set aside until the new\none replaces it; the old map stays in use until then. Pairs already queued\nare skipped, so running it twice queues nothing new.",
+        "operationId": "word_timing_queue_api_troubleshoot_word_timing_queue_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WordTimingQueued"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Word Timing Queue",
         "tags": [
           "troubleshoot"
         ]

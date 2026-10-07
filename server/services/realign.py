@@ -45,6 +45,7 @@ from services.ebook_integrity import format_is_alignable
 from services.epub_parser import extract_book_sentences
 from services.sync_engine import save_sync_map_with_result
 from services.transcription import TranscribedSentence
+from services.transcript_words import attach_words
 from utils import utcnow
 
 logger = logging.getLogger(__name__)
@@ -158,6 +159,7 @@ async def realign_pair_from_cached_transcript(
     whisper_sentences = [
         TranscribedSentence(**s) for s in json.loads(transcript.sentences_json)
     ]
+    attach_words(whisper_sentences, transcript.words_json)
     # The coverage floor the queue applies (issues #796, #814). Convert skips it
     # for the same reason it skips the rejection above: a converted ebook needs
     # a map in its own coordinates whatever the transcript's shortcomings.
