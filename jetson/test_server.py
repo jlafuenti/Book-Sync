@@ -720,6 +720,59 @@ def test_the_result_is_cached_under_the_filename_the_job_was_given(
     assert client.get("/v1/result/someone-elses.m4b", headers=AUTH).status_code == 404
 
 
+def test_the_job_is_not_reported_done_until_its_result_is_fetchable(
+    clean_state, fake_audio_pipeline, monkeypatch, tmp_path, client
+):
+    """#847: a re-attached server fetches /v1/result the moment /v1/status says
+    the job is no longer active, so "not active" has to imply "fetchable".
+    Steps in the success path are recorded in order, each with the job's
+    `active` flag and whether /v1/result would answer 200 at that moment."""
+    audio, _ = _run_job(monkeypatch, tmp_path)
+    steps = []
+
+    def _observe(label):
+        steps.append((
+            label,
+            jetson_server._job_status.active,
+            client.get(
+                "/v1/result/book.m4b",
+                params={"size": audio.stat().st_size},
+                headers=AUTH,
+            ).status_code,
+        ))
+
+    real_cache = jetson_server._cache_result
+    real_delete = jetson_server._delete_checkpoint
+
+    def _cache(*args, **kwargs):
+        _observe("before_cache")
+        real_cache(*args, **kwargs)
+        _observe("after_cache")
+
+    def _delete(*args, **kwargs):
+        _observe("checkpoint_delete")
+        real_delete(*args, **kwargs)
+
+    monkeypatch.setattr(jetson_server, "_cache_result", _cache)
+    monkeypatch.setattr(jetson_server, "_delete_checkpoint", _delete)
+
+    jetson_server._transcribe_file(str(audio), "book.m4b")
+
+    labels = [s[0] for s in steps]
+    assert labels == ["before_cache", "after_cache", "checkpoint_delete"]
+    # The result is cached while the job is still active ...
+    assert steps[0][1] is True and steps[1][1] is True
+    # ... and fetchable before the checkpoint disappears.
+    assert steps[2][2] == 200
+    # Once the job flips to inactive, nothing is left to wait for.
+    assert jetson_server._job_status.active is False
+    assert client.get(
+        "/v1/result/book.m4b",
+        params={"size": audio.stat().st_size},
+        headers=AUTH,
+    ).status_code == 200
+
+
 # ---------------------------------------------------------------------------
 # Upload cap and disk guard (#238)
 # ---------------------------------------------------------------------------

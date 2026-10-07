@@ -1174,18 +1174,17 @@ def _transcribe_file(
                     raise
 
         # --- Success ---
-        _delete_checkpoint(ckpt_path)
-
+        # Order matters (#847): a server that was re-attached to this job polls
+        # /v1/status and fetches /v1/result the moment `active` goes false, so
+        # the result has to be cached — and the checkpoint, which marks a job
+        # as still resumable, still on disk until it is — before the status
+        # flips. "Not active" must imply "fetchable".
         processing_time = time.time() - start_time
         logger.info(f"  Transcription complete in {processing_time:.1f}s")
         logger.info(f"  Produced {len(all_sentences)} sentences overall")
 
-        with _job_lock:
-            _job_status.progress = 1.0
-            _job_status.message = "Complete"
-            _job_status.active = False
-        _mark_activity()
-
+        # Serialising a long result with per-word timing takes about a second,
+        # which is exactly the window #847 lost a finished transcript in.
         result = {
             "sentences": [asdict(s) for s in all_sentences],
             "duration_seconds": round(total_duration, 2),
@@ -1206,6 +1205,14 @@ def _transcribe_file(
             # The audio vanished under us. The transcript still goes back on
             # this response; only the re-fetch shortcut is lost.
             logger.warning(f"  Could not cache result for '{original_filename}': {e}")
+
+        _delete_checkpoint(ckpt_path)
+
+        with _job_lock:
+            _job_status.progress = 1.0
+            _job_status.message = "Complete"
+            _job_status.active = False
+        _mark_activity()
 
         return result
 
