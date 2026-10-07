@@ -1133,6 +1133,7 @@ async def _run_transcription_pipeline(item_id: int, pair_id: int):
     # EPUB issues cannot cause transcript data to be lost.
     from models.transcript import AudioTranscript
     from services.transcription import TranscribedSentence as _TranscribedSentence
+    from services.transcript_words import attach_words, encode_words
 
     async with async_session() as db:
         cached_result = await db.execute(
@@ -1224,6 +1225,9 @@ async def _run_transcription_pipeline(item_id: int, pair_id: int):
         logger.info(f"Pair {pair_id}: loading transcript from cache ({cached_transcript.sentence_count} sentences)")
         raw = json.loads(cached_transcript.sentences_json)
         whisper_sentences = [_TranscribedSentence(**s) for s in raw]
+        # Word timing (issue #835) is stored apart from the sentences; a
+        # transcript made before it has none, and that is fine.
+        attach_words(whisper_sentences, cached_transcript.words_json)
         await _update_queue_item(
             item_id,
             progress=0.50,
@@ -1295,6 +1299,8 @@ async def _run_transcription_pipeline(item_id: int, pair_id: int):
             {"text": s.text, "start_ms": s.start_ms, "end_ms": s.end_ms}
             for s in whisper_sentences
         ]
+        # Per-word timing (issue #835), None from a worker that sends none.
+        words_json = encode_words(whisper_sentences)
         async with async_session() as db:
             # Stale cache (the audio file changed) — update the existing row in
             # place rather than delete-then-add (issue #193).
@@ -1320,6 +1326,7 @@ async def _run_transcription_pipeline(item_id: int, pair_id: int):
                 existing.audio_duration_seconds = audiobook_duration_seconds
                 existing.sentence_count = len(whisper_sentences)
                 existing.sentences_json = json.dumps(sentences_data)
+                existing.words_json = words_json
                 # The column records when this transcription was produced, not
                 # when the pair was first transcribed.
                 existing.created_at = utcnow()
@@ -1331,6 +1338,7 @@ async def _run_transcription_pipeline(item_id: int, pair_id: int):
                     audio_duration_seconds=audiobook_duration_seconds,
                     sentence_count=len(whisper_sentences),
                     sentences_json=json.dumps(sentences_data),
+                    words_json=words_json,
                 ))
             await db.commit()
         logger.info(f"Pair {pair_id}: transcript saved ({len(whisper_sentences)} sentences)")
