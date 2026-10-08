@@ -32,7 +32,7 @@ from models.bookmark import (
 from models.progress import ProgressType, UserProgress
 from schemas import BookPairResponse
 from services.alignment import AlignedPoint
-from services.sync_engine import save_sync_map
+from services.sync_engine import estimate_progress_percent, save_sync_map
 from utils import utcnow
 
 from tests.factories import ensure_users, make_book_pair
@@ -842,3 +842,133 @@ async def test_remap_within_a_chapter_logs_no_chapter_move(db, caplog):
         await _retranscribe(db, pair.id)
 
     assert not [r for r in caplog.records if "changes chapter" in r.getMessage()]
+
+
+# ---------------------------------------------------------------------------
+# The progress percent moves with a chapter move (issue #850)
+#
+# The re-map rewrote chapter and sentence but left `epub_progress_percent`
+# alone, and `_sync_derived_progress` copied it onto `user_progress`: Home's
+# bar showed the old place while the chapter named the new one. On a chapter
+# move the percent is now estimated from the new map: the position's rank among
+# its points. Measured against what readers' devices reported, that estimate's
+# median error was ~1 point. A move within a chapter keeps the device's own
+# percent, which is more precise than the estimate.
+# ---------------------------------------------------------------------------
+
+TARGET = "pack my box with five dozen liquor jugs"
+
+
+def _long_book(target_at=(1, 12)):
+    """Four chapters of 25 points, audio one second apart; the target text sits
+    at `target_at` and every other point is filler."""
+    points = []
+    for i in range(100):
+        ch, si = divmod(i, 25)
+        text = TARGET if (ch, si) == target_at else f"filler line {i} of a long synthetic book"
+        points.append((text, ch, si, i * 1_000))
+    return points
+
+
+async def _progress_row(db, pair):
+    return (await db.execute(
+        select(UserProgress).where(
+            UserProgress.user_id == 1,
+            UserProgress.media_type == ProgressType.EBOOK,
+            UserProgress.ebook_id == pair.ebook_id,
+        )
+    )).scalar_one()
+
+
+async def test_a_chapter_move_gives_a_percent_from_the_new_map(db):
+    pair, bookmark = await _seed(
+        db, source=BookmarkSource.EBOOK,
+        epub_chapter=0, epub_sentence_index=1,
+        epub_text_preview=TARGET, audio_position_ms=5_000,
+    )
+    db.add(UserProgress(
+        user_id=1, media_type=ProgressType.EBOOK, ebook_id=pair.ebook_id,
+        book_pair_id=pair.id, epub_chapter=0, epub_progress_percent=42.0,
+    ))
+    await db.commit()
+
+    await _retranscribe(db, pair.id, points=_long_book())
+
+    await db.refresh(bookmark)
+    assert (bookmark.epub_chapter, bookmark.epub_sentence_index) == (1, 12)
+    # 25 points in chapter 0, then sentences 0..12 of chapter 1: 38 of 100.
+    assert bookmark.epub_progress_percent == pytest.approx(38.0)
+    row = await _progress_row(db, pair)
+    assert row.epub_chapter == 1
+    assert row.epub_progress_percent == pytest.approx(38.0)
+
+
+async def test_an_audiobook_sourced_chapter_move_gets_one_too(db):
+    """The production case: the audio position was the truth and the old map
+    was hours off, so the bookmark changed chapter."""
+    pair, bookmark = await _seed(
+        db, source=BookmarkSource.AUDIOBOOK,
+        epub_chapter=0, epub_sentence_index=1,
+        epub_text_preview=TARGET, audio_position_ms=80_500,
+    )
+
+    await _retranscribe(db, pair.id, points=_long_book())
+
+    await db.refresh(bookmark)
+    # 80.5 s is point 80: chapter 3, sentence 5, the 81st of 100.
+    assert (bookmark.epub_chapter, bookmark.epub_sentence_index) == (3, 5)
+    assert bookmark.epub_progress_percent == pytest.approx(81.0)
+
+
+async def test_a_move_within_the_chapter_keeps_the_devices_percent(db):
+    """Same page, renumbered: the device's percent stays (see
+    test_ebook_bookmark_sentence_index_follows_its_text)."""
+    pair, bookmark = await _seed(
+        db, source=BookmarkSource.EBOOK,
+        epub_chapter=0, epub_sentence_index=1,
+        epub_text_preview=TARGET, audio_position_ms=5_000,
+    )
+
+    await _retranscribe(db, pair.id)
+
+    await db.refresh(bookmark)
+    assert (bookmark.epub_chapter, bookmark.epub_sentence_index) == (0, 3)
+    assert bookmark.epub_progress_percent == 42.0
+
+
+async def test_an_unmatchable_bookmark_keeps_its_percent(db):
+    pair, bookmark = await _seed(
+        db, source=BookmarkSource.EBOOK,
+        epub_chapter=9, epub_sentence_index=4,
+        epub_text_preview=None, audio_position_ms=None,
+    )
+
+    await _retranscribe(db, pair.id, points=_long_book())
+
+    await db.refresh(bookmark)
+    assert bookmark.epub_progress_percent == 42.0
+
+
+class TestEstimateProgressPercent:
+    POINTS = _aligned(_long_book())
+
+    def test_the_first_point(self):
+        assert estimate_progress_percent(self.POINTS, 0, 0) == pytest.approx(1.0)
+
+    def test_the_last_point_is_the_end(self):
+        assert estimate_progress_percent(self.POINTS, 3, 24) == pytest.approx(100.0)
+
+    def test_a_position_between_points_counts_those_before_it(self):
+        sparse = _aligned([("a b c d e", 0, 0, 0), ("f g h i j", 0, 10, 1_000),
+                           ("k l m n o", 1, 0, 2_000), ("p q r s t", 1, 10, 3_000)])
+        assert estimate_progress_percent(sparse, 0, 5) == pytest.approx(25.0)
+
+    def test_order_of_the_input_does_not_matter(self):
+        shuffled = list(reversed(self.POINTS))
+        assert estimate_progress_percent(shuffled, 1, 12) == pytest.approx(38.0)
+
+    def test_an_empty_map_gives_nothing(self):
+        assert estimate_progress_percent([], 1, 12) is None
+
+    def test_a_missing_sentence_counts_from_the_chapter_start(self):
+        assert estimate_progress_percent(self.POINTS, 2, None) == pytest.approx(51.0)

@@ -261,6 +261,16 @@ epub.js CFI still describes it — marking every hint stale would drop each read
 to text-search restore for a page that never moved. A chapter change is a real
 relocation, so there the hints must go stale.
 
+**`epub_progress_percent` follows the same rule** (issue #850). On a chapter move
+the stored percent described the old chapter, and `user_progress` (the Home and
+Continue Reading bars) is projected from it, so the re-map re-estimates it from the
+new map: the position's share of the map's points
+(`sync_engine.estimate_progress_percent`). That is an estimate, typically within a
+point or two of what a device reports. Within a chapter the device's own percent is
+kept, since it is the same page and more precise. Readers restore by chapter and
+sentence, never by percent, so this changes the progress shown, not where a book
+opens.
+
 **Audio earlier than the new map's first point is not a match.** A listener parked
 in unaligned front matter, or in a prologue the aligner dropped, has an
 `audio_position_ms` the new map says nothing about. Re-deriving it anyway used to
