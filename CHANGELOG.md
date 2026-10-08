@@ -38,6 +38,17 @@ operator must do by hand rather than read about afterwards.
 
 ### Fixed
 
+- A re-transcription that moves a bookmark to another chapter now moves its progress percent
+  too (#850). The re-map rewrote the chapter and sentence but kept the old percent, and Home's
+  Continue Reading bar is drawn from it, so the bar showed the old place in the book. One case
+  on a real library: chapter 30 with a 72% bar left over from chapter 66. On a chapter move the
+  percent is now estimated from the new sync map, as the position's share of the map's
+  sentences. Measured against what readers' devices reported, that is typically within a point
+  or two. Within a chapter the device's own percent is kept. Where a book opens is unaffected;
+  readers restore by chapter and sentence. Bookmarks already re-mapped keep their stale percent
+  until a device next writes one; listening writes don't send a percent, which is a separate fix
+  (#851).
+
 - A transcription that finished while the server was re-attached to it no longer fails with
   "Failed to fetch cached transcription result" (#847). The worker used to report the job done
   about a second before the result was fetchable, and the server treated the resulting 404 as

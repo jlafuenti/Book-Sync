@@ -329,6 +329,32 @@ def resolve_on_map(
     return (match.epub_chapter, match.epub_sentence_index, match.audio_start_ms)
 
 
+def estimate_progress_percent(points, chapter, sentence_index) -> Optional[float]:
+    """Where `(chapter, sentence_index)` sits in the book, as a percent, read
+    off a sync map (issue #850).
+
+    The share of the map's points at or before that position. Devices report
+    the real percent from the rendered book; this is the estimate for when a
+    server-side move leaves none. Measured against what readers' devices had
+    reported for positions on a production library, its median error was ~1
+    point (worst ~8), where weighting by chapter count instead was ~6 (worst
+    ~28): chapters vary in length, sentences much less. Text outside the map
+    (front matter the aligner skipped) is not counted, which is why it runs a
+    couple of points low on average.
+
+    `points` may be `AlignedPoint`s or `SyncPoint` rows, in any order. A
+    missing sentence index counts from the chapter's start. None for an empty
+    map or no chapter.
+    """
+    if not points or chapter is None:
+        return None
+    target = (chapter, sentence_index or 0)
+    at_or_before = sum(
+        1 for p in points if (p.epub_chapter, p.epub_sentence_index) <= target
+    )
+    return round(100.0 * at_or_before / len(points), 2)
+
+
 def _holds_no_position(bookmark: Bookmark) -> bool:
     """True for a row left at the origin by a book that was opened, not read.
 
@@ -379,6 +405,12 @@ async def remap_bookmarks_for_pair(
     locator / epub.js CFI still describes it — marking every hint stale would
     drop each reader to text-search restore for a page that never moved. A
     chapter change is a genuine relocation, so there the hints must go stale.
+
+    `epub_progress_percent` follows the same rule (issue #850): on a chapter
+    move it is re-estimated from the new map (`estimate_progress_percent`),
+    since the stored one described the old chapter and would otherwise be
+    projected onto `user_progress` as the book's progress. Within a chapter it
+    is the device's own and stays.
 
     `captured_at` is deliberately untouched: this is a server-side translation,
     not a device capture, and stamping it would let the remap beat a genuinely
@@ -461,6 +493,13 @@ async def remap_bookmarks_for_pair(
         bookmark.updated_at = utcnow()
         if chapter_moved:
             bookmark.anchor_revision = (bookmark.anchor_revision or 0) + 1
+            # The percent described the old chapter, and `_sync_derived_progress`
+            # below would carry it onto `user_progress` (issue #850). Within a
+            # chapter the device's own percent stays: it is the same page, and
+            # more precise than this estimate.
+            percent = estimate_progress_percent(new_points, chapter, sentence)
+            if percent is not None:
+                bookmark.epub_progress_percent = percent
         remapped += 1
 
         await db.flush()
