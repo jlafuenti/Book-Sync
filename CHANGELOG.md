@@ -29,14 +29,21 @@ operator must do by hand rather than read about afterwards.
   sits beside Audiobookshelf and Updates beside the disk breakdown, Import Sources has a Back to
   System button, and Nook is no longer listed as an import source, since it isn't supported.
 
-### Changed
-
 - The server's local transcription provider now runs on faster-whisper instead of openai-whisper
   (#843), and returns word timing the same way the Jetson worker does: each sentence keeps the
   words it was built from, grouped by the worker's rules. It runs int8 on the CPU, or float16 on
   CUDA when the GPU libraries are present, and no longer pulls torch. CI now also publishes the
   server image with the local provider built in, as `tandem-server:main-local` beside the plain
   `main`.
+
+### Fixed
+
+- A transcription that finished while the server was re-attached to it no longer fails with
+  "Failed to fetch cached transcription result" (#847). The worker used to report the job done
+  about a second before the result was fetchable, and the server treated the resulting 404 as
+  final, discarding a complete transcript. The worker now makes the result fetchable before it
+  reports the job done, and the server retries the fetch for a few seconds before giving up. With
+  word timing the result takes longer to serialise, which is what widened the window.
 
 ### Upgrade notes
 

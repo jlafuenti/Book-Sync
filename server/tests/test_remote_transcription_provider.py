@@ -14,6 +14,7 @@ import pytest
 from services.transcription_providers import remote as remote_module
 from services.transcription_providers.base import (
     ProviderUnavailableError,
+    TranscriptionError,
     TranscriptionPaused,
 )
 from services.transcription_providers.remote import RemoteWhisperProvider
@@ -942,3 +943,181 @@ async def test_409_without_size_field_still_reattaches(tmp_path):
 
     assert [s.text for s in sentences] == ["Hello."]
     assert result_calls == 2
+
+
+# ---------------------------------------------------------------------------
+# The result may lag the "done" status by about a second (issue #847)
+#
+# A worker that finishes a long job serialises the transcript — with per-word
+# timing, about a second of work — around the moment it reports `active: false`.
+# A re-attached server fetches /v1/result straight away, so one 404 is not
+# proof the transcript is gone. The fetch is retried before giving up.
+# ---------------------------------------------------------------------------
+
+_HELLO_RESULT = {
+    "sentences": [{"text": "Hello.", "start_ms": 0, "end_ms": 900}],
+    "duration_seconds": 7200.0, "processing_time_seconds": 12.0,
+}
+
+
+def _reattached_worker(audio_file, result_for, checkpoint=None):
+    """Handler for a worker that holds our file (409), then reports it done.
+
+    `result_for(n, request)` answers the nth /v1/result request (1 is the
+    pre-flight check before the upload); it returns an httpx.Response or raises.
+    """
+    calls = {"result": 0, "checkpoint": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/result/book.m4b":
+            calls["result"] += 1
+            return result_for(calls["result"], request)
+        if request.url.path == "/v1/checkpoint":
+            calls["checkpoint"] += 1
+            return _json_response(200, checkpoint or {"exists": False})
+        if request.url.path == "/v1/transcribe":
+            return _conflict_response("book.m4b", size=audio_file.stat().st_size)
+        if request.url.path == "/v1/status":
+            return _json_response(200, {"active": False, "progress": 1.0, "instance_id": "worker-a"})
+        raise AssertionError(f"Unexpected request: {request.url}")
+
+    return handler, calls
+
+
+def _recording_sleep():
+    delays = []
+
+    async def _sleep(seconds, *args, **kwargs):
+        delays.append(seconds)
+
+    return _sleep, delays
+
+
+@pytest.mark.asyncio
+async def test_reattach_retries_a_result_that_is_not_fetchable_yet(tmp_path, monkeypatch):
+    audio_file = tmp_path / "book.m4b"
+    audio_file.write_bytes(b"fake audio bytes")
+
+    def result_for(n, request):
+        # 1: pre-flight, 2 and 3: the worker is still serialising, 4: ready.
+        if n < 4:
+            return _json_response(404, {"detail": "Result not found or expired"})
+        return _json_response(200, _HELLO_RESULT)
+
+    handler, calls = _reattached_worker(audio_file, result_for)
+    provider, fake_async_client = _mock_transport_provider("http://fake-orin:9000", "k", handler)
+    sleep, delays = _recording_sleep()
+    monkeypatch.setattr(asyncio, "sleep", sleep)
+
+    with patch("services.transcription_providers.remote.httpx.AsyncClient", side_effect=fake_async_client):
+        sentences = await provider.transcribe(str(audio_file))
+
+    assert [s.text for s in sentences] == ["Hello."]
+    assert calls["result"] == 4
+    assert delays.count(remote_module.RESULT_FETCH_RETRY_SEC) == 2
+
+
+@pytest.mark.asyncio
+async def test_reattach_retries_a_result_fetch_that_errors(tmp_path, monkeypatch):
+    """A 500 and a dropped connection are retried like a 404."""
+    audio_file = tmp_path / "book.m4b"
+    audio_file.write_bytes(b"fake audio bytes")
+
+    def result_for(n, request):
+        if n == 1:
+            return _json_response(404, {"detail": "Result not found or expired"})
+        if n == 2:
+            return _json_response(500, {"detail": "busy"})
+        if n == 3:
+            raise httpx.ConnectError("blip", request=request)
+        return _json_response(200, _HELLO_RESULT)
+
+    handler, calls = _reattached_worker(audio_file, result_for)
+    provider, fake_async_client = _mock_transport_provider("http://fake-orin:9000", "k", handler)
+    sleep, _ = _recording_sleep()
+    monkeypatch.setattr(asyncio, "sleep", sleep)
+
+    with patch("services.transcription_providers.remote.httpx.AsyncClient", side_effect=fake_async_client):
+        sentences = await provider.transcribe(str(audio_file))
+
+    assert [s.text for s in sentences] == ["Hello."]
+    assert calls["result"] == 4
+
+
+@pytest.mark.asyncio
+async def test_reattach_gives_up_after_the_bounded_number_of_result_fetches(tmp_path, monkeypatch):
+    audio_file = tmp_path / "book.m4b"
+    audio_file.write_bytes(b"fake audio bytes")
+
+    handler, calls = _reattached_worker(
+        audio_file,
+        lambda n, request: _json_response(404, {"detail": "Result not found or expired"}),
+    )
+    provider, fake_async_client = _mock_transport_provider("http://fake-orin:9000", "k", handler)
+    sleep, delays = _recording_sleep()
+    monkeypatch.setattr(asyncio, "sleep", sleep)
+
+    with patch("services.transcription_providers.remote.httpx.AsyncClient", side_effect=fake_async_client):
+        with pytest.raises(TranscriptionError, match="Failed to fetch cached transcription result"):
+            await provider.transcribe(str(audio_file))
+
+    # One pre-flight check, then exactly RESULT_FETCH_ATTEMPTS fetches.
+    assert calls["result"] == 1 + remote_module.RESULT_FETCH_ATTEMPTS
+    assert delays.count(remote_module.RESULT_FETCH_RETRY_SEC) == remote_module.RESULT_FETCH_ATTEMPTS - 1
+    # The checkpoint probe runs once before the upload decision and once at the
+    # end, only after the attempts are spent.
+    assert calls["checkpoint"] == 2
+
+
+@pytest.mark.asyncio
+async def test_reattach_still_signals_a_pause_when_the_result_never_arrives(tmp_path, monkeypatch):
+    """A worker that paused for the off-hours window has no result and a checkpoint."""
+    audio_file = tmp_path / "book.m4b"
+    audio_file.write_bytes(b"fake audio bytes")
+
+    handler, calls = _reattached_worker(
+        audio_file,
+        lambda n, request: _json_response(404, {"detail": "Result not found or expired"}),
+        checkpoint={"exists": True, "audio_retained": False,
+                    "completed_through_sec": 1800, "progress": 0.25},
+    )
+    provider, fake_async_client = _mock_transport_provider("http://fake-orin:9000", "k", handler)
+    sleep, _ = _recording_sleep()
+    monkeypatch.setattr(asyncio, "sleep", sleep)
+
+    with patch("services.transcription_providers.remote.httpx.AsyncClient", side_effect=fake_async_client):
+        with pytest.raises(TranscriptionPaused) as exc:
+            await provider.transcribe(str(audio_file))
+
+    assert exc.value.completed_through_sec == 1800
+    assert calls["result"] == 1 + remote_module.RESULT_FETCH_ATTEMPTS
+
+
+@pytest.mark.asyncio
+async def test_a_plain_upload_does_not_retry_or_sleep_on_the_result_endpoint(tmp_path, monkeypatch):
+    """The retry is for the re-attach path only; a normal upload is unchanged."""
+    audio_file = tmp_path / "book.m4b"
+    audio_file.write_bytes(b"fake audio bytes")
+    result_calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal result_calls
+        if request.url.path == "/v1/result/book.m4b":
+            result_calls += 1
+            return _json_response(404, {"detail": "Result not found or expired"})
+        if request.url.path == "/v1/checkpoint":
+            return _json_response(200, {"exists": False})
+        if request.url.path == "/v1/transcribe":
+            return _json_response(200, _HELLO_RESULT)
+        raise AssertionError(f"Unexpected request: {request.url}")
+
+    provider, fake_async_client = _mock_transport_provider("http://fake-orin:9000", "k", handler)
+    sleep, delays = _recording_sleep()
+    monkeypatch.setattr(asyncio, "sleep", sleep)
+
+    with patch("services.transcription_providers.remote.httpx.AsyncClient", side_effect=fake_async_client):
+        sentences = await provider.transcribe(str(audio_file))
+
+    assert [s.text for s in sentences] == ["Hello."]
+    assert result_calls == 1
+    assert delays == []
