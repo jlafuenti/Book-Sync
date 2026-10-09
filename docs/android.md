@@ -592,8 +592,10 @@ Data safety answers in [play-listing.md](play-listing.md) in the same change.
 A guided, five-minute tour (issue #597) runs over the real UI on first sign-in on a fresh
 install, and any time after that from Account → Help → **Replay the walkthrough**. It covers
 Home's three sections, opening a book from Library through the overflow sheet and its Details
-screen, the reader (bringing up the toolbar, the page-level Switch to Audio jump, and syncing a
-selected sentence to audio precisely), the player paused at that sentence, Switch to Reader back,
+screen, the reader (bringing up the toolbar, the page-level Switch to Audio jump, Follow audio,
+which keeps the page in step with the audiobook with the sentence highlighted and the spoken word
+marked inside it, and the selection menu's Sync to Audio and Read along), the player paused at
+that sentence, Switch to Reader back,
 Library's filters and search, the Downloaded tab, and Account's Storage/Server rows — ending on
 the replay row itself.
 
@@ -671,8 +673,9 @@ nuisance rather than a lock-out.
 ### Read-along (issue #762)
 
 While the audiobook plays, the reader can follow it: the current sentence is
-marked (highlight by default, underline from Display Settings → Reading) and
-the page turns when the sentence leaves it.
+marked (highlight by default, underline from Display Settings → Reading), the
+word being spoken is marked inside it when the sync map carries word timing,
+and the page turns when the sentence leaves it.
 
 - **Entry.** "Read along" on the player opens the reader on the matching page
   and keeps playing. "Follow audio" in the reader toolbar starts the audio at
