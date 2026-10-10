@@ -506,7 +506,7 @@
                     android:layout_width="0dp"
                     android:layout_weight="1"
                     android:layout_height="wrap_content"
-                    android:text="Mark the sentence while following audio"
+                    android:text="Mark the sentence and word while following audio"
                     android:textSize="15sp" />
 
                 <com.google.android.material.button.MaterialButtonToggleGroup

@@ -70,6 +70,14 @@ class ReadAlongWiringTest {
     }
 
     @Test
+    fun `Display Settings labels the read-along toggle as marking the sentence and the word`() {
+        // Word-level read-along (issues #836, #841): the setting now covers both marks.
+        val layout = File(nearestAppDir(), "src/main/res/layout/dialog_display_settings.xml").readText()
+        assertTrue(layout.contains("android:text=\"Mark the sentence and word while following audio\""))
+        assertTrue(!layout.contains("Mark the sentence while following audio"))
+    }
+
+    @Test
     fun `saves are dropped while following so the service stays the only position writer`() {
         val save = activity.substringAfter("private fun savePosition(locator: Locator)").substringBefore("val pub = publication")
         assertTrue(

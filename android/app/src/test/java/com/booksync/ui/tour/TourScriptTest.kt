@@ -71,6 +71,15 @@ class TourScriptTest {
     }
 
     @Test
+    fun `reader_follow_audio copy mentions the word mark, not just the sentence`() {
+        // Word-level read-along (issues #836, #841): the walkthrough has to say
+        // the spoken word is marked inside the highlighted sentence.
+        val step = TOUR.first { it.id == "reader_follow_audio" }
+        assertTrue(step.body.contains("the word being spoken is marked inside it"))
+        assertEquals(30, TOUR.size)
+    }
+
+    @Test
     fun `reader_follow_audio handles a missing anchor exactly as reader_switch_to_audio does`() {
         // The item is hidden for a standalone book (no usable audio), so its
         // anchor never registers; both steps then degrade the same way.

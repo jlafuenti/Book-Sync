@@ -323,8 +323,9 @@ val TOUR: List<TourStep> = listOf(
         screen = TourScreen.Reader,
         anchor = TourAnchor.ReaderFollowAudio,
         title = "Follow audio",
-        body = "Follow audio keeps the page in step with the audiobook and marks the sentence " +
-            "being read. Turn a page by hand and the audio keeps going; Back to audio snaps you back.",
+        body = "Follow audio keeps the page in step with the audiobook: the sentence being read is " +
+            "highlighted and the word being spoken is marked inside it. Turn a page by hand and " +
+            "the audio keeps going; Back to audio snaps you back.",
         needsPair = true,
     ),
     TourStep(
