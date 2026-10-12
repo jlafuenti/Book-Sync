@@ -14,4 +14,4 @@
 #   docker compose build --build-arg INSTALL_LOCAL_WHISPER=1
 # (see server/Dockerfile), or pull the prebuilt tandem-server:main-local image.
 # The model downloads on first use into APP_DATA_DIR/whisper.
-faster-whisper>=1.1
+faster-whisper>=1.2.1
