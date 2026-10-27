@@ -185,6 +185,47 @@ async def test_a_user_cleared_series_the_file_still_carries_never_writes(db, aud
     assert writes == []
 
 
+@pytest.mark.parametrize("file_series", [None, "Axis"], ids=["file-has-no-series", "file-has-series"])
+async def test_two_scans_of_a_cleared_series_book_write_at_most_once(
+    db, audio_dir, monkeypatch, file_series
+):
+    """Both production shapes in one book, scanned twice with the real writer:
+    a user-cleared series (with and without a series left in the file), ABS
+    fields the writer cannot store, and one it can. The first scan may write
+    the storable fill; the second must not write at all."""
+    book_dir = audio_dir / "Ann Axis" / "Axis Test"
+    book_dir.mkdir(parents=True)
+    path = write_minimal_m4a(book_dir / "Axis Test.m4b")
+    tags = {"title": "Axis Test", "author": "Ann Axis"}
+    if file_series:
+        tags.update(series=file_series, series_index=1.0)
+    abs_metadata._write_tags(path, tags)
+    db.add(AudioBook(title="Axis Test", filename="Axis Test.m4b", file_path=path,
+                     metadata_source="manual", series=""))
+    await db.commit()
+    index = _abs_index(
+        book_dir, audio_dir, title="Axis Test", authorName="Ann Axis",
+        seriesName="Axis #1", description="A synthetic book.",
+        language="English", isbn="9780000000002", asin="B000000000",
+        explicit=True, tags=["Synthetic"],
+    )
+    writes = []
+    real_write = library_scan.write_metadata_to_file
+    monkeypatch.setattr(library_scan, "write_metadata_to_file",
+                        lambda fp, meta: writes.append(fp) or real_write(fp, meta))
+
+    await library_scan._ingest_one_audiobook(db, path, str(audio_dir), index)
+    await db.commit()
+    assert writes == [path]  # the description, once
+    mtime = os.stat(path).st_mtime_ns
+
+    await library_scan._ingest_one_audiobook(db, path, str(audio_dir), index)
+    await db.commit()
+    assert writes == [path], "the second scan rewrote the file"
+    assert os.stat(path).st_mtime_ns == mtime
+    assert (await db.execute(select(AudioBook))).scalar_one().series == ""
+
+
 def test_a_field_the_write_back_does_not_carry_is_not_a_change():
     before = {"title": "Axis Test", "series": "Axis", "series_index": 1.0}
     assert not abs_metadata.fills_written_back_field(before, {"title": "Axis Test"})
