@@ -45,6 +45,17 @@ operator must do by hand rather than read about afterwards.
 
 ### Fixed
 
+- A library scan no longer rewrites every M4B audiobook that Audiobookshelf has a language,
+  ISBN, ASIN, tags, explicit or abridged value for (#878). Those values are filled from
+  Audiobookshelf whenever the file lacks them, but the tag writer never stores them, so the file
+  lacked them again on the next scan and was saved again: on one library, about 240 files and
+  158 GB per scan, each one re-hashed afterwards and given a new modification time that other
+  library tools read as a changed file. The scan now writes a file back only when it filled a
+  field the file can actually hold (title, author, description, year, genres, publisher,
+  narrators, series). The other values still reach the library database exactly as before;
+  they're just not written into the file. The manual "Enrich from Audiobookshelf" actions are
+  unchanged and still write every matched file when run.
+
 - A transcription worker that stays down no longer fails the whole queue one item at a time
   (#866). Each item used to run its own five retries (about 8 minutes at the defaults) and was
   then marked failed, so a worker that was off for two days drained the whole queue into

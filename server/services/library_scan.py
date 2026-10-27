@@ -38,6 +38,7 @@ from services import audio_change, multi_file_audiobooks
 from services.abs_metadata import (
     enrich_from_abs,
     fetch_abs_index,
+    fills_written_back_field,
     load_abs_settings as _load_abs_settings,
     write_metadata_to_file,
 )
@@ -231,12 +232,18 @@ async def _ingest_one_audiobook(
         )
 
         if abs_index:
+            extracted = dict(meta)
             meta, abs_changed, _ = enrich_from_abs(meta, filepath, abs_index, audiobook_dir)
             # Respect user-cleared fields: empty string means user explicitly cleared it.
             if existing_audiobook.series == "":
                 meta.pop("series", None)
                 meta.pop("series_index", None)
-            if abs_changed:
+            # Only a fill the file will actually hold is worth writing: anything
+            # else is "missing" again on the next scan, which rewrote the file on
+            # every scan forever (#878). Judged after the series drop above, or
+            # ABS's series for a user-cleared row counts on every scan. The
+            # database still gets every fill below.
+            if abs_changed and fills_written_back_field(extracted, meta):
                 await asyncio.to_thread(write_metadata_to_file, filepath, meta)
                 # Tandem's own write just changed the file's bytes -- move the
                 # hash forward so the *next* scan doesn't mistake this write
@@ -293,8 +300,9 @@ async def _ingest_one_audiobook(
     meta = await extract_metadata(filepath, "audiobook", db, library_root=audiobook_dir)
 
     if abs_index:
+        extracted = dict(meta)
         meta, abs_changed, _ = enrich_from_abs(meta, filepath, abs_index, audiobook_dir)
-        if abs_changed:
+        if abs_changed and fills_written_back_field(extracted, meta):  # (#878)
             await asyncio.to_thread(write_metadata_to_file, filepath, meta)
 
     audiobook = AudioBook(
