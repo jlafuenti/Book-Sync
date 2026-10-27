@@ -62,6 +62,15 @@ jobs:
         # optional on a checkout with no local.properties.
         run: ./gradlew :app:bundleRelease --stacktrace
 
+      - name: Check the release bundle's targetSdk
+        # Play reads the packaged manifest, not build.gradle.kts, so the shipped
+        # targetSdkVersion must be the declared one (#308). A missing file fails
+        # the step too: an AGP upgrade that moves it needs the path updated here.
+        run: >-
+          python3 .github/scripts/release_target_sdk.py
+          android/app/build/intermediates/packaged_manifests/release/processReleaseManifestForPackage/AndroidManifest.xml
+          android/app/build.gradle.kts
+
       - name: Upload coverage report
         # Uploaded even when the gate fails, so a coverage drop can be diagnosed.
         if: always()
