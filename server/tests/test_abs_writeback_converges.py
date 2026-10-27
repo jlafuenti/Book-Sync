@@ -158,6 +158,45 @@ async def test_a_user_cleared_series_from_abs_never_writes(db, audio_dir, monkey
     assert (await db.execute(select(AudioBook))).scalar_one().series == ""
 
 
+async def test_a_user_cleared_series_the_file_still_carries_never_writes(db, audio_dir, monkeypatch):
+    """The other half of the cleared-series case, also found on production: the
+    file (or its path) still yields a series, the scan drops it for the write,
+    and the writer leaves a field it is not given alone. So "the file had a
+    series, the write-back has none" is not a change, and must not count."""
+    book_dir = audio_dir / "Ann Axis" / "Axis Test"
+    book_dir.mkdir(parents=True)
+    path = write_minimal_m4a(book_dir / "Axis Test.m4b")
+    abs_metadata._write_tags(path, {"title": "Axis Test", "author": "Ann Axis",
+                                    "series": "Axis", "series_index": 1.0})
+    db.add(AudioBook(title="Axis Test", filename="Axis Test.m4b", file_path=path,
+                     metadata_source="manual", series=""))
+    await db.commit()
+    index = _abs_index(
+        book_dir, audio_dir, title="Axis Test", authorName="Ann Axis",
+        seriesName="Axis #1", asin="B000000000",
+    )
+    writes = []
+    monkeypatch.setattr(library_scan, "write_metadata_to_file",
+                        lambda fp, meta: writes.append(fp) or (True, None))
+
+    await library_scan._ingest_one_audiobook(db, path, str(audio_dir), index)
+    await db.commit()
+
+    assert writes == []
+
+
+def test_a_field_the_write_back_does_not_carry_is_not_a_change():
+    before = {"title": "Axis Test", "series": "Axis", "series_index": 1.0}
+    assert not abs_metadata.fills_written_back_field(before, {"title": "Axis Test"})
+    assert not abs_metadata.fills_written_back_field(
+        before, {"title": "Axis Test", "series": None})
+    assert abs_metadata.fills_written_back_field(
+        before, {"title": "Axis Test", "series": "Axis", "series_index": 1.0,
+                 "author": "Ann Axis"})
+    # An explicit "" still reaches the file (the writer clears the tag).
+    assert abs_metadata.fills_written_back_field(before, {"title": "Axis Test", "series": ""})
+
+
 async def test_a_new_audiobook_with_only_unwritable_fills_is_not_written(db, audio_dir, monkeypatch):
     book_dir = audio_dir / "Ann Axis" / "Axis Test"
     book_dir.mkdir(parents=True)

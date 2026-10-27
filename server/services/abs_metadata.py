@@ -243,13 +243,19 @@ WRITTEN_BACK_FIELDS: frozenset[str] = frozenset({
 
 
 def fills_written_back_field(before: dict, after: dict) -> bool:
-    """Whether enrichment changed a field the file can hold (#878).
+    """Whether writing `after` back would change a field the file holds (#878).
 
-    `before` is the metadata as extracted from the file, `after` the same after
-    `enrich_from_abs`. Compared field by field rather than trusting `changed`,
-    which also counts fills the writer cannot store.
+    `before` is the metadata as extracted from the file, `after` what the scan
+    is about to write. Compared field by field rather than trusting `changed`,
+    which also counts fills the writer cannot store. A field absent or `None`
+    in `after` is not a change: `_write_tags` leaves such a field alone, so
+    counting it (a user-cleared series the scan drops, say) rewrote the same
+    file on every scan.
     """
-    return any(before.get(f) != after.get(f) for f in WRITTEN_BACK_FIELDS)
+    return any(
+        after.get(f) is not None and after.get(f) != before.get(f)
+        for f in WRITTEN_BACK_FIELDS
+    )
 
 
 _CHAPTER_TITLE_ERROR_RE = chapter_repair.CHAPTER_TITLE_ERROR_RE
