@@ -231,6 +231,27 @@ def enrich_from_abs(
     return file_meta, changed, True
 
 
+#: The fields `_write_tags` stores in an MP4 and `extract_metadata` reads back
+#: from one. A scan writes the file back only when enrichment filled one of
+#: these (#878): a fill outside the set reaches the database but can never reach
+#: the file, so the file would "lack" it again on the next scan and be rewritten
+#: on every scan. Pinned against a real file by test_abs_writeback_converges.py.
+WRITTEN_BACK_FIELDS: frozenset[str] = frozenset({
+    "title", "author", "description", "publish_year", "genres", "publisher",
+    "narrators", "series", "series_index",
+})
+
+
+def fills_written_back_field(before: dict, after: dict) -> bool:
+    """Whether enrichment changed a field the file can hold (#878).
+
+    `before` is the metadata as extracted from the file, `after` the same after
+    `enrich_from_abs`. Compared field by field rather than trusting `changed`,
+    which also counts fills the writer cannot store.
+    """
+    return any(before.get(f) != after.get(f) for f in WRITTEN_BACK_FIELDS)
+
+
 _CHAPTER_TITLE_ERROR_RE = chapter_repair.CHAPTER_TITLE_ERROR_RE
 
 
