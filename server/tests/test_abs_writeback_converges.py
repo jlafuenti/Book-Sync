@@ -131,6 +131,33 @@ async def test_a_fill_the_file_cannot_hold_never_writes(db, audio_dir, monkeypat
     assert writes == []
 
 
+async def test_a_user_cleared_series_from_abs_never_writes(db, audio_dir, monkeypatch):
+    """Found on production during verification: a row whose series the user
+    cleared (`""`) is never given ABS's series in the file — the scan drops it
+    before writing — so ABS "filled" it again on every scan. Judging the
+    write-back after that drop, not before, is what makes it converge."""
+    book_dir = audio_dir / "Ann Axis" / "Axis Test"
+    book_dir.mkdir(parents=True)
+    path = write_minimal_m4a(book_dir / "Axis Test.m4b")
+    abs_metadata._write_tags(path, {"title": "Axis Test", "author": "Ann Axis"})
+    db.add(AudioBook(title="Axis Test", filename="Axis Test.m4b", file_path=path,
+                     metadata_source="manual", series=""))
+    await db.commit()
+    index = _abs_index(
+        book_dir, audio_dir, title="Axis Test", authorName="Ann Axis",
+        seriesName="Axis #1",
+    )
+    writes = []
+    monkeypatch.setattr(library_scan, "write_metadata_to_file",
+                        lambda fp, meta: writes.append(fp) or (True, None))
+
+    await library_scan._ingest_one_audiobook(db, path, str(audio_dir), index)
+    await db.commit()
+
+    assert writes == []
+    assert (await db.execute(select(AudioBook))).scalar_one().series == ""
+
+
 async def test_a_new_audiobook_with_only_unwritable_fills_is_not_written(db, audio_dir, monkeypatch):
     book_dir = audio_dir / "Ann Axis" / "Axis Test"
     book_dir.mkdir(parents=True)
