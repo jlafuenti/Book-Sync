@@ -16,6 +16,13 @@ operator must do by hand rather than read about afterwards.
 
 ## [Unreleased]
 
+### Added
+
+- The Transcription queue page shows a banner while the transcription worker is unreachable,
+  saying since when and that the queue is on hold rather than failing (#866). It reads a new
+  `GET /api/transcription/provider-status`, which reports the queue's own state and never probes
+  the worker itself.
+
 ### Changed
 
 - The System page is reorganised so library maintenance lives in Troubleshoot Library. The
@@ -37,6 +44,23 @@ operator must do by hand rather than read about afterwards.
   `main`.
 
 ### Fixed
+
+- A transcription worker that stays down no longer fails the whole queue one item at a time
+  (#866). Each item used to run its own five retries (about 8 minutes at the defaults) and was
+  then marked failed, so a worker that was off for two days drained the whole queue into
+  `failed`, and every pair went to ERROR, including books that were already synced and still
+  had a working sync map. Now, when the worker cannot be reached, the queue asks its health
+  check: no answer means the item goes back to pending without spending a retry, nothing new is
+  started, and the queue checks again on the same backoff as the retries, every 30 seconds rising
+  to every 15 minutes, until the worker answers. So the queue may sit up to 15 minutes after the
+  worker returns before it resumes. The retries still apply when the worker answers but keeps
+  refusing a job (out of memory, out of disk, a server error), and when those run out on a synced
+  book the pair stays SYNCED, since its old map still works; other failures still set ERROR so
+  Troubleshoot lists them. The trade-off: a job that hangs the worker so badly that its health
+  check stops answering is held rather than failed, until the worker comes back.
+
+- Retrying a failed or cancelled job from the queue's History keeps the job's priority instead of
+  resetting it to 100, so retrying a batch no longer scrambles the order (#866).
 
 - A re-transcription that moves a bookmark to another chapter now moves its progress percent
   too (#850). The re-map rewrote the chapter and sentence but kept the old percent, and Home's

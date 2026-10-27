@@ -612,6 +612,15 @@ class OffHoursStatusResponse(BaseModel):
     closes_at: Optional[datetime] = None
 
 
+class ProviderStatusResponse(BaseModel):
+    """Whether the queue is holding for an unreachable transcription worker (#866)."""
+
+    reachable: bool
+    # Both null while the worker answers; UTC, with an explicit offset.
+    unreachable_since: Optional[datetime] = None
+    next_probe_at: Optional[datetime] = None
+
+
 class QueueAddRequest(BaseModel):
     pair_ids: List[int]
 

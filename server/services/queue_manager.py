@@ -87,7 +87,9 @@ logger = logging.getLogger("queue-manager")
 # defaults and must match.
 #
 # Only ProviderUnavailableError takes this path; TranscriptionError is still a
-# hard failure — a corrupt file does not get better on the seventh try.
+# hard failure — a corrupt file does not get better on the seventh try. And
+# only while the worker answers its health check: a worker that does not
+# answer holds the whole queue instead (issue #866, "Provider-down hold" below).
 # ---------------------------------------------------------------------------
 RETRY_MAX_KEY = "transcription_retry_max"
 RETRY_BASE_SECONDS_KEY = "transcription_retry_base_seconds"
@@ -146,6 +148,26 @@ OFFHOURS_TICK_SECONDS = 60
 # Set once per closed window after the worker has been told to drop its model,
 # so we ask once rather than every tick. Cleared when the window reopens.
 _resources_released = False
+
+# ---------------------------------------------------------------------------
+# Provider-down hold (issue #866)
+#
+# The retry ladder is charged to the item. That is right when the worker
+# answers but keeps refusing this job (out of memory, out of disk, a 5xx), and
+# wrong when the worker is simply gone: an outage longer than one ladder
+# (~8 minutes at the defaults) failed every item in turn, and a 48-hour one
+# drained a whole queue into `failed`. So after a ProviderUnavailableError the
+# queue asks the provider's health check. No answer means the worker is down:
+# the item goes back to pending uncharged, and nothing is claimed until a probe
+# — on the ladder's own capped backoff — gets an answer.
+#
+# Module state, like the cancel and pause flags (single process, #252). A
+# restart forgets the outage and finds it again on its first claim.
+# ---------------------------------------------------------------------------
+PROVIDER_DOWN_MESSAGE_PREFIX = "Transcription worker unreachable"
+_provider_down_since: Optional[datetime.datetime] = None
+_provider_down_probes = 0
+_provider_next_probe_at: Optional[datetime.datetime] = None
 
 
 async def _add_to_queue_in(
@@ -331,14 +353,37 @@ async def settle_pair_after_cancel(
         pair.status = PairStatus(recorded)
         return
 
+    has_map = await _pair_has_sync_map(db, pair_id)
+    pair.status = PairStatus.SYNCED if has_map else PairStatus.AUTO_MATCHED
+
+
+async def settle_pair_after_provider_failure(db, pair_id: int) -> None:
+    """Settle the pair of a job that ran out of provider-unavailable retries (#866).
+
+    The job failed, but a failed re-transcription leaves the old sync map in
+    place and still served: the pair works. One with a map goes back to
+    SYNCED; only one with nothing to read from is ERROR. The queue row stays
+    `failed`, so History still says what went wrong. Other failures keep
+    setting ERROR (owner's call, 2026-10-27): they can be about the files, and
+    Troubleshoot lists ERROR pairs. Does not commit.
+    """
+    pair = (
+        await db.execute(select(BookPair).where(BookPair.id == pair_id))
+    ).scalar_one_or_none()
+    if pair is None:
+        return
+    has_map = await _pair_has_sync_map(db, pair_id)
+    pair.status = PairStatus.SYNCED if has_map else PairStatus.ERROR
+
+
+async def _pair_has_sync_map(db, pair_id: int) -> bool:
     from models.sync_map import SyncMap
 
-    has_map = (
+    return (
         await db.execute(
             select(SyncMap.id).where(SyncMap.book_pair_id == pair_id).limit(1)
         )
     ).scalar_one_or_none() is not None
-    pair.status = PairStatus.SYNCED if has_map else PairStatus.AUTO_MATCHED
 
 
 async def _mark_cancelled(item_id: int, pair_id: int) -> None:
@@ -458,19 +503,23 @@ async def get_queue_item_for_pair(pair_id: int) -> Optional[TranscriptionQueueIt
 # Background processing loop
 # ---------------------------------------------------------------------------
 
-async def _mark_pending_items_waiting(db, reason: str) -> None:
+async def _mark_pending_items_waiting(
+    db, reason: str, *, include_forced: bool = False
+) -> None:
     """
     Explain the wait on every queue item the closed window is holding back.
 
     Only writes rows whose message actually changes — this runs on every idle
-    tick, and a no-op UPDATE per item per minute is pure noise.
+    tick, and a no-op UPDATE per item per minute is pure noise. A "Run now"
+    item is exempt from the window but not from an unreachable worker, hence
+    ``include_forced``.
     """
-    result = await db.execute(
-        select(TranscriptionQueueItem).where(
-            TranscriptionQueueItem.status == "pending",
-            TranscriptionQueueItem.force_run.is_(False),
-        )
+    stmt = select(TranscriptionQueueItem).where(
+        TranscriptionQueueItem.status == "pending"
     )
+    if not include_forced:
+        stmt = stmt.where(TranscriptionQueueItem.force_run.is_(False))
+    result = await db.execute(stmt)
     changed = False
     for item in result.scalars().all():
         if item.message != reason:
@@ -480,10 +529,11 @@ async def _mark_pending_items_waiting(db, reason: str) -> None:
         await db.commit()
 
 
-async def _clear_waiting_messages() -> None:
+async def _clear_waiting_messages(prefix: str = offhours.WAITING_MESSAGE_PREFIX) -> None:
     """
     Put "Waiting in queue" back on pending items still saying they wait for
-    the off-hours window, once it has opened or been turned off (issue #830).
+    the off-hours window, once it has opened or been turned off (issue #830)
+    — or, with ``prefix``, for a worker that has answered again (#866).
 
     Without this the message stayed until each item was claimed, which with a
     long queue meant days of rows describing a hold that no longer existed.
@@ -495,7 +545,7 @@ async def _clear_waiting_messages() -> None:
         result = await db.execute(
             select(TranscriptionQueueItem).where(
                 TranscriptionQueueItem.status == "pending",
-                TranscriptionQueueItem.message.startswith(offhours.WAITING_MESSAGE_PREFIX),
+                TranscriptionQueueItem.message.startswith(prefix),
             )
         )
         stale = result.scalars().all()
@@ -677,6 +727,79 @@ async def load_retry_policy() -> tuple:
     )
 
 
+def provider_status() -> dict:
+    """The provider-down hold's state, for the queue page's banner (#866).
+
+    Reads module state only; it never probes, so polling it costs nothing.
+    """
+    return {
+        "reachable": _provider_down_since is None,
+        "unreachable_since": _provider_down_since,
+        "next_probe_at": _provider_next_probe_at,
+    }
+
+
+def _clear_provider_down() -> None:
+    global _provider_down_since, _provider_down_probes, _provider_next_probe_at
+    _provider_down_since = None
+    _provider_down_probes = 0
+    _provider_next_probe_at = None
+
+
+async def _provider_reachable() -> bool:
+    """Ask the configured provider's health check. Any error counts as no."""
+    try:
+        from services.transcription_providers import get_transcription_provider
+
+        provider = await get_transcription_provider()
+        return bool(await provider.is_available())
+    except Exception as e:
+        logger.debug(f"Transcription provider health probe failed: {e}")
+        return False
+
+
+async def _hold_for_provider(base_delay: int) -> None:
+    """Count one unanswered probe, say so on the pending items, sleep the backoff."""
+    global _provider_down_since, _provider_down_probes, _provider_next_probe_at
+    now = utcnow()
+    if _provider_down_since is None:
+        _provider_down_since = now
+        logger.warning(
+            "Transcription worker does not answer its health check — holding the "
+            "queue until it does (nothing is failed meanwhile)"
+        )
+    _provider_down_probes += 1
+    delay = retry_delay_seconds(_provider_down_probes, base_seconds=base_delay)
+    _provider_next_probe_at = now + datetime.timedelta(seconds=delay)
+    reason = (
+        f"{PROVIDER_DOWN_MESSAGE_PREFIX} since "
+        f"{_provider_down_since:%Y-%m-%d %H:%M} UTC — waiting for it to come back"
+    )
+    async with async_session() as db:
+        await _mark_pending_items_waiting(db, reason, include_forced=True)
+    await asyncio.sleep(delay)
+
+
+async def _end_provider_hold() -> None:
+    since = _provider_down_since
+    _clear_provider_down()
+    logger.info(
+        f"Transcription worker answers again after {utcnow() - since} — resuming the queue"
+    )
+    await _clear_waiting_messages(PROVIDER_DOWN_MESSAGE_PREFIX)
+
+
+def _claimable_items(window_open: bool):
+    """The pending rows the dispatcher may claim right now, unordered."""
+    stmt = select(TranscriptionQueueItem).where(
+        TranscriptionQueueItem.status == "pending"
+    )
+    if not window_open:
+        # Outside the window only "Run now" items are eligible.
+        stmt = stmt.where(TranscriptionQueueItem.force_run.is_(True))
+    return stmt
+
+
 async def _process_next_item():
     """
     Pull the next pending item and process it through the transcription pipeline.
@@ -685,6 +808,21 @@ async def _process_next_item():
 
     config = await offhours.load_config()
     window_open, wait_reason = offhours.dispatch_allowed(config)
+
+    if _provider_down_since is not None:
+        # The worker stopped answering (#866). Probe before claiming — but only
+        # when there is something to claim, so a closed window keeps its own
+        # message and nobody probes a worker the queue has no use for.
+        async with async_session() as db:
+            waiting = (
+                await db.execute(_claimable_items(window_open).limit(1))
+            ).scalar_one_or_none()
+        if waiting is not None:
+            if not await _provider_reachable():
+                _, base_delay = await load_retry_policy()
+                await _hold_for_provider(base_delay)
+                return True  # the wait was the work; the hold already slept
+            await _end_provider_hold()
 
     async with async_session() as db:
         # Get the highest-priority pending item. A row a restart interrupted
@@ -695,12 +833,7 @@ async def _process_next_item():
         # a half-transcribed book finishes before a fresh one starts — its
         # partial work is sitting on the worker and is what the next window
         # should be spent on.
-        stmt = select(TranscriptionQueueItem).where(
-            TranscriptionQueueItem.status == "pending"
-        )
-        if not window_open:
-            # Outside the window only "Run now" items are eligible.
-            stmt = stmt.where(TranscriptionQueueItem.force_run.is_(True))
+        stmt = _claimable_items(window_open)
 
         result = await db.execute(
             stmt.order_by(
@@ -776,6 +909,17 @@ async def _process_next_item():
             # Not a failure — the provider stopped at a checkpoint because the
             # window closed. Re-pend with progress intact and no retry burned.
             await _mark_item_paused(item_id, e, config)
+        elif isinstance(e, ProviderUnavailableError) and not await _provider_reachable():
+            # The worker is gone, not refusing this job (#866): hand the item
+            # back uncharged — progress and start time intact, since the
+            # worker's checkpoint survives an outage — and hold the queue.
+            logger.warning(
+                f"Queue item {item_id} held, not retried: provider unavailable ({e}) "
+                f"and the worker does not answer its health check"
+            )
+            await _update_queue_item(item_id, status="pending")
+            _, base_delay = await load_retry_policy()
+            await _hold_for_provider(base_delay)
         elif isinstance(e, ProviderUnavailableError):
             max_retries, base_delay = await load_retry_policy()
             # Base delay unless we re-pend, in which case it becomes the
@@ -799,16 +943,8 @@ async def _process_next_item():
                         item.error_message = f"Failed after {item.retry_count} retries: {str(e)}"
                         item.message = f"Failed after {item.retry_count} retries"
                         item.completed_at = utcnow()
+                        await settle_pair_after_provider_failure(db, pair_id)
                         await db.commit()
-
-                        # Also update the BookPair status
-                        result2 = await db.execute(
-                            select(BookPair).where(BookPair.id == pair_id)
-                        )
-                        pair = result2.scalar_one_or_none()
-                        if pair:
-                            pair.status = PairStatus.ERROR
-                            await db.commit()
                     else:
                         delay = retry_delay_seconds(
                             item.retry_count, base_seconds=base_delay

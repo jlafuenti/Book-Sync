@@ -4,7 +4,7 @@ import {
     getPairs,
     startTranscription, getTranscriptionStatus, cancelTranscription, addToQueue,
     getTranscriptionQueue, getQueueHistory, removeFromQueue, updateQueuePriority,
-    requeueQueueItem,
+    requeueQueueItem, getProviderStatus,
 } from '../api'
 import { useAuth } from '../contexts/AuthContext'
 import useIsMobile from '../hooks/useIsMobile'
@@ -154,6 +154,7 @@ function TranscriptionPage({ tab }) {
     /* ── queue state ── */
     const [queue,          setQueue]          = useState([])
     const [queueHistory,   setQueueHistory]   = useState([])
+    const [providerStatus, setProviderStatus] = useState(null)
     const [historyLoaded,  setHistoryLoaded]  = useState(false)
     const [historyLoading, setHistoryLoading] = useState(false)
     const [showHistory,    setShowHistory]    = useState(false)
@@ -189,6 +190,18 @@ function TranscriptionPage({ tab }) {
             const data = await getTranscriptionQueue()
             setQueue(data)
         } catch { /* silent */ }
+        loadProviderStatus()
+    }
+
+    // The server holds the queue while the worker is unreachable (#866). A
+    // failed read shows nothing: the banner explains a stall, the page does
+    // not depend on it.
+    const loadProviderStatus = async () => {
+        try {
+            setProviderStatus(await getProviderStatus())
+        } catch {
+            setProviderStatus(null)
+        }
     }
 
     // `force` bypasses the once-per-visit cache: after a retry the table has to
@@ -222,6 +235,7 @@ function TranscriptionPage({ tab }) {
                 setLoading(false)
             }
         })()
+        loadProviderStatus()
         pollingRef.current = setInterval(loadQueue, 3000)
         return () => {
             if (pollingRef.current) clearInterval(pollingRef.current)
@@ -943,6 +957,14 @@ function TranscriptionPage({ tab }) {
         <div className="transcription-page">
             {/* ── Error ── */}
             {error && <div className="alert alert-error" style={{ marginBottom: '16px' }}>⚠️ {error}</div>}
+
+            {/* ── Worker unreachable (#866) ── */}
+            {providerStatus?.reachable === false && (
+                <div className="alert alert-warning" role="status" style={{ marginBottom: '16px' }}>
+                    Transcription worker unreachable since {formatDate(providerStatus.unreachable_since)}.
+                    {' '}The queue is on hold and will resume by itself when the worker comes back — nothing is being failed.
+                </div>
+            )}
 
             {/* ══════════════ MOBILE LAYOUT ══════════════ */}
             {isMobile && (

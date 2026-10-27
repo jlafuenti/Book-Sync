@@ -16,6 +16,7 @@ Endpoints:
 """
 
 import asyncio
+import datetime
 import json
 from typing import Dict, List
 
@@ -32,6 +33,7 @@ from models.transcript import AudioTranscript
 from schemas import (
     TranscriptionStatusResponse,
     OffHoursStatusResponse,
+    ProviderStatusResponse,
     QueueItemResponse,
     QueueAddRequest,
     QueuePriorityUpdate,
@@ -367,7 +369,9 @@ async def requeue_queue_item(
     pair_id = item.book_pair_id
 
     from services.queue_manager import add_to_queue, get_queue_item_for_pair
-    created = await add_to_queue([pair_id])
+    # Same priority as the failed row: recovering a batch must not scramble the
+    # order the operator set (#866).
+    created = await add_to_queue([pair_id], priority=item.priority)
 
     if created:
         new_item = created[0]
@@ -407,6 +411,24 @@ async def get_offhours_status(
         timezone=config.tz.key,
         opens_at=offhours.next_open(config) if config.enabled and not is_open else None,
         closes_at=offhours.next_close(config) if config.enabled and is_open else None,
+    )
+
+
+@router.get("/provider-status", response_model=ProviderStatusResponse)
+async def get_provider_status(_: User = Depends(get_current_user)):
+    """Whether the queue is holding for an unreachable worker, for the queue
+    page's banner (issue #866). Reads the queue manager's state; never probes."""
+    from services.queue_manager import provider_status
+
+    def _utc(value):
+        # Stored naive-UTC like every timestamp here; say so on the wire.
+        return value.replace(tzinfo=datetime.timezone.utc) if value else None
+
+    status = provider_status()
+    return ProviderStatusResponse(
+        reachable=status["reachable"],
+        unreachable_since=_utc(status["unreachable_since"]),
+        next_probe_at=_utc(status["next_probe_at"]),
     )
 
 
