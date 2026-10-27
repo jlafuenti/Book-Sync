@@ -80,6 +80,18 @@ operator must do by hand rather than read about afterwards.
   reports the job done, and the server retries the fetch for a few seconds before giving up. With
   word timing the result takes longer to serialise, which is what widened the window.
 
+### Security
+
+- The pip-audit exception for PYSEC-2026-3740 (nltk path traversal in model-artifact APIs) is
+  gone (#335). nltk 3.10.4 fixes it, and the security audit now passes with an empty
+  allow-list. The exception was only ever a judgement that the vulnerable APIs were not
+  reachable from Tandem's code, never a fix. 3.10.4 also runs the sentence splitter's regular
+  expressions on the `regex` engine under a 5-second limit per call. Measured on eight
+  public-domain novels (58,412 sentences), it splits every sentence exactly as 3.10.3 did, so
+  stored sync maps are unaffected. A single call is now 10–15 times slower, about 2 seconds for
+  1 MB of text, but Tandem only ever splits one EPUB paragraph or one transcription chunk at a
+  time (well under 0.1 s each). Only a single block of several megabytes could reach the limit.
+
 ### Upgrade notes
 
 - The local transcription provider changed engine (#843). A server image you build yourself with
