@@ -4275,6 +4275,44 @@
         "title": "ProgressType",
         "type": "string"
       },
+      "ProviderStatusResponse": {
+        "description": "Whether the queue is holding for an unreachable transcription worker (#866).",
+        "properties": {
+          "next_probe_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Probe At"
+          },
+          "reachable": {
+            "title": "Reachable",
+            "type": "boolean"
+          },
+          "unreachable_since": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unreachable Since"
+          }
+        },
+        "required": [
+          "reachable"
+        ],
+        "title": "ProviderStatusResponse",
+        "type": "object"
+      },
       "QueueAddRequest": {
         "properties": {
           "pair_ids": {
@@ -11861,6 +11899,33 @@
           }
         ],
         "summary": "Get Offhours Status",
+        "tags": [
+          "transcription"
+        ]
+      }
+    },
+    "/api/transcription/provider-status": {
+      "get": {
+        "description": "Whether the queue is holding for an unreachable worker, for the queue\npage's banner (issue #866). Reads the queue manager's state; never probes.",
+        "operationId": "get_provider_status_api_transcription_provider_status_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProviderStatusResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Get Provider Status",
         "tags": [
           "transcription"
         ]

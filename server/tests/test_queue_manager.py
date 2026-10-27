@@ -46,7 +46,9 @@ async def _clear_cancel_flags():
     queue_manager._active_item_id = None
     queue_manager._active_provider = None
     queue_manager._resources_released = False
+    queue_manager._clear_provider_down()
     yield
+    queue_manager._clear_provider_down()
     queue_manager._cancel_requested.clear()
     queue_manager._pause_requested.clear()
     queue_manager._resuming_items.clear()
@@ -54,6 +56,36 @@ async def _clear_cancel_flags():
     queue_manager._active_item_id = None
     queue_manager._active_provider = None
     queue_manager._resources_released = False
+
+
+# The real probe, kept before the fixture below replaces it.
+_real_provider_reachable = queue_manager._provider_reachable
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def _worker_answers_health_checks(monkeypatch):
+    """Default: the worker answers its health check.
+
+    The provider-unavailable tests below are about the per-item ladder, which
+    only runs while the worker is up (issue #866). Tests about an unreachable
+    worker script the probe themselves with `_script_probe`.
+    """
+    async def _up():
+        return True
+
+    monkeypatch.setattr(queue_manager, "_provider_reachable", _up)
+
+
+def _script_probe(monkeypatch, state):
+    """Make the health probe answer ``not state["down"]``; returns the call log."""
+    calls = []
+
+    async def _probe():
+        calls.append(state["down"])
+        return not state["down"]
+
+    monkeypatch.setattr(queue_manager, "_provider_reachable", _probe)
+    return calls
 
 
 # ---------------------------------------------------------------------------
@@ -2387,6 +2419,225 @@ async def test_permanent_failure_does_not_sleep_out_the_full_backoff(db, monkeyp
 
     assert (await _get(TranscriptionQueueItem, item.id)).status == "failed"
     assert slept == [queue_manager.DEFAULT_RETRY_BASE_SECONDS]
+
+
+# ---------------------------------------------------------------------------
+# An unreachable worker holds the queue (issue #866)
+#
+# The retry ladder above belonged to the item, so a worker that stayed down
+# longer than one ladder (~8 min) failed every item in turn: a 48-hour outage
+# drained a whole queue into `failed` and put synced pairs into ERROR.
+# ---------------------------------------------------------------------------
+
+async def test_an_unreachable_worker_holds_the_queue_instead_of_failing_it(db, monkeypatch):
+    pairs = [await make_book_pair(db, status=PairStatus.AUTO_MATCHED) for _ in range(3)]
+    items = [await _seed_item(db, p.id, status="pending") for p in pairs]
+    claimed = []
+
+    async def _raise(item_id, pair_id):
+        claimed.append(item_id)
+        raise ProviderUnavailableError("Connection to remote server failed")
+
+    monkeypatch.setattr(queue_manager, "_run_transcription_pipeline", _raise)
+    monkeypatch.setattr("asyncio.sleep", _noop_sleep)
+    _script_probe(monkeypatch, {"down": True})
+
+    # Many times more passes than one item's whole ladder.
+    for _ in range(queue_manager.DEFAULT_RETRY_MAX * 4):
+        assert await queue_manager._process_next_item() is True
+
+    assert claimed == [items[0].id], "nothing else may be claimed while the worker is down"
+    for item, pair in zip(items, pairs):
+        row = await _get(TranscriptionQueueItem, item.id)
+        assert row.status == "pending"
+        assert (row.retry_count or 0) == 0, "an outage is not the item's fault"
+        assert row.message.startswith(queue_manager.PROVIDER_DOWN_MESSAGE_PREFIX)
+        assert (await _get(BookPair, pair.id)).status != PairStatus.ERROR
+    assert queue_manager.provider_status()["reachable"] is False
+    assert queue_manager.provider_status()["unreachable_since"] is not None
+
+
+async def test_an_outage_does_not_fail_an_item_already_at_its_last_retry(db, monkeypatch):
+    pair = await make_book_pair(db, status=PairStatus.TRANSCRIBING)
+    item = await _seed_item(db, pair.id, status="pending", retry_count=4)  # 4 -> 5 == MAX
+
+    async def _raise(item_id, pair_id):
+        raise ProviderUnavailableError("Connection to remote server failed")
+
+    monkeypatch.setattr(queue_manager, "_run_transcription_pipeline", _raise)
+    monkeypatch.setattr("asyncio.sleep", _noop_sleep)
+    _script_probe(monkeypatch, {"down": True})
+
+    await queue_manager._process_next_item()
+
+    refreshed = await _get(TranscriptionQueueItem, item.id)
+    assert refreshed.status == "pending"
+    assert refreshed.retry_count == 4
+    assert (await _get(BookPair, pair.id)).status == PairStatus.TRANSCRIBING
+
+
+async def test_a_held_item_keeps_its_progress_and_start_time(db, monkeypatch):
+    """A job the worker died under resumes from the worker's checkpoint; the
+    row must not claim it started over."""
+    pair = await make_book_pair(db)
+    started = datetime.datetime(2026, 6, 1, 2, 0, 0)
+    item = await _seed_item(db, pair.id, status="pending", progress=0.4, started_at=started)
+
+    async def _raise(item_id, pair_id):
+        raise ProviderUnavailableError("worker went away mid-job")
+
+    monkeypatch.setattr(queue_manager, "_run_transcription_pipeline", _raise)
+    monkeypatch.setattr("asyncio.sleep", _noop_sleep)
+    _script_probe(monkeypatch, {"down": True})
+
+    await queue_manager._process_next_item()
+
+    refreshed = await _get(TranscriptionQueueItem, item.id)
+    assert refreshed.progress == pytest.approx(0.4)
+    assert refreshed.started_at == started
+
+
+async def test_the_hold_backs_off_and_caps_its_probe_interval(db, monkeypatch):
+    pair = await make_book_pair(db)
+    await _seed_item(db, pair.id, status="pending")
+    slept = []
+
+    async def _record_sleep(seconds):
+        slept.append(seconds)
+
+    async def _raise(item_id, pair_id):
+        raise ProviderUnavailableError("Connection to remote server failed")
+
+    monkeypatch.setattr(queue_manager, "_run_transcription_pipeline", _raise)
+    monkeypatch.setattr("asyncio.sleep", _record_sleep)
+    _script_probe(monkeypatch, {"down": True})
+
+    for _ in range(7):
+        await queue_manager._process_next_item()
+
+    assert slept == [30, 60, 120, 240, 480, 900, 900]
+
+
+async def test_the_hold_lifts_when_the_worker_answers_again(db, monkeypatch):
+    first_pair = await make_book_pair(db)
+    second_pair = await make_book_pair(db)
+    first = await _seed_item(db, first_pair.id, status="pending")
+    second = await _seed_item(db, second_pair.id, status="pending")
+    state = {"down": True}
+    ran = []
+
+    async def _pipeline(item_id, pair_id):
+        if state["down"]:
+            raise ProviderUnavailableError("Connection to remote server failed")
+        ran.append(item_id)
+
+    monkeypatch.setattr(queue_manager, "_run_transcription_pipeline", _pipeline)
+    monkeypatch.setattr("asyncio.sleep", _noop_sleep)
+    _script_probe(monkeypatch, state)
+
+    for _ in range(3):
+        await queue_manager._process_next_item()
+    assert ran == []
+
+    state["down"] = False
+    assert await queue_manager._process_next_item() is True
+
+    assert ran == [first.id]
+    assert queue_manager.provider_status() == {
+        "reachable": True, "unreachable_since": None, "next_probe_at": None,
+    }
+    assert (await _get(TranscriptionQueueItem, second.id)).message == "Waiting in queue"
+
+
+async def test_a_reachable_worker_still_charges_the_item(db, monkeypatch):
+    """OOM, a full disk, a 5xx: the worker answers its health check, so the
+    failure is this item's and the ladder applies as before (#242)."""
+    pair = await make_book_pair(db)
+    item = await _seed_item(db, pair.id, status="pending")
+
+    async def _raise(item_id, pair_id):
+        raise ProviderUnavailableError("Remote server ran out of memory")
+
+    monkeypatch.setattr(queue_manager, "_run_transcription_pipeline", _raise)
+    monkeypatch.setattr("asyncio.sleep", _noop_sleep)
+    _script_probe(monkeypatch, {"down": False})
+
+    await queue_manager._process_next_item()
+
+    assert (await _get(TranscriptionQueueItem, item.id)).retry_count == 1
+    assert queue_manager.provider_status()["reachable"] is True
+
+
+@pytest.mark.parametrize("has_map, expected", [
+    (True, PairStatus.SYNCED),
+    (False, PairStatus.ERROR),
+])
+async def test_a_provider_failure_does_not_demote_a_synced_pair(db, monkeypatch, has_map, expected):
+    """A re-run that runs out of retries leaves the old map serving — the pair
+    still works, so it must not show as failed everywhere."""
+    pair = await make_book_pair(db, status=PairStatus.TRANSCRIBING)
+    if has_map:
+        await make_sync_map(db, pair.id)
+    item = await _seed_item(
+        db, pair.id, status="pending", retry_count=4, pair_status_before="synced",
+    )
+
+    async def _raise(item_id, pair_id):
+        raise ProviderUnavailableError("Remote server ran out of memory")
+
+    monkeypatch.setattr(queue_manager, "_run_transcription_pipeline", _raise)
+    monkeypatch.setattr("asyncio.sleep", _noop_sleep)
+
+    await queue_manager._process_next_item()
+
+    assert (await _get(TranscriptionQueueItem, item.id)).status == "failed"
+    assert (await _get(BookPair, pair.id)).status == expected
+
+
+async def test_any_other_failure_still_errors_a_synced_pair(db, monkeypatch):
+    """Owner's call (2026-10-27): only a provider failure keeps SYNCED, so a
+    re-run that failed for a reason of its own stays visible in Troubleshoot."""
+    pair = await make_book_pair(db, status=PairStatus.TRANSCRIBING)
+    await make_sync_map(db, pair.id)
+    item = await _seed_item(db, pair.id, status="pending", pair_status_before="synced")
+
+    async def _boom(item_id, pair_id):
+        raise ValueError("could not decode the audio")
+
+    monkeypatch.setattr(queue_manager, "_run_transcription_pipeline", _boom)
+
+    await queue_manager._process_next_item()
+
+    assert (await _get(TranscriptionQueueItem, item.id)).status == "failed"
+    assert (await _get(BookPair, pair.id)).status == PairStatus.ERROR
+
+
+async def test_the_probe_asks_the_configured_provider(monkeypatch):
+    class _Provider:
+        def __init__(self, up):
+            self.up = up
+
+        async def is_available(self):
+            return self.up
+
+    for up in (True, False):
+        async def _factory(up=up):
+            return _Provider(up)
+
+        monkeypatch.setattr(
+            "services.transcription_providers.get_transcription_provider", _factory
+        )
+        assert await _real_provider_reachable() is up
+
+
+async def test_the_probe_counts_an_error_as_unreachable(monkeypatch):
+    async def _factory():
+        raise RuntimeError("settings unreadable")
+
+    monkeypatch.setattr(
+        "services.transcription_providers.get_transcription_provider", _factory
+    )
+    assert await _real_provider_reachable() is False
 
 
 # ---------------------------------------------------------------------------

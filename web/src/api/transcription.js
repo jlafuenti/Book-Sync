@@ -105,3 +105,9 @@ export async function getOffHoursStatus() {
     const resp = await fetchWithAuth(`${API_BASE}/transcription/offhours`);
     return jsonOrThrow(resp, 'Failed to fetch off-hours status');
 }
+
+// Whether the queue is holding for an unreachable transcription worker (#866).
+export async function getProviderStatus() {
+    const resp = await fetchWithAuth(`${API_BASE}/transcription/provider-status`);
+    return jsonOrThrow(resp, 'Failed to fetch transcription worker status');
+}

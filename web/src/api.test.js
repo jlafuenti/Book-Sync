@@ -1082,6 +1082,24 @@ describe('off-hours transcription window (issue #106)', () => {
         await expect(getOffHoursStatus()).rejects.toThrow('Failed to fetch off-hours status')
     })
 
+    it('getProviderStatus fetches whether the queue is holding for the worker', async () => {
+        const payload = { reachable: false, unreachable_since: '2026-06-01T03:00:00Z', next_probe_at: null }
+        const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => payload })
+        vi.stubGlobal('fetch', fetchMock)
+
+        const { getProviderStatus } = await import('./api')
+
+        expect(await getProviderStatus()).toEqual(payload)
+        expect(fetchMock).toHaveBeenCalledWith('/api/transcription/provider-status', expect.anything())
+    })
+
+    it('getProviderStatus throws when the endpoint is unavailable', async () => {
+        vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 500, json: async () => ({}) }))
+
+        const { getProviderStatus } = await import('./api')
+        await expect(getProviderStatus()).rejects.toThrow('Failed to fetch transcription worker status')
+    })
+
     it('updateSettings surfaces a validation detail instead of a generic message', async () => {
         vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
             ok: false, status: 400,

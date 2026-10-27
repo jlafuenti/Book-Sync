@@ -154,6 +154,53 @@ async def test_startup_still_errors_a_pair_with_no_queue_item(db):
 # GET /offhours
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# GET /provider-status  (issue #866) — the queue page's "worker unreachable" banner
+# ---------------------------------------------------------------------------
+
+async def test_provider_status_reports_reachable_by_default(
+    db, make_client, make_user, auth_header
+):
+    user = await make_user(username="u", role="user")
+    async with make_client(transcription_router.router) as c:
+        r = await c.get("/api/transcription/provider-status", headers=auth_header(user))
+
+    assert r.status_code == 200
+    assert r.json() == {"reachable": True, "unreachable_since": None, "next_probe_at": None}
+
+
+async def test_provider_status_reports_an_outage_in_utc(
+    db, make_client, make_user, auth_header, monkeypatch
+):
+    from services import queue_manager
+
+    since = datetime.datetime(2026, 6, 1, 3, 0)
+    monkeypatch.setattr(queue_manager, "_provider_down_since", since)
+    monkeypatch.setattr(
+        queue_manager, "_provider_next_probe_at", since + datetime.timedelta(minutes=15)
+    )
+    user = await make_user(username="u", role="user")
+    async with make_client(transcription_router.router) as c:
+        r = await c.get("/api/transcription/provider-status", headers=auth_header(user))
+
+    body = r.json()
+    assert body["reachable"] is False
+    # Explicit UTC: the stored value is naive, and a browser would read a bare
+    # timestamp as local time.
+    assert datetime.datetime.fromisoformat(body["unreachable_since"]) == since.replace(
+        tzinfo=datetime.timezone.utc
+    )
+    assert datetime.datetime.fromisoformat(body["next_probe_at"]) == datetime.datetime(
+        2026, 6, 1, 3, 15, tzinfo=datetime.timezone.utc
+    )
+
+
+async def test_provider_status_requires_a_login(db, make_client):
+    async with make_client(transcription_router.router) as c:
+        r = await c.get("/api/transcription/provider-status")
+    assert r.status_code == 401
+
+
 async def test_offhours_reports_disabled_by_default(db, make_client, make_user, auth_header):
     user = await make_user(username="u", role="user")
     async with make_client(transcription_router.router) as c:
@@ -385,6 +432,24 @@ async def test_requeue_creates_a_new_pending_item_for_a_failed_one(
         assert new.error_message is None
 
 
+async def test_requeue_keeps_the_failed_item_s_priority(
+    db, make_client, make_user, auth_header
+):
+    """Recovering a batch must not scramble the order the operator set (#866)."""
+    editor = await make_user(username="ed", role="editor")
+    pair = await make_book_pair(db)
+    failed = await _seed_item(db, pair.id, status="failed", priority=90)
+
+    async with make_client(transcription_router.router) as c:
+        r = await c.post(
+            f"/api/transcription/queue/{failed.id}/requeue", headers=auth_header(editor)
+        )
+
+    assert r.status_code == 200
+    async with async_session() as s:
+        assert (await s.get(TranscriptionQueueItem, r.json()["id"])).priority == 90
+
+
 async def test_requeue_works_for_a_cancelled_item(db, make_client, make_user, auth_header):
     editor = await make_user(username="ed", role="editor")
     pair = await make_book_pair(db)
@@ -463,7 +528,7 @@ async def test_requeue_409s_when_the_pair_vanished_under_it(
     pair = await make_book_pair(db)
     item = await _seed_item(db, pair.id, status="failed")
 
-    async def _nothing_created(pair_ids, db=None):
+    async def _nothing_created(pair_ids, db=None, *, priority=100):
         return []
 
     async def _no_active_item(pair_id):
