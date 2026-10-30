@@ -45,6 +45,16 @@ operator must do by hand rather than read about afterwards.
 
 ### Fixed
 
+- A transcription worker that restarts mid-job no longer holds up the queue for the full remote
+  timeout (#881). The server waits on the upload request for up to that timeout (24 hours by
+  default), and a restarted worker never answers it, so the item sat at its last progress with
+  nothing logged and nothing else was dispatched. The server now gives up on the request, logs
+  a warning and retries the item (which resumes from the worker's checkpoint) when the worker's
+  status reports a new instance, when the worker stops running our file for 60 seconds, or when
+  the status endpoint is unreachable for 2 minutes. The trade-off: a worker that answers its
+  status endpoint but takes over a minute between finishing a job and sending the response would
+  now be retried. On production the longest gap measured was about 7 seconds.
+
 - A library scan no longer rewrites every M4B audiobook that Audiobookshelf has a language,
   ISBN, ASIN, tags, explicit or abridged value for (#878). Those values are filled from
   Audiobookshelf whenever the file lacks them, but the tag writer never stores them, so the file
