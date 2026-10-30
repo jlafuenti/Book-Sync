@@ -307,9 +307,9 @@ dependencies {
 
     // Networking (Retrofit + OkHttp)
     implementation("com.squareup.retrofit2:retrofit:3.0.0")
-    implementation("com.squareup.okhttp3:okhttp:5.5.0")
-    implementation("com.squareup.okhttp3:logging-interceptor:5.5.0")
-    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.11.0")
+    implementation("com.squareup.okhttp3:okhttp:5.5.1")
+    implementation("com.squareup.okhttp3:logging-interceptor:5.5.1")
+    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.12.0")
     implementation("com.jakewharton.retrofit:retrofit2-kotlinx-serialization-converter:1.0.0")
 
     // Room (Local Database)
@@ -342,7 +342,7 @@ dependencies {
     ksp("androidx.hilt:hilt-compiler:1.4.0")
 
     // DataStore (Preferences)
-    implementation("androidx.datastore:datastore-preferences:1.1.1")
+    implementation("androidx.datastore:datastore-preferences:1.3.0")
 
     // EPUB Reading (Readium)
     implementation("org.readium.kotlin-toolkit:readium-shared:3.4.0")
@@ -363,7 +363,7 @@ dependencies {
     // Counts requests, which is what the refresh-recursion bug is about
     // (issue #143): a unit test can assert "exactly one refresh POST" in a way
     // a mocked Chain cannot.
-    testImplementation("com.squareup.okhttp3:mockwebserver:5.5.0")
+    testImplementation("com.squareup.okhttp3:mockwebserver:5.5.1")
     // Real SQLite in JVM unit tests, so MIGRATION_19_20 can actually be executed
     // against a populated v19 database (issue #314). Room's MigrationTestHelper
     // needs an instrumentation context and this module has no androidTest source
