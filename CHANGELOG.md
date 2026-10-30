@@ -16,6 +16,8 @@ operator must do by hand rather than read about afterwards.
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-10-30
+
 ### Added
 
 - The Transcription queue page shows a banner while the transcription worker is unreachable,
@@ -42,6 +44,17 @@ operator must do by hand rather than read about afterwards.
   CUDA when the GPU libraries are present, and no longer pulls torch. CI now also publishes the
   server image with the local provider built in, as `tandem-server:main-local` beside the plain
   `main`.
+
+- Dependency updates from Dependabot: on the server FastAPI 0.161, Starlette 1.9, SQLAlchemy
+  2.1.6, asyncpg 0.32, Pydantic 2.14 and audible 0.13 (#870), with matching FastAPI and nltk
+  floors for the worker (#867, #868) and a faster-whisper floor of 1.2.1 (#859); in the web
+  build `vite-plugin-pwa` 2.0 (#856), a major version whose only breaking change is the peer
+  range for its assets generator, which Tandem does not use (the generated service worker
+  precaches the same 45 files with the same rules), plus React 19.3.1, Vite 8.3.4 and vitest
+  5.0.5 (#863), serialize-javascript and fast-uri patches (#876, #874); on Android Kotlin
+  2.4.21, OkHttp 5.5.1, kotlinx-serialization 1.12, DataStore 1.3 and Gradle 9.8.2 (#871);
+  and a GitHub Actions update (#869). `@vitejs/plugin-react` 6 (#857) is still held back for
+  the Babel collision described under 0.11.0.
 
 ### Fixed
 
