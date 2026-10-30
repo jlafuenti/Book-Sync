@@ -1121,3 +1121,183 @@ async def test_a_plain_upload_does_not_retry_or_sleep_on_the_result_endpoint(tmp
     assert [s.text for s in sentences] == ["Hello."]
     assert result_calls == 1
     assert delays == []
+
+
+# ---------------------------------------------------------------------------
+# Worker lost while the upload POST is still open (#881)
+#
+# The POST's read timeout is the whole transcription budget (24 h by default),
+# and a restarted worker never answers or resets that connection. The progress
+# poller is what notices: a new instance_id, our job no longer running, or the
+# worker unreachable for long enough. The POST below never returns on its own.
+# ---------------------------------------------------------------------------
+
+def _fast_upload_watch(monkeypatch):
+    monkeypatch.setattr(remote_module, "PROGRESS_POLL_INTERVAL_SEC", 0.01)
+    monkeypatch.setattr(remote_module, "UPLOAD_WATCH_IDLE_SEC", 0.2)
+    monkeypatch.setattr(remote_module, "UPLOAD_WATCH_UNREACHABLE_SEC", 0.2)
+
+
+def _hanging_upload_worker(status_for, release_post=None):
+    """Worker whose POST /v1/transcribe hangs until `release_post` is set (or
+    forever); `/v1/status` answers from `status_for(poll_number)`, which returns
+    a payload dict or raises."""
+    polls = 0
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal polls
+        if request.url.path.startswith("/v1/result/"):
+            return _json_response(404, {"detail": "Result not found or expired"})
+        if request.url.path == "/v1/checkpoint":
+            return _json_response(200, {"exists": False})
+        if request.url.path == "/v1/transcribe":
+            await (release_post or asyncio.Event()).wait()
+            return _json_response(200, _HELLO_RESULT)
+        if request.url.path == "/v1/status":
+            polls += 1
+            return _json_response(200, status_for(polls, request))
+        raise AssertionError(f"Unexpected request: {request.url}")
+
+    return handler
+
+
+def _running(instance="worker-a", file="book.m4b", progress=0.03):
+    return {"active": True, "progress": progress, "message": "Transcribing",
+            "current_file": file, "instance_id": instance}
+
+
+def _idle(instance="worker-a"):
+    return {"active": False, "progress": 0.0, "message": "Idle",
+            "current_file": None, "instance_id": instance}
+
+
+@pytest.mark.asyncio
+async def test_upload_wait_aborts_when_worker_instance_changes(tmp_path, monkeypatch):
+    _fast_upload_watch(monkeypatch)
+    audio_file = tmp_path / "book.m4b"
+    audio_file.write_bytes(b"fake audio bytes")
+
+    def status_for(n, request):
+        return _running() if n < 5 else _idle(instance="worker-b")
+
+    provider, fake_async_client = _mock_transport_provider(
+        "http://fake-orin:9000", "k", _hanging_upload_worker(status_for)
+    )
+    with patch("services.transcription_providers.remote.httpx.AsyncClient", side_effect=fake_async_client):
+        with pytest.raises(ProviderUnavailableError, match="restarted"):
+            await asyncio.wait_for(
+                provider.transcribe(str(audio_file), progress_callback=lambda *a: None), 5
+            )
+
+
+@pytest.mark.asyncio
+async def test_upload_wait_aborts_when_worker_reports_idle(tmp_path, monkeypatch):
+    _fast_upload_watch(monkeypatch)
+    audio_file = tmp_path / "book.m4b"
+    audio_file.write_bytes(b"fake audio bytes")
+
+    def status_for(n, request):
+        return _running() if n < 5 else _idle()
+
+    provider, fake_async_client = _mock_transport_provider(
+        "http://fake-orin:9000", "k", _hanging_upload_worker(status_for)
+    )
+    with patch("services.transcription_providers.remote.httpx.AsyncClient", side_effect=fake_async_client):
+        with pytest.raises(ProviderUnavailableError, match="no longer running"):
+            await asyncio.wait_for(
+                provider.transcribe(str(audio_file), progress_callback=lambda *a: None), 5
+            )
+
+
+@pytest.mark.asyncio
+async def test_upload_wait_aborts_when_worker_stays_unreachable(tmp_path, monkeypatch):
+    _fast_upload_watch(monkeypatch)
+    audio_file = tmp_path / "book.m4b"
+    audio_file.write_bytes(b"fake audio bytes")
+
+    def status_for(n, request):
+        if n < 5:
+            return _running()
+        raise httpx.ConnectError("worker is gone", request=request)
+
+    provider, fake_async_client = _mock_transport_provider(
+        "http://fake-orin:9000", "k", _hanging_upload_worker(status_for)
+    )
+    with patch("services.transcription_providers.remote.httpx.AsyncClient", side_effect=fake_async_client):
+        with pytest.raises(ProviderUnavailableError, match="unreachable"):
+            await asyncio.wait_for(
+                provider.transcribe(str(audio_file), progress_callback=lambda *a: None), 5
+            )
+
+
+@pytest.mark.asyncio
+async def test_upload_wait_survives_status_blips(tmp_path, monkeypatch):
+    """One failed poll and one idle poll mid-job must not abort it."""
+    _fast_upload_watch(monkeypatch)
+    audio_file = tmp_path / "book.m4b"
+    audio_file.write_bytes(b"fake audio bytes")
+    release = asyncio.Event()
+
+    def status_for(n, request):
+        if n == 4:
+            raise httpx.ConnectError("blip", request=request)
+        if n == 6:
+            return _idle()
+        if n >= 10:
+            release.set()
+        return _running()
+
+    provider, fake_async_client = _mock_transport_provider(
+        "http://fake-orin:9000", "k", _hanging_upload_worker(status_for, release)
+    )
+    with patch("services.transcription_providers.remote.httpx.AsyncClient", side_effect=fake_async_client):
+        sentences = await asyncio.wait_for(
+            provider.transcribe(str(audio_file), progress_callback=lambda *a: None), 5
+        )
+    assert [s.text for s in sentences] == ["Hello."]
+
+
+@pytest.mark.asyncio
+async def test_upload_wait_ignores_an_idle_worker_before_our_job_starts(tmp_path, monkeypatch):
+    """While the audio is still uploading the worker reports idle — on
+    production that lasts up to a few minutes for a large book. Idle only
+    counts once the worker has been seen running our file."""
+    _fast_upload_watch(monkeypatch)
+    audio_file = tmp_path / "book.m4b"
+    audio_file.write_bytes(b"fake audio bytes")
+    release = asyncio.Event()
+
+    def status_for(n, request):
+        if n < 40:   # well past UPLOAD_WATCH_IDLE_SEC at the patched cadence
+            return _idle()
+        if n >= 45:
+            release.set()
+        return _running()
+
+    provider, fake_async_client = _mock_transport_provider(
+        "http://fake-orin:9000", "k", _hanging_upload_worker(status_for, release)
+    )
+    with patch("services.transcription_providers.remote.httpx.AsyncClient", side_effect=fake_async_client):
+        sentences = await asyncio.wait_for(
+            provider.transcribe(str(audio_file), progress_callback=lambda *a: None), 5
+        )
+    assert [s.text for s in sentences] == ["Hello."]
+
+
+@pytest.mark.asyncio
+async def test_upload_wait_treats_another_file_on_the_worker_as_ours_gone(tmp_path, monkeypatch):
+    _fast_upload_watch(monkeypatch)
+    audio_file = tmp_path / "book.m4b"
+    audio_file.write_bytes(b"fake audio bytes")
+
+    def status_for(n, request):
+        return _running() if n < 5 else _running(file="other.m4b")
+
+    provider, fake_async_client = _mock_transport_provider(
+        "http://fake-orin:9000", "k", _hanging_upload_worker(status_for)
+    )
+    with patch("services.transcription_providers.remote.httpx.AsyncClient", side_effect=fake_async_client):
+        with pytest.raises(ProviderUnavailableError, match="no longer running"):
+            await asyncio.wait_for(
+                provider.transcribe(str(audio_file), progress_callback=lambda *a: None), 5
+            )

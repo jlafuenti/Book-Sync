@@ -79,6 +79,25 @@ RESULT_FETCH_RETRY_SEC = 2.0
 WAIT_FOR_IDLE_POLL_INTERVAL_SEC = 30
 WAIT_FOR_IDLE_MAX_POLL_ERRORS = 10      # ~5 min unreachable at 30 s
 
+# ---------------------------------------------------------------------------
+# Worker lost while the upload POST is open (#881)
+#
+# The POST's read timeout is `self.timeout` (24 h by default), and a worker that
+# restarts mid-job never answers or resets that connection, so the strictly
+# serial queue sat for the whole timeout. The progress poller watches
+# /v1/status alongside the POST and gives up on it when:
+#   - the worker reports a different instance_id (it restarted), or
+#   - it was seen running our file and has since stopped for
+#     UPLOAD_WATCH_IDLE_SEC (a normal finish answers the POST within seconds:
+#     up to ~7 s measured for a 37-hour book), or
+#   - /v1/status has been unreachable for UPLOAD_WATCH_UNREACHABLE_SEC.
+# Idle is not counted before our file is seen running: the worker reports idle
+# for the whole upload, which took up to ~2.5 min for a 1.5 GB book.
+# ---------------------------------------------------------------------------
+PROGRESS_POLL_INTERVAL_SEC = 0.5
+UPLOAD_WATCH_IDLE_SEC = 60
+UPLOAD_WATCH_UNREACHABLE_SEC = 120
+
 
 class RemoteWhisperProvider(TranscriptionProvider):
     """
@@ -101,21 +120,36 @@ class RemoteWhisperProvider(TranscriptionProvider):
         self.language = language
         self._headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
 
-    async def _poll_progress(self, stop_event: asyncio.Event, progress_callback: Callable):
+    async def _poll_progress(
+        self,
+        stop_event: asyncio.Event,
+        progress_callback: Callable,
+        filename: Optional[str] = None,
+    ) -> Optional[str]:
         """Polls the remote server for progress while transcription is running.
 
         Polling stays at 2 Hz so a pause or a stall is noticed quickly, but the
         callback only fires when the worker actually reported something new
         (issue #244) — the consumer's job is a DB write, and re-reporting an
         identical status half a second later buys nothing.
+
+        With `filename`, it also watches for the worker losing our job (#881)
+        and returns the reason when it does; otherwise it returns None once
+        `stop_event` is set.
         """
         last_reported = None
+        first_instance_id = None
+        seen_our_job = False
+        idle_since = None
+        unreachable_since = None
         async with httpx.AsyncClient() as client:
             while not stop_event.is_set():
+                now = time.monotonic()
                 try:
                     resp = await client.get(
                         f"{self.remote_url}/v1/status", timeout=2.0, headers=self._headers
                     )
+                    unreachable_since = None
                     if resp.status_code == 200:
                         data = resp.json()
                         if data.get("active"):
@@ -126,14 +160,62 @@ class RemoteWhisperProvider(TranscriptionProvider):
                                 # We pass None for duration to the callback,
                                 # because the Jetson message already handles the time logic
                                 progress_callback(progress, None, message)
+                        if filename:
+                            instance_id = data.get("instance_id")
+                            if first_instance_id is None:
+                                first_instance_id = instance_id
+                            elif instance_id and instance_id != first_instance_id:
+                                return (
+                                    f"Remote server restarted while transcribing {filename} "
+                                    f"(instance {first_instance_id} → {instance_id}) — will retry."
+                                )
+                            if data.get("active") and data.get("current_file") == filename:
+                                seen_our_job = True
+                                idle_since = None
+                            elif seen_our_job:
+                                idle_since = idle_since or now
+                                if now - idle_since >= UPLOAD_WATCH_IDLE_SEC:
+                                    return (
+                                        f"Remote server is no longer running {filename} "
+                                        f"(idle for {UPLOAD_WATCH_IDLE_SEC}s while our request "
+                                        f"was still open) — will retry."
+                                    )
                 except httpx.RequestError as e:
                     logger.debug(f"Progress polling failed: {e}")
+                    unreachable_since = unreachable_since or now
+                    if filename and now - unreachable_since >= UPLOAD_WATCH_UNREACHABLE_SEC:
+                        return (
+                            f"Remote server unreachable for {UPLOAD_WATCH_UNREACHABLE_SEC}s "
+                            f"while transcribing {filename} — will retry."
+                        )
 
                 # Check 2 times a second
                 try:
-                    await asyncio.wait_for(stop_event.wait(), timeout=0.5)
+                    await asyncio.wait_for(stop_event.wait(), timeout=PROGRESS_POLL_INTERVAL_SEC)
                 except asyncio.TimeoutError:
                     pass
+        return None
+
+    async def _send_unless_worker_lost(self, request_coro, poll_task):
+        """Await the upload/resume POST, but give up on it if the progress
+        poller reports the worker lost our job first (#881)."""
+        if poll_task is None:
+            return await request_coro
+        request_task = asyncio.ensure_future(request_coro)
+        await asyncio.wait({request_task, poll_task}, return_when=asyncio.FIRST_COMPLETED)
+        if request_task.done():
+            return request_task.result()
+        reason = None if poll_task.exception() else poll_task.result()
+        if reason is None:
+            # The poller ended without a verdict; keep waiting as before.
+            return await request_task
+        request_task.cancel()
+        try:
+            await request_task
+        except BaseException:
+            pass
+        logger.warning(reason)
+        raise ProviderUnavailableError(reason)
 
     async def _wait_for_server_idle(
         self, blocking_file: str, progress_callback: Optional[Callable]
@@ -336,12 +418,20 @@ class RemoteWhisperProvider(TranscriptionProvider):
         stop_polling = asyncio.Event()
         poll_task = None
         if progress_callback:
-            poll_task = asyncio.create_task(self._poll_progress(stop_polling, progress_callback))
+            poll_task = asyncio.create_task(
+                self._poll_progress(stop_polling, progress_callback, filename)
+            )
 
         try:
             data = None
             for _attempt in range(10):
                 attempt_label = f" (attempt {_attempt + 1})" if _attempt > 0 else ""
+                if poll_task and poll_task.done():
+                    # It gave a verdict during an earlier attempt's wait (a
+                    # 409, then waiting for idle); watch this POST afresh.
+                    poll_task = asyncio.create_task(
+                        self._poll_progress(stop_polling, progress_callback, filename)
+                    )
                 async with httpx.AsyncClient(timeout=self.timeout) as client:
                     try:
                         if use_resume:
@@ -352,19 +442,25 @@ class RemoteWhisperProvider(TranscriptionProvider):
                             resume_body = self._checkpoint_params(audio_path)
                             if self.language:
                                 resume_body["language"] = self.language
-                            response = await client.post(
-                                f"{self.remote_url}/v1/transcribe/resume",
-                                json=resume_body,
-                                headers=self._headers,
+                            response = await self._send_unless_worker_lost(
+                                client.post(
+                                    f"{self.remote_url}/v1/transcribe/resume",
+                                    json=resume_body,
+                                    headers=self._headers,
+                                ),
+                                poll_task,
                             )
                         else:
                             logger.info(f"Sending POST /v1/transcribe request{attempt_label}...")
                             with open(audio_path, "rb") as f:
-                                response = await client.post(
-                                    f"{self.remote_url}/v1/transcribe",
-                                    files={"audio_file": (filename, f, "audio/mpeg")},
-                                    data={"language": self.language} if self.language else None,
-                                    headers=self._headers,
+                                response = await self._send_unless_worker_lost(
+                                    client.post(
+                                        f"{self.remote_url}/v1/transcribe",
+                                        files={"audio_file": (filename, f, "audio/mpeg")},
+                                        data={"language": self.language} if self.language else None,
+                                        headers=self._headers,
+                                    ),
+                                    poll_task,
                                 )
                     except httpx.ConnectError as e:
                         raise ProviderUnavailableError(f"Connection to remote server failed: {e}")
