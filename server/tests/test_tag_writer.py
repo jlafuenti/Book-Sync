@@ -233,13 +233,20 @@ class WavPack(_Tags):
     pass
 
 
+class _ID3(dict):
+    """Frames keyed like mutagen's ID3: `add` files a frame under its HashKey."""
+
+    def add(self, frame):
+        self[frame.HashKey] = frame
+
+
 class MP3(_Tags):
     def __init__(self, tags=None):
         super().__init__()
-        self.tags = tags
+        self.tags = _ID3(tags) if tags is not None else None
 
     def add_tags(self):
-        self.tags = {}
+        self.tags = _ID3()
 
 
 @pytest.fixture
@@ -293,7 +300,7 @@ def test_mp4_cleared_series_and_description_delete_the_tags(audio, monkeypatch):
     tag_writer.write_audiobook_metadata(audio, _book(title="T", series="", description=None))
 
     assert tags.saved
-    assert set(tags) == {"\xa9nam"}
+    assert set(tags) == {"\xa9nam", "\xa9alb"}
 
 
 def test_mp3_id3_frames_are_written_and_tags_created_when_absent(audio, monkeypatch):
@@ -308,8 +315,11 @@ def test_mp3_id3_frames_are_written_and_tags_created_when_absent(audio, monkeypa
     frames = tags.tags
     assert frames["TIT2"].text == ["T"]
     assert frames["TPE1"].text == ["A"]
-    assert frames["TALB"].text == ["Saga"]
-    assert frames["TRCK"].text == ["3"]
+    assert frames["TALB"].text == ["T"]
+    assert frames["TIT1"].text == ["Saga #3"]
+    assert frames["TXXX:SERIES"].text == ["Saga"]
+    assert frames["TXXX:SERIES-PART"].text == ["3"]
+    assert "TRCK" not in frames
     assert frames["COMM"].text == ["Blurb"]
     assert frames["TCON"].text == ["Drama"]
     assert frames["TYER"].text == ["1987"]
@@ -317,11 +327,14 @@ def test_mp3_id3_frames_are_written_and_tags_created_when_absent(audio, monkeypa
 
 
 def test_mp3_cleared_series_and_description_drop_their_frames(audio, monkeypatch):
-    tags = _opened(monkeypatch, MP3(tags={"TALB": "old", "COMM": "old"}))
+    tags = _opened(monkeypatch, MP3(tags={
+        "TALB": "old", "TIT1": "Old #1", "TXXX:SERIES": "Old", "COMM": "old",
+    }))
 
     tag_writer.write_audiobook_metadata(audio, _book(title="T", series="", description=None))
 
-    assert "TALB" not in tags.tags and "COMM" not in tags.tags
+    assert not {"TIT1", "TXXX:SERIES", "COMM"} & set(tags.tags)
+    assert tags.tags["TALB"].text == ["T"]
     assert tags.tags["TIT2"].text == ["T"]
 
 
@@ -335,12 +348,15 @@ def test_vorbis_comments_are_written_for_flac_and_ogg(audio, monkeypatch):
 
     assert tags.saved
     assert tags["title"] == ["T"] and tags["artist"] == ["A"]
-    assert tags["album"] == ["Saga"] and tags["tracknumber"] == ["1"]
+    assert tags["album"] == ["T"] and "tracknumber" not in tags
+    assert tags["grouping"] == ["Saga #1"] and tags["series"] == ["Saga"]
+    assert tags["series-part"] == ["1"]
     assert tags["description"] == ["Blurb"] and tags["genre"] == ["Drama"]
     assert tags["date"] == ["1987"] and tags["organization"] == ["Pub"]
 
     tag_writer.write_audiobook_metadata(audio, _book(title="T", series="", description=None))
-    assert "album" not in tags and "description" not in tags
+    assert tags["album"] == ["T"]
+    assert not {"grouping", "series", "series-part", "description"} & set(tags)
 
 
 def test_an_unsupported_container_is_not_saved(audio, monkeypatch):

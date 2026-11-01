@@ -396,19 +396,40 @@ def _read_embedded_metadata(filepath: str, file_type: str) -> Dict[str, Any]:
                         if 'TPE1' in audio: file_meta["author"] = normalize_author(str(audio['TPE1']))
                         elif 'artist' in audio: file_meta["author"] = normalize_author(str(audio['artist'][0]))
                         
+                        # The explicit SERIES tag Tandem writes wins, as the
+                        # SERIES atom does for MP4; then subtitle and grouping.
                         series_str = None
-                        if 'TIT3' in audio: series_str = str(audio['TIT3'])
+                        if 'TXXX:SERIES' in audio: series_str = str(audio['TXXX:SERIES'])
+                        elif 'series' in audio: series_str = str(audio['series'][0])
+                        elif 'TIT3' in audio: series_str = str(audio['TIT3'])
                         elif 'subtitle' in audio: series_str = str(audio['subtitle'][0])
                         elif 'TIT1' in audio: series_str = str(audio['TIT1'])
                         elif 'GRP1' in audio: series_str = str(audio['GRP1'])
                         elif 'grouping' in audio: series_str = str(audio['grouping'][0])
-                        elif 'TALB' in audio: series_str = str(audio['TALB'])
-                        elif 'album' in audio: series_str = str(audio['album'][0])
-                        
+                        else:
+                            # The album is the last resort, for files whose only
+                            # series tag is the album (write-backs before #886
+                            # put it there). An album that is the book's title is
+                            # the usual convention, not a series.
+                            album = None
+                            if 'TALB' in audio: album = str(audio['TALB'])
+                            elif 'album' in audio: album = str(audio['album'][0])
+                            if album and not _same_name(album, file_meta.get("title")):
+                                series_str = album
+
                         if series_str:
                             s_name, s_idx = extract_series_and_index(series_str)
                             if s_name: file_meta["series"] = s_name
                             if s_idx is not None: file_meta["series_index"] = s_idx
+
+                        part = None
+                        if 'TXXX:SERIES-PART' in audio: part = str(audio['TXXX:SERIES-PART'])
+                        elif 'series-part' in audio: part = str(audio['series-part'][0])
+                        if part and file_meta.get("series") and file_meta.get("series_index") is None:
+                            try:
+                                file_meta["series_index"] = float(part.strip())
+                            except ValueError:
+                                pass
                         
                         # Extended fields
                         for kv in audio.keys():

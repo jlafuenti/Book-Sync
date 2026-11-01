@@ -18,16 +18,17 @@ operator must do by hand rather than read about afterwards.
 
 ### Fixed
 
-- Applying a Google Books cover no longer saves Google's grey "image not available" placeholder
-  (#888). The search asks Google for its largest (`zoom=0`) rendition, and for some volumes that
-  answers with the placeholder PNG while the listed thumbnail is the real cover. Apply-cover now
-  falls back to the `zoom=1` thumbnail in that case, and refuses the placeholder (HTTP 422) when
-  no real cover exists, so the book keeps its current cover and stays on the missing-cover list.
+### Fixed
+
+
 
 ### Upgrade notes
 
 - Placeholder covers saved before this change stay in place. Re-apply a cover to fix them; the
   placeholder is a 9,103-byte PNG.
+- Files written before this change keep the series in their album until Tandem writes their
+  tags again (a pairing or a metadata edit). Nothing rewrites them automatically, and books
+  another tool has already re-linked have to be fixed in that tool.
 
 ## [0.12.0] - 2026-10-30
 
