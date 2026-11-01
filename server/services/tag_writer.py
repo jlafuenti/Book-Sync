@@ -111,17 +111,39 @@ def write_ebook_metadata(filepath: str, book) -> None:
             logger.error(f"[write-back] No metadata block found in OPF for {filepath}")
             return
             
+        # Dublin Core allows a repeated element, and EPUB 3 uses that for the
+        # subtitle (a second dc:title refined with property="title-type") and for
+        # co-authors, illustrators and translators (extra dc:creator elements
+        # with opf:role). Only the primary element belongs to this write-back;
+        # rewriting every match flattened those refinements into the main value
+        # (issue #889).
+        refined_title_ids = set()
+        for meta_tag in metadata:
+            if meta_tag.tag.endswith('meta') and meta_tag.attrib.get('property') == 'title-type':
+                refines = meta_tag.attrib.get('refines', '')
+                if refines.startswith('#'):
+                    refined_title_ids.add(refines[1:])
+
+        def primary_dc_element(tag_name, matches):
+            if tag_name == 'title':
+                for child in matches:
+                    if child.attrib.get('id') not in refined_title_ids:
+                        return child
+            elif tag_name == 'creator':
+                for child in matches:
+                    if child.attrib.get('{http://www.idpf.org/2007/opf}role', 'aut') == 'aut':
+                        return child
+            return matches[0]
+
         # Helper to set or add a DC tag
         def set_dc_tag(tag_name, value):
             if not value: return
-            found = False
-            for child in list(metadata):
-                if child.tag.endswith(tag_name):
-                    child.text = str(value)
-                    found = True
-            if not found:
+            matches = [child for child in list(metadata) if child.tag.endswith(tag_name)]
+            if not matches:
                 el = SubElement(metadata, f"{{http://purl.org/dc/elements/1.1/}}{tag_name}")
                 el.text = str(value)
+                return
+            primary_dc_element(tag_name, matches).text = str(value)
 
         def clear_dc_tag(tag_name, value):
             """Set DC tag when value is present; remove all matching tags when empty/None."""
