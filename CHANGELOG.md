@@ -16,6 +16,25 @@ operator must do by hand rather than read about afterwards.
 
 ## [Unreleased]
 
+### Fixed
+
+- Writing metadata back to an MP3 or FLAC/Ogg audiobook no longer puts the series in the album
+  tag or the series index in the track number (#886). Readarr-style managers identify an
+  audiobook by its album, so after a pairing or a metadata edit their folder watcher re-linked
+  the file to another book in the same series, within about a minute and again on every later
+  write. The album is now the book's title, the series goes to grouping (`Series #N`) plus
+  `SERIES` / `SERIES-PART` tags (ID3 `TXXX` frames, Vorbis comments), as M4B files already had,
+  and the track number is left alone. Clearing a series now leaves the album in place for M4B
+  too. A rescan reads the explicit `SERIES` tag first and falls back to the album only when it
+  differs from the title, so a file written before this change keeps its series, and a file
+  whose album is simply its title no longer gets the title as its series.
+
+### Upgrade notes
+
+- Files written before this change keep the series in their album until Tandem writes their
+  tags again (a pairing or a metadata edit). Nothing rewrites them automatically, and books
+  another tool has already re-linked have to be fixed in that tool.
+
 ## [0.12.0] - 2026-10-30
 
 ### Added
