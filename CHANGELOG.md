@@ -33,6 +33,14 @@ operator must do by hand rather than read about afterwards.
   answers with the placeholder PNG while the listed thumbnail is the real cover. Apply-cover now
   falls back to the `zoom=1` thumbnail in that case, and refuses the placeholder (HTTP 422) when
   no real cover exists, so the book keeps its current cover and stays on the missing-cover list.
+- Writing metadata back to an EPUB now changes only the primary `dc:title`, `dc:creator` and
+  `dc:date` instead of setting every repeated element to the same value (#889), so subtitles,
+  collection titles, co-authors, illustrators, translators and modification dates survive. Roles
+  and title types are read from both `opf:role`/`opf:event` attributes and EPUB 3 `refines` metas.
+  The written element moves to the front of its kind so a rescan reads the same value, and a file
+  with only secondary elements gains a new primary one. A co-author already named in a joined
+  author field is merged into the primary creator rather than credited twice, and removing an
+  element also removes the metas refining it.
 
 ### Upgrade notes
 
@@ -41,6 +49,8 @@ operator must do by hand rather than read about afterwards.
   another tool has already re-linked have to be fixed in that tool.
 - Placeholder covers saved before this change stay in place. Re-apply a cover to fix them; the
   placeholder is a 9,103-byte PNG.
+- EPUBs flattened by an earlier write-back are not repaired: the lost subtitles and credits are no
+  longer in the file. Replace the file from its source to get them back.
 
 ## [0.12.0] - 2026-10-30
 
