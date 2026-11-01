@@ -198,7 +198,9 @@ def write_ebook_metadata(filepath: str, book) -> None:
                     value = primary.text
             if primary is None:
                 primary = SubElement(metadata, f"{{http://purl.org/dc/elements/1.1/}}{tag_name}")
-            primary.text = str(value)
+            # The library holds only a year: keep a full date that agrees with it.
+            if not (tag_name == 'date' and (primary.text or '').strip().startswith(str(value))):
+                primary.text = str(value)
             # The extractor, like most readers, takes the first element of a
             # kind; anywhere else, the next scan would read a different value.
             if matches and primary is not matches[0]:

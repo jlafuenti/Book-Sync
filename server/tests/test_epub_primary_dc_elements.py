@@ -194,6 +194,24 @@ def test_the_publish_year_goes_to_the_publication_date_not_the_modification_date
     assert _read_embedded_metadata(path, "ebook")["publish_year"] == 1999
 
 
+def test_a_full_date_in_the_same_year_is_not_cut_down_to_the_year(tmp_path):
+    """The library holds only a year, so writing it over `2020-01-28` lost the
+    month and day on every write-back."""
+    path = _epub(tmp_path, '<dc:title>T</dc:title><dc:date>2020-01-28</dc:date>')
+
+    _write(path, title="T", publish_year=2020)
+
+    assert _dc(path, "date") == ["2020-01-28"]
+
+
+def test_a_new_year_replaces_a_full_date(tmp_path):
+    path = _epub(tmp_path, '<dc:title>T</dc:title><dc:date>2020-01-28</dc:date>')
+
+    _write(path, title="T", publish_year=1999)
+
+    assert _dc(path, "date") == ["1999"]
+
+
 def test_an_element_whose_name_only_ends_the_same_is_not_a_match(tmp_path):
     path = _epub(tmp_path, '<dc:title>Old</dc:title><x:subtitle>Custom</x:subtitle>')
 
