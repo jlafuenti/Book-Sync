@@ -16,6 +16,19 @@ operator must do by hand rather than read about afterwards.
 
 ## [Unreleased]
 
+### Fixed
+
+- Applying a Google Books cover no longer saves Google's grey "image not available" placeholder
+  (#888). The search asks Google for its largest (`zoom=0`) rendition, and for some volumes that
+  answers with the placeholder PNG while the listed thumbnail is the real cover. Apply-cover now
+  falls back to the `zoom=1` thumbnail in that case, and refuses the placeholder (HTTP 422) when
+  no real cover exists, so the book keeps its current cover and stays on the missing-cover list.
+
+### Upgrade notes
+
+- Placeholder covers saved before this change stay in place. Re-apply a cover to fix them; the
+  placeholder is a 9,103-byte PNG.
+
 ## [0.12.0] - 2026-10-30
 
 ### Added

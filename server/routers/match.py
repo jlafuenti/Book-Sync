@@ -1,3 +1,4 @@
+import hashlib
 import html
 import logging
 import os
@@ -33,6 +34,22 @@ _COVER_EXT_BY_CONTENT_TYPE = {
     "image/webp": ".webp",
     "image/gif": ".gif",
 }
+
+# Google Books' grey "image not available" PNG, served with a 200 for a
+# volume that has no rendition at the requested zoom (issue #888).
+_PLACEHOLDER_COVER_MD5 = {"a64fa89d7ebc97075c1d363fc5fea71f"}
+
+
+def _is_placeholder_cover(url: str, content: bytes, content_type: str) -> bool:
+    """True for a stand-in image rather than a cover: the known placeholder
+    by hash, or any PNG from a Google Books front-cover URL (Google serves
+    real covers there as JPEG; the PNG is the placeholder)."""
+    if hashlib.md5(content).hexdigest() in _PLACEHOLDER_COVER_MD5:
+        return True
+    host = (httpx.URL(url).host or "").lower()
+    is_google_books = host == "books.google.com" or host.startswith("books.google.") or host.endswith(".googleusercontent.com")
+    return (is_google_books and "printsec=frontcover" in url
+            and content_type.split(";")[0].strip().lower() == "image/png")
 
 router = APIRouter(
     prefix="/match",
@@ -451,6 +468,19 @@ async def apply_remote_cover(
         raise HTTPException(status_code=404, detail="Book not found")
 
     content, content_type = await _fetch_cover_safely(req.cover_url)
+    if _is_placeholder_cover(req.cover_url, content, content_type) and "zoom=0" in req.cover_url:
+        # The search asks Google for zoom=0; when that rendition is missing,
+        # the zoom=1 thumbnail the volume listed is usually the real cover.
+        fallback_url = req.cover_url.replace("zoom=0", "zoom=1")
+        content, content_type = await _fetch_cover_safely(fallback_url)
+        if _is_placeholder_cover(fallback_url, content, content_type):
+            content = None
+    elif _is_placeholder_cover(req.cover_url, content, content_type):
+        content = None
+    if content is None:
+        # A 4xx, so a bulk cover pass moves on to another provider; the
+        # book keeps its current cover and stays on the missing-cover list.
+        raise HTTPException(status_code=422, detail="No cover image available at this URL")
 
     # Save the file
     covers_path = Path(settings.covers_dir)
