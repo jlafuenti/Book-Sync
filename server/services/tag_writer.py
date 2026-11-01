@@ -22,6 +22,7 @@ swallows everything and logs.
 
 import logging
 import os
+import re
 import shutil
 import tempfile
 import zipfile
@@ -38,7 +39,79 @@ import defusedxml.ElementTree as ET
 # two mix without ceremony. Issue #428.
 from xml.etree.ElementTree import SubElement, register_namespace
 
+from services.metadata_utils import normalize_author
+
 logger = logging.getLogger(__name__)
+
+_OPF_NS = "{http://www.idpf.org/2007/opf}"
+
+
+def _local_name(element) -> str:
+    return element.tag.rsplit('}', 1)[-1]
+
+
+def _refinements(metadata, prop) -> dict:
+    """{element id: value} from EPUB 3 `<meta refines="#id" property=prop>`."""
+    found = {}
+    for meta in metadata:
+        refines = meta.attrib.get('refines', '')
+        if _local_name(meta) == 'meta' and meta.attrib.get('property') == prop and refines.startswith('#'):
+            found.setdefault(refines[1:], (meta.text or '').strip().lower())
+    return found
+
+
+def _creator_roles(metadata, creators) -> list:
+    """The role of each creator, from opf:role or a refines meta; None if unstated."""
+    refined = _refinements(metadata, 'role')
+    return [
+        (c.attrib.get(f'{_OPF_NS}role') or refined.get(c.attrib.get('id')) or '').strip().lower() or None
+        for c in creators
+    ]
+
+
+def _primary_dc_element(metadata, tag_name, matches):
+    """The one element of a repeated Dublin Core kind that the library's value
+    belongs to, or None when there are only others (issue #889): a subtitle or
+    collection title, an illustrator or translator, a modification date."""
+    if tag_name == 'title':
+        kinds = _refinements(metadata, 'title-type')
+        marked = [kinds.get(c.attrib.get('id')) for c in matches]
+    elif tag_name == 'creator':
+        marked = ['main' if role == 'aut' else role for role in _creator_roles(metadata, matches)]
+    elif tag_name == 'date':
+        events = [(c.attrib.get(f'{_OPF_NS}event') or '').strip().lower() or None for c in matches]
+        marked = ['main' if event == 'publication' else event for event in events]
+    else:
+        return matches[0] if matches else None
+    for wanted in ('main', None):
+        for child, mark in zip(matches, marked):
+            if mark == wanted:
+                return child
+    return None
+
+
+def _remove_dc_element(metadata, element) -> None:
+    """Remove an element and the metas refining it, which would otherwise
+    dangle and fail EPUB validation."""
+    element_id = element.attrib.get('id')
+    metadata.remove(element)
+    if element_id:
+        for meta in list(metadata):
+            if _local_name(meta) == 'meta' and meta.attrib.get('refines') == f'#{element_id}':
+                metadata.remove(meta)
+
+
+def _drop_absorbed_co_authors(metadata, primary, creators, author) -> None:
+    """The library's author field can join several names. Any co-author it
+    names is now in the primary creator; keeping the element too would credit
+    them twice. Co-authors it doesn't name stay: the extractor reads only the
+    first creator, so a row often holds just that one."""
+    names = {name.strip().casefold() for name in re.split(r'[,;&]', author)}
+    if len(names) < 2:
+        return
+    for child, role in zip(creators, _creator_roles(metadata, creators)):
+        if child is not primary and role in (None, 'aut') and (child.text or '').strip().casefold() in names:
+            _remove_dc_element(metadata, child)
 
 
 def write_ebook_metadata(filepath: str, book) -> None:
@@ -114,23 +187,36 @@ def write_ebook_metadata(filepath: str, book) -> None:
         # Helper to set or add a DC tag
         def set_dc_tag(tag_name, value):
             if not value: return
-            found = False
-            for child in list(metadata):
-                if child.tag.endswith(tag_name):
-                    child.text = str(value)
-                    found = True
-            if not found:
-                el = SubElement(metadata, f"{{http://purl.org/dc/elements/1.1/}}{tag_name}")
-                el.text = str(value)
+            matches = [c for c in metadata if _local_name(c) == tag_name]
+            primary = _primary_dc_element(metadata, tag_name, matches)
+            if primary is None and tag_name == 'creator':
+                # An anthology may credit only editors, and the extractor reads
+                # the first one into the row: already credited, don't add it.
+                wanted = normalize_author(str(value))
+                primary = next((c for c in matches if normalize_author(c.text or '') == wanted), None)
+                if primary is not None:
+                    value = primary.text
+            if primary is None:
+                primary = SubElement(metadata, f"{{http://purl.org/dc/elements/1.1/}}{tag_name}")
+            primary.text = str(value)
+            # The extractor, like most readers, takes the first element of a
+            # kind; anywhere else, the next scan would read a different value.
+            if matches and primary is not matches[0]:
+                metadata.remove(primary)
+                metadata.insert(list(metadata).index(matches[0]), primary)
+            if tag_name == 'creator':
+                _drop_absorbed_co_authors(metadata, primary, matches, str(value))
 
         def clear_dc_tag(tag_name, value):
-            """Set DC tag when value is present; remove all matching tags when empty/None."""
+            """Set DC tag when value is present; remove all matching tags when
+            empty/None, since the extractor reads back any one left behind
+            (issue #526)."""
             if value:
                 set_dc_tag(tag_name, value)
             else:
                 for child in list(metadata):
-                    if child.tag.endswith(tag_name):
-                        metadata.remove(child)
+                    if _local_name(child) == tag_name:
+                        _remove_dc_element(metadata, child)
 
         set_dc_tag("title", book.title)
         set_dc_tag("creator", book.author)

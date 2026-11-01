@@ -16,6 +16,22 @@ operator must do by hand rather than read about afterwards.
 
 ## [Unreleased]
 
+### Fixed
+
+- Writing metadata back to an EPUB now changes only the primary `dc:title`, `dc:creator` and
+  `dc:date` instead of setting every repeated element to the same value (#889), so subtitles,
+  collection titles, co-authors, illustrators, translators and modification dates survive. Roles
+  and title types are read from both `opf:role`/`opf:event` attributes and EPUB 3 `refines` metas.
+  The written element moves to the front of its kind so a rescan reads the same value, and a file
+  with only secondary elements gains a new primary one. A co-author already named in a joined
+  author field is merged into the primary creator rather than credited twice, and removing an
+  element also removes the metas refining it.
+
+### Upgrade notes
+
+- EPUBs flattened by an earlier write-back are not repaired: the lost subtitles and credits are no
+  longer in the file. Replace the file from its source to get them back.
+
 ## [0.12.0] - 2026-10-30
 
 ### Added
