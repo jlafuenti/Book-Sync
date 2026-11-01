@@ -18,6 +18,21 @@ operator must do by hand rather than read about afterwards.
 
 ### Fixed
 
+- Writing metadata back to an MP3 or FLAC/Ogg audiobook no longer puts the series in the album
+  tag or the series index in the track number (#886). Readarr-style managers identify an
+  audiobook by its album, so after a pairing or a metadata edit their folder watcher re-linked
+  the file to another book in the same series, within about a minute and again on every later
+  write. The album is now the book's title, the series goes to grouping (`Series #N`) plus
+  `SERIES` / `SERIES-PART` tags (ID3 `TXXX` frames, Vorbis comments), as M4B files already had,
+  and the track number is left alone. Clearing a series now leaves the album in place for M4B
+  too. A rescan reads the explicit `SERIES` tag first and falls back to the album only when it
+  differs from the title, so a file written before this change keeps its series, and a file
+  whose album is simply its title no longer gets the title as its series.
+- Applying a Google Books cover no longer saves Google's grey "image not available" placeholder
+  (#888). The search asks Google for its largest (`zoom=0`) rendition, and for some volumes that
+  answers with the placeholder PNG while the listed thumbnail is the real cover. Apply-cover now
+  falls back to the `zoom=1` thumbnail in that case, and refuses the placeholder (HTTP 422) when
+  no real cover exists, so the book keeps its current cover and stays on the missing-cover list.
 - Writing metadata back to an EPUB now changes only the primary `dc:title`, `dc:creator` and
   `dc:date` instead of setting every repeated element to the same value (#889), so subtitles,
   collection titles, co-authors, illustrators, translators and modification dates survive. Roles
@@ -29,6 +44,11 @@ operator must do by hand rather than read about afterwards.
 
 ### Upgrade notes
 
+- Files written before this change keep the series in their album until Tandem writes their
+  tags again (a pairing or a metadata edit). Nothing rewrites them automatically, and books
+  another tool has already re-linked have to be fixed in that tool.
+- Placeholder covers saved before this change stay in place. Re-apply a cover to fix them; the
+  placeholder is a 9,103-byte PNG.
 - EPUBs flattened by an earlier write-back are not repaired: the lost subtitles and credits are no
   longer in the file. Replace the file from its source to get them back.
 
