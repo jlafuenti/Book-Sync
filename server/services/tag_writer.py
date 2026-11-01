@@ -193,6 +193,21 @@ def write_ebook_metadata(filepath: str, book) -> None:
         raise
 
 
+def _series_part(book) -> str:
+    """The series index as text: `3` for a whole number, `3.5` for a novella
+    between books, so a rescan reads back the same index."""
+    index = float(book.series_index)
+    return str(int(index)) if index.is_integer() else f"{index:g}"
+
+
+def _series_grouping(book) -> str:
+    """`Series #N`, or the bare name without an index: the grouping value
+    extract_metadata splits back into series and index."""
+    if book.series_index is None:
+        return book.series
+    return f"{book.series} #{_series_part(book)}"
+
+
 def write_audiobook_metadata(filepath: str, book) -> None:
     """
     Write metadata back to an audiobook file.
@@ -221,17 +236,17 @@ def write_audiobook_metadata(filepath: str, book) -> None:
             # so that clearing series actually takes effect on subsequent scans.
             if book.series is not None:
                 if book.series:
-                    grp = (f"{book.series} #{int(book.series_index)}"
-                           if book.series_index is not None else book.series)
-                    audio['\xa9grp'] = [grp]
+                    audio['\xa9grp'] = [_series_grouping(book)]
                     audio['----:com.apple.iTunes:SERIES'] = [book.series.encode('utf-8')]
                     if book.series_index is not None:
                         audio['----:com.apple.iTunes:SERIES-PART'] = [
-                            str(int(book.series_index)).encode('utf-8')
+                            _series_part(book).encode('utf-8')
                         ]
                 else:
-                    # Empty string = user cleared series; delete all series tags from file
-                    for tag in ('\xa9grp', '\xa9alb', '----:com.apple.iTunes:SERIES',
+                    # Empty string = user cleared series; delete the series tags.
+                    # Never ©alb: it is the book's title to Readarr-style tools
+                    # (#886), and extract_metadata does not read a series from it.
+                    for tag in ('\xa9grp', '----:com.apple.iTunes:SERIES',
                                 '----:com.apple.iTunes:SERIES-PART'):
                         if tag in audio:
                             del audio[tag]
@@ -253,20 +268,33 @@ def write_audiobook_metadata(filepath: str, book) -> None:
             if getattr(book, 'publish_year', None) is not None: audio['\xa9day'] = [str(book.publish_year)]
                 
         elif audio_type == 'MP3':
-            from mutagen.id3 import TIT2, TPE1, TALB, TRCK, COMM, TCON, TYER, TPUB
-            
+            from mutagen.id3 import TIT1, TIT2, TPE1, TALB, TXXX, COMM, TCON, TYER, TPUB
+
             if audio.tags is None:
                 audio.add_tags()
-            
-            if book.title is not None: audio.tags['TIT2'] = TIT2(encoding=3, text=book.title)
+
+            if book.title is not None:
+                audio.tags['TIT2'] = TIT2(encoding=3, text=book.title)
+                # The album is the book's title (#886): Readarr-style managers
+                # identify an audiobook by it, and a series here made their
+                # folder watcher re-link the file to another book in the
+                # series. Older write-backs put the series here, so this also
+                # moves it off.
+                audio.tags['TALB'] = TALB(encoding=3, text=book.title)
             if book.author is not None: audio.tags['TPE1'] = TPE1(encoding=3, text=book.author)
+            # Series in grouping plus explicit SERIES / SERIES-PART frames, as the
+            # MP4 branch does. The track number is left alone: it is not the
+            # series index.
             if book.series is not None:
+                for key in ('TIT1', 'TXXX:SERIES', 'TXXX:SERIES-PART'):
+                    if key in audio.tags:
+                        del audio.tags[key]
                 if book.series:
-                    audio.tags['TALB'] = TALB(encoding=3, text=book.series)
-                elif 'TALB' in audio.tags:
-                    del audio.tags['TALB']
-            if book.series_index is not None:
-                audio.tags['TRCK'] = TRCK(encoding=3, text=str(int(book.series_index)))
+                    audio.tags['TIT1'] = TIT1(encoding=3, text=_series_grouping(book))
+                    audio.tags.add(TXXX(encoding=3, desc='SERIES', text=book.series))
+                    if book.series_index is not None:
+                        audio.tags.add(TXXX(encoding=3, desc='SERIES-PART',
+                                            text=_series_part(book)))
             if book.description:
                 # extract_metadata takes the first COMM* frame it finds, so a
                 # ripper's `COMM::eng` left beside the new frame could still be
@@ -296,15 +324,19 @@ def write_audiobook_metadata(filepath: str, book) -> None:
                 
         elif audio_type in ('FLAC', 'OggVorbis', 'OggOpus'):
             # Vorbis comments
-            if book.title is not None: audio['title'] = [book.title]
+            if book.title is not None:
+                audio['title'] = [book.title]
+                audio['album'] = [book.title]   # the book's title, not the series (#886)
             if book.author is not None: audio['artist'] = [book.author]
             if book.series is not None:
+                for tag in ('grouping', 'series', 'series-part'):
+                    if tag in audio:
+                        del audio[tag]
                 if book.series:
-                    audio['album'] = [book.series]
-                elif 'album' in audio:
-                    del audio['album']
-            if book.series_index is not None:
-                audio['tracknumber'] = [str(int(book.series_index))]
+                    audio['grouping'] = [_series_grouping(book)]
+                    audio['series'] = [book.series]
+                    if book.series_index is not None:
+                        audio['series-part'] = [_series_part(book)]
             if book.description:
                 audio['description'] = [book.description]
             else:
