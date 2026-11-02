@@ -2,6 +2,9 @@ import React, { useState } from 'react';
 import { uploadEbookCover, uploadAudiobookCover, applyRemoteCover, rescanBook, enrichAudiobookFromAbs } from '../api';
 import ChapterEditor from './ChapterEditor';
 import MatchTab from './MatchTab';
+import SeriesListEditor from './SeriesListEditor';
+import { cleanSeriesList } from '../lib/series';
+import useKnownSeries from '../lib/useKnownSeries';
 import { formatDateTime } from '../lib/datetime';
 import Modal from './Modal';
 
@@ -41,8 +44,8 @@ export default function EnhancedMetadataModal({ book, type, onClose, onSave, ini
     const [formData, setFormData] = useState({
         title: book.title || '',
         author: book.author || '',
-        series: book.series || '',
-        series_index: book.series_index || '',
+        // Issue #907: the whole list, entry 0 being the primary series.
+        series_list: (book.series_list || []).map(e => ({ name: e.name, index: e.index ?? null })),
         description: book.description || '',
         publisher: book.publisher || '',
         publish_year: book.publish_year || '',
@@ -64,6 +67,9 @@ export default function EnhancedMetadataModal({ book, type, onClose, onSave, ini
     const [coverPreview, setCoverPreview] = useState(book.cover_path || null);
     const [remoteCoverUrl, setRemoteCoverUrl] = useState(null); // Track if a matched cover needs to be downloaded
 
+    // Series names already in the library, suggested as a series is typed.
+    const knownSeries = useKnownSeries();
+
     const handleChange = (e) => {
         const { name, value, type: inputType, checked } = e.target;
         setFormData(prev => ({
@@ -82,8 +88,9 @@ export default function EnhancedMetadataModal({ book, type, onClose, onSave, ini
                 ...prev,
                 title: updated.title || prev.title,
                 author: updated.author || prev.author,
-                series: updated.series || prev.series,
-                series_index: updated.series_index ?? prev.series_index,
+                series_list: updated.series_list?.length
+                    ? updated.series_list.map(e => ({ name: e.name, index: e.index ?? null }))
+                    : prev.series_list,
                 description: updated.description || prev.description,
                 publisher: updated.publisher || prev.publisher,
                 publish_year: updated.publish_year || prev.publish_year,
@@ -128,10 +135,9 @@ export default function EnhancedMetadataModal({ book, type, onClose, onSave, ini
             await onSave(book.id, {
                 title: formData.title,
                 author: formData.author,
-                // If user cleared a previously-set series, send "" so the backend
-                // knows to explicitly clear it (null = "don't change", "" = "clear").
-                series: formData.series || (book.series ? '' : null),
-                series_index: formData.series_index ? parseFloat(formData.series_index) : null,
+                // Always the whole list: [] clears it, and the server only marks
+                // the series "cleared" when this actually removed one.
+                series_list: cleanSeriesList(formData.series_list),
                 description: formData.description || null,
                 publisher: formData.publisher || null,
                 publish_year: formData.publish_year ? parseInt(formData.publish_year, 10) : null,
@@ -256,13 +262,13 @@ export default function EnhancedMetadataModal({ book, type, onClose, onSave, ini
                                     <textarea className="form-input" name="description" value={formData.description} onChange={handleChange} rows="4"></textarea>
                                 </div>
 
-                                <div className="form-group">
+                                <div className="form-group span-2">
                                     <label>Series</label>
-                                    <input className="form-input" name="series" value={formData.series} onChange={handleChange} />
-                                </div>
-                                <div className="form-group">
-                                    <label>Series Index</label>
-                                    <input className="form-input" type="number" step="0.1" name="series_index" value={formData.series_index} onChange={handleChange} />
+                                    <SeriesListEditor
+                                        value={formData.series_list}
+                                        suggestions={knownSeries}
+                                        onChange={(series_list) => setFormData(prev => ({ ...prev, series_list }))}
+                                    />
                                 </div>
 
                                 <div className="form-group">

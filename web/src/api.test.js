@@ -2258,3 +2258,29 @@ describe('sync-map rebuild (issue #774)', () => {
         expect(second.message).toBe('Failed to cancel the sync-map rebuild')
     })
 })
+
+// Issue #907: a book's series travel as a list. The metadata PATCH body carries
+// `series_list` (replace) or `series_add` (append) and no scalar series keys.
+describe('metadata PATCH series body (issue #907)', () => {
+    it.each([
+        ['updateEbookMetadata', '/api/library/ebooks/5'],
+        ['updateAudiobookMetadata', '/api/library/audiobooks/5'],
+    ])('%s sends series_list and series_add as given', async (fn, url) => {
+        localStorage.setItem('tandem_token', 'access-1')
+        const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => ({ id: 5 }) })
+        vi.stubGlobal('fetch', fetchMock)
+        const api = await import('./api')
+
+        await api[fn](5, { series_list: [{ name: 'Axis Saga', index: 4 }, { name: 'Axis Chronological', index: null }] })
+        await api[fn](5, { series_list: [] })
+        await api[fn](5, { series_add: [{ name: 'Axis Chronological', index: 2 }] })
+
+        const bodies = fetchMock.mock.calls.map(c => JSON.parse(c[1].body))
+        expect(fetchMock.mock.calls.every(c => c[0] === url && c[1].method === 'PATCH')).toBe(true)
+        expect(bodies).toEqual([
+            { series_list: [{ name: 'Axis Saga', index: 4 }, { name: 'Axis Chronological', index: null }] },
+            { series_list: [] },
+            { series_add: [{ name: 'Axis Chronological', index: 2 }] },
+        ])
+    })
+})

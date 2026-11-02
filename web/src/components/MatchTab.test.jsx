@@ -17,8 +17,7 @@ function fullResult(overrides = {}) {
         id: 'B002UZKL8W',
         title: 'The Name of the Wind',
         author: 'Patrick Rothfuss',
-        series: 'The Kingkiller Chronicle',
-        series_index: 1,
+        series_list: [{ name: 'The Kingkiller Chronicle', index: 1 }],
         publisher: 'Audible Studios',
         publish_year: 2009,
         description: 'Told in Kvothe\'s own voice, this is the tale.',
@@ -114,8 +113,9 @@ describe('MatchTab compare view', () => {
 
     it('renders series, genres, tags, narrators rows in the compare table', async () => {
         await searchAndSelect()
-        expect(screen.getByText('series index')).toBeInTheDocument()
-        expect(screen.getByText('The Kingkiller Chronicle')).toBeInTheDocument()
+        expect(screen.getByText('Series')).toBeInTheDocument()
+        expect(screen.queryByText('series index')).toBeNull()
+        expect(screen.getByText('The Kingkiller Chronicle #1')).toBeInTheDocument()
         expect(screen.getByText('Fantasy, Epic')).toBeInTheDocument()
         expect(screen.getByText('Nick Podehl')).toBeInTheDocument()
         expect(screen.getByText('English')).toBeInTheDocument()
@@ -134,8 +134,9 @@ describe('MatchTab compare view', () => {
         await waitFor(() => expect(onApply).toHaveBeenCalled())
         const payload = onApply.mock.calls[0][0]
         // Missing locally -> auto-checked and applied.
-        expect(payload.series).toBe('The Kingkiller Chronicle')
-        expect(payload.series_index).toBe(1)
+        expect(payload.series_list).toEqual([{ name: 'The Kingkiller Chronicle', index: 1 }])
+        expect(payload.series).toBeUndefined()
+        expect(payload.series_index).toBeUndefined()
         expect(payload.genres).toBe('Fantasy, Epic')
         expect(payload.tags).toBe('Magic')
         expect(payload.narrators).toBe('Nick Podehl')
@@ -148,7 +149,7 @@ describe('MatchTab compare view', () => {
     })
 
     it('does not offer fields the result lacks', async () => {
-        searchMetadataMock.mockResolvedValue([fullResult({ series: null, series_index: null })])
+        searchMetadataMock.mockResolvedValue([fullResult({ series_list: [] })])
         const onApply = vi.fn()
         render(<MatchTab currentData={{}} onApply={onApply} />)
         const inputs = screen.getAllByRole('textbox')
@@ -159,8 +160,62 @@ describe('MatchTab compare view', () => {
         fireEvent.click(screen.getByRole('button', { name: 'Apply Selected' }))
         await waitFor(() => expect(onApply).toHaveBeenCalled())
         const payload = onApply.mock.calls[0][0]
-        expect(payload.series).toBeUndefined()
-        expect(payload.series_index).toBeUndefined()
+        expect(payload.series_list).toBeUndefined()
+    })
+})
+
+// Issue #907: a result can carry several series. The compare row and the result
+// card show the whole list, and applying it replaces the local list.
+describe('MatchTab series list (issue #907)', () => {
+    const TWO = [{ name: 'Axis Saga', index: 4 }, { name: 'Axis Chronological', index: 2 }]
+
+    async function searchAndSelectWith(currentData, onApply = vi.fn()) {
+        searchMetadataMock.mockResolvedValue([fullResult({ series_list: TWO })])
+        render(<MatchTab currentData={currentData} onApply={onApply} />)
+        fireEvent.change(screen.getAllByRole('textbox')[0], { target: { value: 'axis' } })
+        fireEvent.click(screen.getByRole('button', { name: 'Search' }))
+        return onApply
+    }
+
+    it('shows every series on the result card', async () => {
+        await searchAndSelectWith({})
+        expect(await screen.findByText('Axis Saga #4; Axis Chronological #2')).toBeInTheDocument()
+    })
+
+    it('compares the whole local list with the whole remote list', async () => {
+        await searchAndSelectWith({ series_list: [{ name: 'Axis Saga', index: '4' }] })
+        fireEvent.click(await screen.findByRole('button', { name: 'Select' }))
+
+        // local on the left, remote on the right
+        expect(screen.getByText('Axis Saga #4')).toBeInTheDocument()
+        expect(screen.getAllByText('Axis Saga #4; Axis Chronological #2').length).toBeGreaterThan(0)
+    })
+
+    it('ticks the series row when the book has none, and applies the remote list', async () => {
+        const onApply = await searchAndSelectWith({ series_list: [] })
+        fireEvent.click(await screen.findByRole('button', { name: 'Select' }))
+        fireEvent.click(screen.getByRole('button', { name: 'Apply Selected' }))
+
+        await waitFor(() => expect(onApply).toHaveBeenCalled())
+        expect(onApply.mock.calls[0][0].series_list).toEqual(TWO)
+    })
+
+    it('treats a list of blank rows as no series', async () => {
+        const onApply = await searchAndSelectWith({ series_list: [{ name: '  ', index: null }] })
+        fireEvent.click(await screen.findByRole('button', { name: 'Select' }))
+        fireEvent.click(screen.getByRole('button', { name: 'Apply Selected' }))
+
+        await waitFor(() => expect(onApply).toHaveBeenCalled())
+        expect(onApply.mock.calls[0][0].series_list).toEqual(TWO)
+    })
+
+    it('leaves the series row unticked when the book already has a series', async () => {
+        const onApply = await searchAndSelectWith({ series_list: [{ name: 'Own Series', index: null }] })
+        fireEvent.click(await screen.findByRole('button', { name: 'Select' }))
+        fireEvent.click(screen.getByRole('button', { name: 'Apply Selected' }))
+
+        await waitFor(() => expect(onApply).toHaveBeenCalled())
+        expect(onApply.mock.calls[0][0].series_list).toBeUndefined()
     })
 })
 

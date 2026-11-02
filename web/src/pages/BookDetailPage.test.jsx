@@ -454,7 +454,7 @@ describe('BookDetailPage series link (issue #717)', () => {
         // the Android app's link opens.
         getAudiobookMock.mockResolvedValue({
             id: 1538, title: 'A Test Book', author: 'An Author', cover_path: null,
-            series: 'Axis & Test #Saga', series_index: 3,
+            series_list: [{ name: 'Axis & Test #Saga', index: 3 }],
         })
         renderPage()
 
@@ -464,6 +464,48 @@ describe('BookDetailPage series link (issue #717)', () => {
         expect(href.searchParams.get('series')).toBe('Axis & Test #Saga')
         expect(link.textContent).not.toMatch(/Book 3/)
         expect(screen.getByText(/· Book 3/)).toBeInTheDocument()
+    })
+
+    // Issue #907: one link per series, in order, each with its own book number.
+    it('links every series, in order, each with its own book number', async () => {
+        getAudiobookMock.mockResolvedValue({
+            id: 1538, title: 'A Test Book', author: 'An Author', cover_path: null,
+            series_list: [{ name: 'Axis Saga', index: 4 }, { name: 'Axis Chronological', index: 2.5 }, { name: 'Bare Series', index: null }],
+        })
+        renderPage()
+
+        await screen.findAllByText('A Test Book')
+        const hero = document.querySelector('.book-detail-series')
+        const links = [...hero.querySelectorAll('a')]
+        expect(links.map(a => a.textContent)).toEqual(['Axis Saga', 'Axis Chronological', 'Bare Series'])
+        expect(links.map(a => new URL(a.getAttribute('href'), 'http://localhost').searchParams.get('series')))
+            .toEqual(['Axis Saga', 'Axis Chronological', 'Bare Series'])
+        expect(hero.textContent).toBe('Axis Saga \u00b7 Book 4; Axis Chronological \u00b7 Book 2.5; Bare Series')
+    })
+
+    it('the metadata row lists every series in the canonical form', async () => {
+        getAudiobookMock.mockResolvedValue({
+            id: 1538, title: 'A Test Book', author: 'An Author', cover_path: null,
+            series_list: [{ name: 'Axis Saga', index: 4 }, { name: 'Axis Chronological', index: 2 }],
+        })
+        renderPage()
+
+        expect(await screen.findByText('Axis Saga #4; Axis Chronological #2')).toBeInTheDocument()
+    })
+
+    it('adds the paired book\'s series the viewed book lacks', async () => {
+        getAudiobookMock.mockResolvedValue({
+            id: 1538, title: 'A Test Book', author: 'An Author', cover_path: null,
+            series_list: [{ name: 'Axis Chronological', index: 2 }],
+            pair_id: 7, pair_status: 'synced',
+            paired_with: { id: 44, title: 'A Test Book', author: 'An Author', series_list: [{ name: 'Axis Saga', index: 4 }, { name: 'axis chronological', index: 9 }] },
+        })
+        renderPage()
+
+        await screen.findAllByText('A Test Book')
+        const links = [...document.querySelectorAll('.book-detail-series a')].map(a => a.textContent)
+        // an audiobook's page lists the ebook's series first, the ebook's spelling winning (the pair rule)
+        expect(links).toEqual(['Axis Saga', 'axis chronological'])
     })
 
     it('shows no series link for a book without a series', async () => {

@@ -1,25 +1,35 @@
 import React, { useState, useEffect, useMemo } from 'react'
 import { getUnpairedMedia, createPair } from '../api'
 import CoverImg from '../components/CoverImg'
+import { seriesLabel, seriesNames, hasSeries } from '../lib/series'
 
 function matchesFilters(item, text, author, series) {
     if (author && item.author !== author) return false
-    if (series && item.series !== series) return false
+    if (series && !hasSeries(item.series_list, series)) return false
     if (text) {
         const term = text.toLowerCase()
         if (
             !item.title?.toLowerCase().includes(term) &&
             !item.author?.toLowerCase().includes(term) &&
-            !item.series?.toLowerCase().includes(term)
+            !seriesNames(item.series_list).some(n => n.toLowerCase().includes(term))
         ) return false
     }
     return true
 }
 
-function uniqueSorted(items, field) {
-    return [...new Set(items.map(i => i[field]).filter(Boolean))].sort((a, b) =>
+function sortedUnique(values) {
+    return [...new Set(values.filter(Boolean))].sort((a, b) =>
         a.localeCompare(b, undefined, { sensitivity: 'base' })
     )
+}
+
+function uniqueSorted(items, field) {
+    return sortedUnique(items.map(i => i[field]))
+}
+
+// Every series any of the books is in (issue #907), not just the first.
+function uniqueSeries(items) {
+    return sortedUnique(items.flatMap(i => seriesNames(i.series_list)))
 }
 
 function FilterBar({ text, onText, author, onAuthor, series, onSeries, authors, seriesList, textPlaceholder, onClear }) {
@@ -69,10 +79,8 @@ export function BookRow({ item, selected, onSelect }) {
             <div className="unpaired-row-info">
                 <div className="unpaired-row-title">{item.title || item.filename}</div>
                 {item.author && <div className="unpaired-row-author">{item.author}</div>}
-                {item.series && (
-                    <div className="unpaired-row-series">
-                        {item.series}{item.series_index != null ? ` #${item.series_index}` : ''}
-                    </div>
+                {item.series_list?.length > 0 && (
+                    <div className="unpaired-row-series">{seriesLabel(item.series_list)}</div>
                 )}
             </div>
             <span className="badge">{item.format?.toUpperCase()}</span>
@@ -126,11 +134,11 @@ export default function UnpairedPage() {
 
     // Dropdown option lists — derived from all unpaired items (not filtered), so options don't disappear while filtering
     const globalAuthors = useMemo(() => uniqueSorted([...unpairedEbooks, ...unpairedAudiobooks], 'author'), [unpairedEbooks, unpairedAudiobooks])
-    const globalSeriesList = useMemo(() => uniqueSorted([...unpairedEbooks, ...unpairedAudiobooks], 'series'), [unpairedEbooks, unpairedAudiobooks])
+    const globalSeriesList = useMemo(() => uniqueSeries([...unpairedEbooks, ...unpairedAudiobooks]), [unpairedEbooks, unpairedAudiobooks])
     const ebookAuthors = useMemo(() => uniqueSorted(unpairedEbooks, 'author'), [unpairedEbooks])
-    const ebookSeriesList = useMemo(() => uniqueSorted(unpairedEbooks, 'series'), [unpairedEbooks])
+    const ebookSeriesList = useMemo(() => uniqueSeries(unpairedEbooks), [unpairedEbooks])
     const audiobookAuthors = useMemo(() => uniqueSorted(unpairedAudiobooks, 'author'), [unpairedAudiobooks])
-    const audiobookSeriesList = useMemo(() => uniqueSorted(unpairedAudiobooks, 'series'), [unpairedAudiobooks])
+    const audiobookSeriesList = useMemo(() => uniqueSeries(unpairedAudiobooks), [unpairedAudiobooks])
 
     const visibleEbooks = useMemo(() =>
         unpairedEbooks

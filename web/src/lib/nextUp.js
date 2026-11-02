@@ -1,4 +1,5 @@
 import { parseServerDate } from './datetime'
+import { seriesOf } from './series'
 
 /** How long a series stays in Next up after its last activity (owner's call, #716). */
 export const NEXT_UP_WINDOW_DAYS = 90
@@ -102,8 +103,8 @@ export function computeNextUp(books, activity, now) {
 /**
  * The web's raw library, reduced to [computeNextUp]'s inputs.
  *
- * A pair becomes one book, `pair_N`, taking its series and number from the
- * ebook (falling back to the audiobook), and opening on the ebook's page, which
+ * A pair becomes one book, `pair_N`, taking its series from both halves (the
+ * ebook's first, issue #907), and opening on the ebook's page, which
  * shows the pairing. Books in no pair keep their own key.
  *
  * Progress counts as activity only when it is real: a finished book, or one
@@ -117,15 +118,20 @@ export function libraryToNextUpInput({ ebooks, audiobooks, pairs, progress }) {
     const audiobookToPair = new Map()
     const books = []
 
+    // One entry per series membership, primary first (same key, so the Next-up
+    // dedupe can tell it is one book). A book in no series is one seriesless entry.
+    const addBook = (list, book) => {
+        const entries = list.length ? list : [{ name: null, index: null }]
+        for (const e of entries) books.push({ ...book, series: e.name || null, index: e.index ?? null })
+    }
+
     for (const pair of pairs) {
         const eb = pair.ebook
         const ab = pair.audiobook
         if (eb?.id) ebookToPair.set(eb.id, pair.id)
         if (ab?.id) audiobookToPair.set(ab.id, pair.id)
-        books.push({
+        addBook(seriesOf({ ebook: eb, audiobook: ab }), {
             key: `pair_${pair.id}`,
-            series: eb?.series || ab?.series || null,
-            index: eb?.series_index ?? ab?.series_index ?? null,
             title: eb?.title || ab?.title,
             author: eb?.author || ab?.author,
             coverPath: eb?.cover_path || ab?.cover_path || null,
@@ -135,16 +141,16 @@ export function libraryToNextUpInput({ ebooks, audiobooks, pairs, progress }) {
     }
     for (const eb of ebooks) {
         if (ebookToPair.has(eb.id)) continue
-        books.push({
-            key: `ebook_${eb.id}`, series: eb.series || null, index: eb.series_index ?? null,
+        addBook(seriesOf(eb), {
+            key: `ebook_${eb.id}`,
             title: eb.title, author: eb.author, coverPath: eb.cover_path || null,
             detailType: 'ebook', detailId: eb.id,
         })
     }
     for (const ab of audiobooks) {
         if (audiobookToPair.has(ab.id)) continue
-        books.push({
-            key: `audiobook_${ab.id}`, series: ab.series || null, index: ab.series_index ?? null,
+        addBook(seriesOf(ab), {
+            key: `audiobook_${ab.id}`,
             title: ab.title, author: ab.author, coverPath: ab.cover_path || null,
             detailType: 'audiobook', detailId: ab.id,
         })

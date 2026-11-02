@@ -11,6 +11,7 @@ import FilterPill from '../components/FilterPill'
 import CoverImg from '../components/CoverImg'
 import BulkMetadataEditModal from '../components/BulkMetadataEditModal'
 import { TourAnchors, TourScreens, useTourAnchor, useTourScreen } from '../tour/anchors'
+import { seriesOf, groupBySeries } from '../lib/series'
 import './SeriesPage.css'
 
 const SORT_LABELS = { name: 'Name', count: 'Book Count', recent: 'Recently Added' }
@@ -102,8 +103,7 @@ export default function SeriesPage() {
                 type: 'pair',
                 title: p.ebook.title,
                 author: p.ebook.author || p.audiobook.author,
-                series: p.ebook.series || p.audiobook.series,
-                seriesIndex: p.ebook.series_index ?? p.audiobook.series_index,
+                seriesList: seriesOf({ ebook: p.ebook, audiobook: p.audiobook }),
                 cover_path: p.ebook.cover_path || p.audiobook.cover_path,
                 hasEbook: true,
                 hasAudiobook: true,
@@ -120,8 +120,7 @@ export default function SeriesPage() {
                 type: 'ebook',
                 title: e.title,
                 author: e.author,
-                series: e.series,
-                seriesIndex: e.series_index,
+                seriesList: seriesOf(e),
                 cover_path: e.cover_path,
                 hasEbook: true,
                 hasAudiobook: false,
@@ -136,8 +135,7 @@ export default function SeriesPage() {
                 type: 'audiobook',
                 title: a.title,
                 author: a.author,
-                series: a.series,
-                seriesIndex: a.series_index,
+                seriesList: seriesOf(a),
                 cover_path: a.cover_path,
                 hasEbook: false,
                 hasAudiobook: true,
@@ -146,37 +144,25 @@ export default function SeriesPage() {
             })
         })
 
-        const groups = {}
-        const unsorted = []
-
-        allItems.forEach(item => {
-            if (item.series) {
-                if (!groups[item.series]) {
-                    groups[item.series] = {
-                        name: item.series,
-                        author: item.author,
-                        items: [],
-                        latestUpload: item.uploadedAt,
-                        covers: [],
-                    }
-                }
-                const g = groups[item.series]
-                g.items.push(item)
+        // A book lands in every series it is in (issue #907), carrying that
+        // series' number as `seriesIndex`; the same `key` can therefore appear in
+        // several groups.
+        const groups = groupBySeries(allItems, item => item.seriesList).map(({ name, entries }) => {
+            const g = { name, author: entries[0].item.author, items: [], latestUpload: entries[0].item.uploadedAt, covers: [] }
+            entries.forEach(({ item, index }) => {
+                g.items.push({ ...item, seriesIndex: index })
                 if (item.uploadedAt > g.latestUpload) g.latestUpload = item.uploadedAt
                 if (!g.author && item.author) g.author = item.author
                 if (item.cover_path && g.covers.length < 4 && !g.covers.includes(item.cover_path)) {
                     g.covers.push(item.cover_path)
                 }
-            } else {
-                unsorted.push(item)
-            }
-        })
-
-        Object.values(groups).forEach(g => {
+            })
             g.items.sort((a, b) => (a.seriesIndex ?? 999) - (b.seriesIndex ?? 999))
+            return g
         })
+        const unsorted = allItems.filter(item => item.seriesList.length === 0)
 
-        return { seriesGroups: Object.values(groups), unseriedItems: unsorted }
+        return { seriesGroups: groups, unseriedItems: unsorted }
     }, [ebooks, audiobooks, pairs])
 
     // The walkthrough's `series_groups` step (issue #598 Track B): present
@@ -284,9 +270,10 @@ export default function SeriesPage() {
     }
 
     const allVisibleItems = useMemo(() => {
-        const items = []
-        filteredSeries.forEach(g => g.items.forEach(i => items.push(i)))
-        return items
+        // A book in two visible series is one item (issue #907).
+        const byKey = new Map()
+        filteredSeries.forEach(g => g.items.forEach(i => { if (!byKey.has(i.key)) byKey.set(i.key, i) }))
+        return [...byKey.values()]
     }, [filteredSeries])
 
     async function handleBulkEdit(patch) {

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { toDisplayEntry, entryKey, groupProgressByPair, patchMedia } from './libraryItems'
+import { toDisplayEntry, entryKey, groupProgressByPair, patchMedia, localPatch } from './libraryItems'
 import { pairTargetPath } from '../utils/pairRouting'
 
 // Issue #120: LibraryPage renders `LibraryItem`s from /api/library/items.
@@ -7,11 +7,28 @@ import { pairTargetPath } from '../utils/pairRouting'
 // selection and bulk code already consumed when the page assembled the list
 // itself — so the render side of the page did not have to change.
 
-const ebook = { id: 10, title: 'Ship of Magic', author: 'Robin Hobb', series: 'Liveship', series_index: 1,
+const ebook = { id: 10, title: 'Ship of Magic', author: 'Robin Hobb', series_list: [{ name: 'Liveship', index: 1 }],
     cover_path: '/api/files/covers/ebook_10.jpg', uploaded_at: '2026-01-01T00:00:00Z', file_size: 100, format: 'epub' }
-const audiobook = { id: 20, title: 'Ship of Magic (audio)', author: 'R. Hobb', series: null, series_index: null,
+const audiobook = { id: 20, title: 'Ship of Magic (audio)', author: 'R. Hobb', series_list: [{ name: 'Axis Chronological', index: 3 }],
     cover_path: '/api/files/covers/audiobook_20.jpg', uploaded_at: '2026-02-01T00:00:00Z', file_size: 1000, format: 'm4b' }
 const pair = { id: 7, ebook, audiobook, status: 'synced', acknowledged: true }
+
+describe('localPatch (issue #907)', () => {
+    it('passes an ordinary patch through unchanged', () => {
+        const patch = { author: 'A', series_list: [{ name: 'Axis Saga', index: 1 }] }
+        expect(localPatch(patch, { id: 1 })).toEqual(patch)
+    })
+
+    it('turns series_add into the series_list the server answered with', () => {
+        const answer = { id: 1, series_list: [{ name: 'Axis Saga', index: 4 }, { name: 'Axis Chronological', index: 2 }] }
+        expect(localPatch({ author: 'A', series_add: [{ name: 'Axis Chronological', index: 2 }] }, answer))
+            .toEqual({ author: 'A', series_list: answer.series_list })
+    })
+
+    it('drops series_add when the answer has no list, rather than storing the request', () => {
+        expect(localPatch({ series_add: [{ name: 'X', index: null }] }, undefined)).toEqual({})
+    })
+})
 
 describe('toDisplayEntry', () => {
     it('a pair is one entry, ebook-primary, carrying both ids and the raw pair', () => {
@@ -24,17 +41,19 @@ describe('toDisplayEntry', () => {
         expect(e.audiobook_id).toBe(20)
         expect(e.title).toBe('Ship of Magic')
         expect(e.author).toBe('Robin Hobb')
-        expect(e.series).toBe('Liveship')
+        // the pair rule: the ebook's series first, then the audiobook's names it lacks
+        expect(e.series_list).toEqual([{ name: 'Liveship', index: 1 }, { name: 'Axis Chronological', index: 3 }])
         expect(e.cover_path).toBe('/api/files/covers/ebook_10.jpg')
         expect(e.pair).toBe(pair)
         expect(e.lastFormat).toBeNull()
     })
 
     it('a pair falls back to the audiobook for fields the ebook lacks', () => {
-        const bare = { ...ebook, cover_path: null, author: null, series: null }
+        const bare = { ...ebook, cover_path: null, author: null, series_list: [] }
         const e = toDisplayEntry({ kind: 'pair', pair: { ...pair, ebook: bare } }, {})
         expect(e.cover_path).toBe('/api/files/covers/audiobook_20.jpg')
         expect(e.author).toBe('R. Hobb')
+        expect(e.series_list).toEqual([{ name: 'Axis Chronological', index: 3 }])
     })
 
     // Issue #215: the routing key is `bookmarks.source`, projected onto both
@@ -112,8 +131,8 @@ describe('patchMedia', () => {
     })
 
     it('patches a standalone medium', () => {
-        const out = patchMedia(items, 'audiobook', 21, { series: 'Liveship' })
-        expect(out[2].audiobook.series).toBe('Liveship')
+        const out = patchMedia(items, 'audiobook', 21, { series_list: [{ name: 'Liveship', index: 2 }] })
+        expect(out[2].audiobook.series_list).toEqual([{ name: 'Liveship', index: 2 }])
     })
 })
 

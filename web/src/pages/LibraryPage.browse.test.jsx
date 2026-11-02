@@ -62,11 +62,11 @@ const { isMobileMock } = vi.hoisted(() => ({ isMobileMock: vi.fn(() => false) })
 vi.mock('../hooks/useIsMobile', () => ({ default: () => isMobileMock() }))
 
 const ebook = (id, extra = {}) => ({
-    id, title: `Ebook ${id}`, author: 'Author A', series: null, series_index: null, format: 'epub',
+    id, title: `Ebook ${id}`, author: 'Author A', series_list: [], format: 'epub',
     cover_path: null, uploaded_at: '2026-01-01T00:00:00Z', file_size: 100, acknowledged: true, ...extra,
 })
 const audiobook = (id, extra = {}) => ({
-    id, title: `Audio ${id}`, author: 'Author B', series: null, series_index: null, format: 'm4b',
+    id, title: `Audio ${id}`, author: 'Author B', series_list: [], format: 'm4b',
     cover_path: null, uploaded_at: '2026-01-01T00:00:00Z', file_size: 1000, acknowledged: true, ...extra,
 })
 const pairItem = (pid, eid, aid) => ({
@@ -363,6 +363,32 @@ describe('LibraryPage delete confirmations are dialogs (issue #279)', () => {
         await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
     })
 
+    // Issue #907: "Add to series" sends series_add, and the cards show what the
+    // server answered with, not the request.
+    it('bulk "Add to series" refreshes the cards from the server\'s series_list', async () => {
+        getLibraryItemsPageMock.mockResolvedValue(pageOf([
+            ebookItem(3, { series_list: [{ name: 'Axis Saga', index: 4 }] }),
+        ], 1))
+        updateEbookMetadataMock.mockImplementation(async (id) => ({
+            id, series_list: [{ name: 'Axis Saga', index: 4 }, { name: 'Axis Chronological', index: 2 }],
+        }))
+        renderPage()
+        await screen.findByText('Ebook 3')
+        expect(document.querySelector('.lib-book-card-series').textContent).toBe('Axis Saga #4')
+
+        fireEvent.click(screen.getByRole('button', { name: 'Select' }))
+        fireEvent.click(screen.getByText('Ebook 3'))
+        fireEvent.click(await screen.findByRole('button', { name: 'Edit Metadata' }))
+        fireEvent.click(screen.getByRole('radio', { name: 'Add to series' }))
+        const [, name, index] = screen.getAllByPlaceholderText('Leave blank to keep unchanged')
+        fireEvent.change(name, { target: { value: 'Axis Chronological' } })
+        fireEvent.change(index, { target: { value: '2' } })
+        fireEvent.click(screen.getByRole('button', { name: 'Save to 1 Item' }))
+
+        await waitFor(() => expect(updateEbookMetadataMock).toHaveBeenCalledWith(3, { series_add: [{ name: 'Axis Chronological', index: 2 }] }))
+        await waitFor(() => expect(document.querySelector('.lib-book-card-series').textContent).toBe('Axis Saga #4 +1'))
+    })
+
     it('the bulk confirmation counts the selection and takes Escape', async () => {
         getLibraryItemsPageMock.mockResolvedValue(pageOf([ebookItem(3), audioItem(4)], 2))
         renderPage()
@@ -378,5 +404,52 @@ describe('LibraryPage delete confirmations are dialogs (issue #279)', () => {
 
         fireEvent.keyDown(document, { key: 'Escape' })
         expect(screen.queryByRole('dialog')).toBeNull()
+    })
+})
+
+// Issue #907: a book can be in several series. Cards and rows show the primary
+// one with "+N" for the rest; a pair's series are its ebook's, then any the
+// audiobook adds.
+describe('LibraryPage series label (issue #907)', () => {
+    const TWO = [{ name: 'Axis Saga', index: 4 }, { name: 'Axis Chronological', index: 2 }]
+
+    it('a card shows the primary series and +N for the others', async () => {
+        getLibraryItemsPageMock.mockResolvedValue(pageOf([
+            ebookItem(3, { series_list: TWO }),
+            audioItem(4, { series_list: [{ name: 'Solo Series', index: 0 }] }),
+        ], 2))
+        renderPage()
+        await screen.findByText('Ebook 3')
+
+        const labels = [...document.querySelectorAll('.lib-book-card-series')].map(n => n.textContent)
+        expect(labels).toEqual(['Axis Saga #4 +1', 'Solo Series #0'])
+    })
+
+    it('a pair card takes the audiobook series the ebook lacks', async () => {
+        const item = pairItem(7, 1, 2)
+        item.pair.ebook.series_list = [{ name: 'Axis Saga', index: 4 }]
+        item.pair.audiobook.series_list = [{ name: 'Axis Chronological', index: 2 }]
+        getLibraryItemsPageMock.mockResolvedValue(pageOf([item], 1))
+        renderPage()
+        await screen.findByText('Ebook 1')
+
+        expect(document.querySelector('.lib-book-card-series').textContent).toBe('Axis Saga #4 +1')
+    })
+
+    it('a card without a series renders no series line', async () => {
+        getLibraryItemsPageMock.mockResolvedValue(pageOf([ebookItem(3)], 1))
+        renderPage()
+        await screen.findByText('Ebook 3')
+        expect(document.querySelector('.lib-book-card-series')).toBeNull()
+    })
+
+    it('the list view shows the same label in its series column', async () => {
+        getLibraryItemsPageMock.mockResolvedValue(pageOf([ebookItem(3, { series_list: TWO })], 1))
+        renderPage()
+        await screen.findByText('Ebook 3')
+
+        fireEvent.click(screen.getAllByTitle('List view')[0])
+        await waitFor(() => expect(document.querySelector('.lib-book-row')).not.toBeNull())
+        expect(within(document.querySelector('.lib-book-row')).getByText('Axis Saga #4 +1')).toBeInTheDocument()
     })
 })

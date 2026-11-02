@@ -10,7 +10,8 @@ import {
 } from '../api'
 import { pairTargetPath } from '../utils/pairRouting'
 import useLibraryBrowse from '../hooks/useLibraryBrowse'
-import { toDisplayEntry, entryKey, groupProgressByPair, patchMedia } from '../lib/libraryItems'
+import { toDisplayEntry, entryKey, groupProgressByPair, patchMedia, localPatch } from '../lib/libraryItems'
+import { seriesLabel } from '../lib/series'
 // Server timestamps are naive UTC — parse via the shared helper (issue #216).
 import { formatDate } from '../lib/datetime'
 import EnhancedMetadataModal from '../components/EnhancedMetadataModal'
@@ -192,10 +193,8 @@ export function BookCard({ book, selectMode, isSelected, onSelect, onStartSelect
             </div>
             <div className="lib-book-card-title" title={book.title}>{book.title}</div>
             {book.author && <div className="lib-book-card-author">{book.author}</div>}
-            {book.series && (
-                <div className="lib-book-card-series">
-                    {book.series}{book.series_index ? ` #${book.series_index}` : ''}
-                </div>
+            {book.series_list?.length > 0 && (
+                <div className="lib-book-card-series">{seriesLabel(book.series_list)}</div>
             )}
         </div>
     )
@@ -258,7 +257,7 @@ export function BookRow({ book, selectMode, isSelected, onSelect, onEdit, onDele
             </div>
             <div className="lib-book-row-cell">{book.author || '\u2014'}</div>
             <div className="lib-book-row-cell">
-                {book.series ? `${book.series}${book.series_index ? ` #${book.series_index}` : ''}` : '\u2014'}
+                {seriesLabel(book.series_list) || '\u2014'}
             </div>
             <div className="lib-book-row-cell">
                 {book.mediaType !== 'pair' && <span className="badge badge-auto_matched">{book.format}</span>}
@@ -613,11 +612,12 @@ function LibraryPage({ tab }) {
         setBulkSaving(true)
         try {
             const selected = parseSelectedIds()
-            await Promise.all(selected.map(s => {
+            const answers = await Promise.all(selected.map(s => {
                 const fn = s.mediaType === 'ebook' ? updateEbookMetadata : updateAudiobookMetadata
                 return fn(s.id, patch)
             }))
-            browse.patchItems(items => selected.reduce((acc, s) => patchMedia(acc, s.mediaType, s.id, patch), items))
+            browse.patchItems(items => selected.reduce(
+                (acc, s, i) => patchMedia(acc, s.mediaType, s.id, localPatch(patch, answers[i])), items))
             setFacetsTick(t => t + 1)
             setBulkEditOpen(false)
             exitSelectMode()

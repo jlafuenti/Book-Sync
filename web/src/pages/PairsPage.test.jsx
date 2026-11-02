@@ -106,3 +106,32 @@ describe('PairsPage pairing modal is a real dialog', () => {
         expect(document.activeElement).toBe(trigger)
     })
 })
+
+// Issue #907: the unpaired tables show the primary series with +N.
+describe('PairsPage series column (issue #907)', () => {
+    it('shows the primary series and +N for an ebook and an audiobook', async () => {
+        getUnpairedMediaMock.mockResolvedValue({
+            ebooks: [{ id: 1, title: 'Lonely Ebook', author: 'A', format: 'epub',
+                series_list: [{ name: 'Axis Saga', index: 4 }, { name: 'Axis Chronological', index: 2 }] }],
+            audiobooks: [{ id: 2, title: 'Lonely Audio', author: 'B', format: 'm4b',
+                series_list: [{ name: 'Solo Series', index: null }] }],
+        })
+        const first = renderTab('unpaired-books')
+        expect(await screen.findByText('Axis Saga #4 +1')).toBeInTheDocument()
+        first.unmount()
+
+        renderTab('unpaired-audiobooks')
+        expect(await screen.findByText('Solo Series')).toBeInTheDocument()
+    })
+
+    it('shows a dash for a book with no series', async () => {
+        getUnpairedMediaMock.mockResolvedValue({
+            ebooks: [{ id: 1, title: 'Lonely Ebook', author: 'A', format: 'epub', series_list: [] }],
+            audiobooks: [],
+        })
+        renderTab('unpaired-books')
+        await screen.findByText('Lonely Ebook')
+        const cells = screen.getByText('Lonely Ebook').closest('tr').querySelectorAll('td')
+        expect(cells[2].textContent).toBe('—')
+    })
+})

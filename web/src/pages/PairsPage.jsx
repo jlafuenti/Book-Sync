@@ -5,6 +5,7 @@ import { pairTargetPath, pairSourceFromProgress } from '../utils/pairRouting'
 import MetadataCleanupModal from '../components/MetadataCleanupModal'
 import Modal from '../components/Modal'
 import { useAuth } from '../contexts/AuthContext'
+import { seriesLabel } from '../lib/series'
 
 // Tri-state sort: null → 'asc' → 'desc' → null
 function nextSortDir(current) {
@@ -399,7 +400,7 @@ function PairsPage({ tab }) {
                                                 </td>
                                                 <td style={{ color: 'var(--text-secondary)' }}>{ebook.author || '—'}</td>
                                                 <td style={{ color: 'var(--text-secondary)' }}>
-                                                    {ebook.series ? `${ebook.series}${ebook.series_index ? ` #${ebook.series_index}` : ''}` : '—'}
+                                                    {seriesLabel(ebook.series_list) || '—'}
                                                 </td>
                                                 <td><span className="badge badge-auto_matched">{ebook.format}</span></td>
                                                 <td>
@@ -471,7 +472,7 @@ function PairsPage({ tab }) {
                                                 </td>
                                                 <td style={{ color: 'var(--text-secondary)' }}>{ab.author || '—'}</td>
                                                 <td style={{ color: 'var(--text-secondary)' }}>
-                                                    {ab.series ? `${ab.series}${ab.series_index ? ` #${ab.series_index}` : ''}` : '—'}
+                                                    {seriesLabel(ab.series_list) || '—'}
                                                 </td>
                                                 <td><span className="badge badge-auto_matched">{ab.format}</span></td>
                                                 <td>

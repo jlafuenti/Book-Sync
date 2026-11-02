@@ -71,8 +71,9 @@ describe('computeNextUp', () => {
 })
 
 describe('libraryToNextUpInput', () => {
-    const ebook = (id, series, index, extra = {}) => ({ id, title: `Ebook ${id}`, series, series_index: index, cover_path: null, ...extra })
-    const audiobook = (id, series, index, extra = {}) => ({ id, title: `Audiobook ${id}`, series, series_index: index, cover_path: null, ...extra })
+    const list = (series, index) => (series ? [{ name: series, index }] : [])
+    const ebook = (id, series, index, extra = {}) => ({ id, title: `Ebook ${id}`, series_list: list(series, index), cover_path: null, ...extra })
+    const audiobook = (id, series, index, extra = {}) => ({ id, title: `Audiobook ${id}`, series_list: list(series, index), cover_path: null, ...extra })
 
     it('counts a pair once and opens it on its ebook page', () => {
         const e1 = ebook(1, 'Axis', 1, { cover_path: 'e1.jpg' })
@@ -96,6 +97,37 @@ describe('libraryToNextUpInput', () => {
         })
 
         expect(books[0]).toMatchObject({ key: 'pair_5', series: 'Axis', index: 4 })
+    })
+
+    it('lists a book once per series it is in, primary series first, under one key', () => {
+        const e1 = ebook(1, null, null, { series_list: [{ name: 'Axis Saga', index: 1 }, { name: 'Axis Chronological', index: 3 }] })
+        const e2 = ebook(2, 'Axis Saga', 2)
+        const { books } = libraryToNextUpInput({ ebooks: [e1, e2], audiobooks: [], pairs: [], progress: [] })
+
+        expect(books.map(b => [b.key, b.series, b.index])).toEqual([
+            ['ebook_1', 'Axis Saga', 1],
+            ['ebook_1', 'Axis Chronological', 3],
+            ['ebook_2', 'Axis Saga', 2],
+        ])
+    })
+
+    it('expands a pair over the union of its halves series', () => {
+        const e1 = ebook(1, 'Axis Saga', 1)
+        const a2 = audiobook(2, null, null, { series_list: [{ name: 'Axis Chronological', index: 3 }, { name: 'axis saga', index: 9 }] })
+        const { books } = libraryToNextUpInput({
+            ebooks: [e1], audiobooks: [a2], pairs: [{ id: 5, ebook: e1, audiobook: a2 }], progress: [],
+        })
+
+        expect(books.map(b => [b.key, b.series, b.index])).toEqual([
+            ['pair_5', 'Axis Saga', 1],
+            ['pair_5', 'Axis Chronological', 3],
+        ])
+        expect(books[1]).toMatchObject({ detailType: 'ebook', detailId: 1, title: 'Ebook 1' })
+    })
+
+    it('keeps a book with no series as one seriesless entry', () => {
+        const { books } = libraryToNextUpInput({ ebooks: [ebook(1, null, null)], audiobooks: [audiobook(2, null, null)], pairs: [], progress: [] })
+        expect(books.map(b => [b.key, b.series, b.index])).toEqual([['ebook_1', null, null], ['audiobook_2', null, null]])
     })
 
     it('files progress on either half of a pair under the pair, preferring captured_at', () => {

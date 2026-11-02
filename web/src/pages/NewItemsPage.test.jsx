@@ -25,17 +25,31 @@ vi.mock('../components/EnhancedMetadataModal', () => ({ default: () => null }))
 vi.mock('../contexts/AuthContext', () => ({ useAuth: () => ({ hasMinRole: () => true }) }))
 
 const EBOOK = {
-    id: 11, title: 'Ship of Magic', author: 'Robin Hobb', series: null,
+    id: 11, title: 'Ship of Magic', author: 'Robin Hobb', series_list: [],
     format: 'epub', file_size: 2048, uploaded_at: '2026-01-01T00:00:00',
 }
 const AUDIO = {
-    id: 22, title: 'The Mad Ship', author: 'Robin Hobb', series: null,
+    id: 22, title: 'The Mad Ship', author: 'Robin Hobb', series_list: [],
     format: 'm4b', file_size: 4096, uploaded_at: '2026-01-02T00:00:00',
 }
 
 beforeEach(() => {
     getNewItemsMock.mockReset().mockResolvedValue({ ebooks: [EBOOK], audiobooks: [AUDIO] })
     acknowledgeNewItemsMock.mockReset().mockResolvedValue({})
+})
+
+describe('NewItemsPage series column (issue #907)', () => {
+    it('shows the primary series and +N, or a dash when there is none', async () => {
+        getNewItemsMock.mockResolvedValue({
+            ebooks: [{ ...EBOOK, series_list: [{ name: 'Axis Saga', index: 4 }, { name: 'Axis Chronological', index: 2 }] }],
+            audiobooks: [AUDIO],
+        })
+        render(<NewItemsPage />)
+
+        expect(await screen.findByText('Axis Saga #4 +1')).toBeInTheDocument()
+        const cells = screen.getByText('The Mad Ship').closest('tr').querySelectorAll('td')
+        expect([...cells].map(c => c.textContent)).toContain('—')
+    })
 })
 
 describe('NewItemsPage list fetch (issue #276)', () => {

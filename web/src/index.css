@@ -636,6 +636,110 @@ select.form-input {
     cursor: pointer;
 }
 
+/* Series list editor (issue #907): one row per series, first row is primary */
+.series-editor {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.series-editor-empty {
+    color: var(--text-muted);
+    font-size: 0.85rem;
+}
+
+.series-editor-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.series-editor-primary {
+    flex: 0 0 58px;
+    font-size: 0.7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--accent-ink);
+}
+
+.series-editor-name {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+/* Series name type-ahead (issue #907): the library's existing series, below the input */
+.series-typeahead {
+    position: relative;
+    width: 100%;
+}
+
+.series-typeahead-list {
+    position: absolute;
+    top: calc(100% + 4px);
+    left: 0;
+    right: 0;
+    z-index: 50;
+    margin: 0;
+    padding: 6px;
+    list-style: none;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    max-height: 220px;
+    overflow-y: auto;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+}
+
+.series-typeahead-option {
+    padding: 8px 12px;
+    border-radius: 6px;
+    color: var(--text-secondary);
+    font-size: 0.85rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: var(--transition);
+}
+
+.series-typeahead-option:hover,
+.series-typeahead-option.active {
+    background: var(--accent-light);
+    color: var(--text-primary);
+}
+
+.series-typeahead-option.active {
+    color: var(--accent-ink);
+}
+
+.series-editor-number {
+    flex: 0 0 90px;
+    width: 90px;
+}
+
+.series-editor-btn {
+    flex: 0 0 auto;
+    min-width: 32px;
+    justify-content: center;
+}
+
+.series-editor-add {
+    align-self: flex-start;
+}
+
+@media (max-width: 600px) {
+    .series-editor-row {
+        flex-wrap: wrap;
+    }
+
+    .series-editor-primary {
+        flex-basis: 100%;
+    }
+
+    .series-editor-primary.placeholder {
+        display: none;
+    }
+}
+
 /* ============ Tables ============ */
 
 .table-wrapper {
