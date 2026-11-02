@@ -312,26 +312,20 @@ class LibraryViewModel @Inject constructor(
         } else filtered
 
         // Step 3 — series drill-in
-        val seriesFiltered = ui.seriesFilter?.let { name ->
-            transcribedFiltered.filter { it.series.equals(name, ignoreCase = true) }
-        } ?: transcribedFiltered
+        val seriesFiltered = ui.seriesFilter?.let { name -> filterBySeries(transcribedFiltered, name) }
+            ?: transcribedFiltered
 
         // Step 4 — sort. lastOpenedAt is stamped on here rather than at each
         // construction site above: it comes from a different pair of tables than
         // the entity does, and only this one comparator reads it.
         val sorted = seriesFiltered
             .map { it.copy(lastOpenedAt = lastOpenedFor(it, opened)) }
-            .sortedWith(comparatorFor(ui.sort))
+            .sortedWith(comparatorFor(ui.sort, ui.seriesFilter))
 
         // Step 5 — text search filter (title / author / series)
         if (ui.searchQuery.isBlank()) sorted
         else {
-            val q = ui.searchQuery.trim().lowercase()
-            sorted.filter { item ->
-                item.title.lowercase().contains(q) ||
-                item.author?.lowercase()?.contains(q) == true ||
-                item.series?.lowercase()?.contains(q) == true
-            }
+            sorted.filter { item -> matchesSearch(item, ui.searchQuery) }
         }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), emptyList())
 
@@ -339,13 +333,7 @@ class LibraryViewModel @Inject constructor(
     val seriesStacks: StateFlow<List<SeriesStack>> =
         combine(items, _uiState) { list, ui ->
             if (!ui.groupBySeries) return@combine emptyList()
-            val groups = list.groupBy { it.series?.trim().takeIf { s -> !s.isNullOrEmpty() } ?: "No Series" }
-            val sorted = when (ui.sort) {
-                LibrarySort.TitleAsc    -> groups.entries.sortedBy { it.key.lowercase() }
-                LibrarySort.SeriesCount -> groups.entries.sortedByDescending { it.value.size }
-                else                    -> groups.entries.sortedBy { it.key.lowercase() }
-            }
-            sorted.map { (name, items) -> SeriesStack(name, items) }
+            buildSeriesStacks(list, ui.sort)
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), emptyList())
 
     // --- Derived counts ----------------------------------------------------
@@ -692,6 +680,33 @@ class LibraryViewModel @Inject constructor(
 }
 
 // ============================================================================
+// Series (grouping, drill-in filter, search)
+// ============================================================================
+
+/** The drill-in filter: items whose series is [name], ignoring case. */
+internal fun filterBySeries(items: List<LibraryItem>, name: String): List<LibraryItem> =
+    items.filter { it.series.equals(name, ignoreCase = true) }
+
+/** The search box: title, author or series contains [query], ignoring case. */
+internal fun matchesSearch(item: LibraryItem, query: String): Boolean {
+    val q = query.trim().lowercase()
+    return item.title.lowercase().contains(q) ||
+        item.author?.lowercase()?.contains(q) == true ||
+        item.series?.lowercase()?.contains(q) == true
+}
+
+/** Series mode: one [SeriesStack] per series, books with none under "No Series". */
+internal fun buildSeriesStacks(list: List<LibraryItem>, sort: LibrarySort): List<SeriesStack> {
+    val groups = list.groupBy { it.series?.trim().takeIf { s -> !s.isNullOrEmpty() } ?: "No Series" }
+    val sorted = when (sort) {
+        LibrarySort.TitleAsc    -> groups.entries.sortedBy { it.key.lowercase() }
+        LibrarySort.SeriesCount -> groups.entries.sortedByDescending { it.value.size }
+        else                    -> groups.entries.sortedBy { it.key.lowercase() }
+    }
+    return sorted.map { (name, items) -> SeriesStack(name, items) }
+}
+
+// ============================================================================
 // Sorting (issue #223)
 // ============================================================================
 
@@ -702,7 +717,7 @@ class LibraryViewModel @Inject constructor(
  * (`LibrarySortTest`) — the reason "Recently opened" shipped as a copy of
  * "Recently added" for as long as it did is that nothing could see it.
  */
-internal fun comparatorFor(sort: LibrarySort): Comparator<LibraryItem> = when (sort) {
+internal fun comparatorFor(sort: LibrarySort, seriesName: String? = null): Comparator<LibraryItem> = when (sort) {
     LibrarySort.RecentlyAdded  -> compareByDescending { it.pair?.id ?: it.ebook?.id ?: it.audiobook?.id ?: 0 }
     // Never-opened books sink to the bottom rather than sorting as "opened at the
     // epoch", and tie-break by title so an untouched library is not in arbitrary
