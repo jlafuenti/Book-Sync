@@ -16,8 +16,7 @@ def test_full_template_with_all_tokens():
     template = "<Author> - [<Series> <Book Number>] - <Title>"
     meta = {
         "author": "Jim Butcher",
-        "series": "Dresden Files",
-        "series_index": 6,
+        "series_list": [{"name": "Dresden Files", "index": 6}],
         "title": "Blood Rites",
     }
     assert render_template(template, meta) == "Jim Butcher - [Dresden Files 6] - Blood Rites"
@@ -27,8 +26,7 @@ def test_path_template_creates_subdirs():
     template = "<Author>/<Series>/<Book Number> - <Title>"
     meta = {
         "author": "Brandon Sanderson",
-        "series": "Stormlight Archive",
-        "series_index": 4,
+        "series_list": [{"name": "Stormlight Archive", "index": 4}],
         "title": "Rhythm of War",
     }
     assert render_template(template, meta) == "Brandon Sanderson/Stormlight Archive/4 - Rhythm of War"
@@ -67,14 +65,14 @@ def test_unsafe_filename_chars_are_sanitized():
 
 def test_float_series_index_with_integer_value_drops_decimal():
     template = "<Book Number>: <Title>"
-    meta = {"series_index": 3.0, "title": "Foo"}
+    meta = {"series_list": [{"name": "Axis Saga", "index": 3.0}], "title": "Foo"}
     # The literal ':' is sanitized to '_' because ':' is illegal in Windows paths.
     assert render_template(template, meta) == "3_ Foo"
 
 
 def test_float_series_index_keeps_decimal_when_non_integer():
     template = "<Book Number>: <Title>"
-    meta = {"series_index": 3.5, "title": "Foo"}
+    meta = {"series_list": [{"name": "Axis Saga", "index": 3.5}], "title": "Foo"}
     # ':' sanitized to '_'; the .5 decimal is preserved for non-integer indexes.
     assert render_template(template, meta) == "3.5_ Foo"
 
@@ -96,4 +94,21 @@ def test_collapses_double_dashes_left_by_missing_series_brackets():
     # we shouldn't get "Author -  - Title" with weird spacing.
     template = "<Author> - [<Series> <Book Number>] - <Title>"
     meta = {"author": "X", "title": "Y"}
+    assert render_template(template, meta) == "X - Y"
+
+
+def test_the_primary_series_names_the_file_when_there_are_several():
+    """Only entry 0 can name a file: a path has room for one series folder."""
+    template = "<Author>/<Series>/<Book Number> - <Title>"
+    meta = {
+        "author": "Ann Axis",
+        "series_list": [{"name": "Axis Saga", "index": 4}, {"name": "Axis Chronological", "index": 2.5}],
+        "title": "Two Series",
+    }
+    assert render_template(template, meta) == "Ann Axis/Axis Saga/4 - Two Series"
+
+
+def test_an_empty_series_list_collapses_the_bracket_group():
+    template = "<Author> - [<Series> <Book Number>] - <Title>"
+    meta = {"author": "X", "series_list": [], "title": "Y"}
     assert render_template(template, meta) == "X - Y"

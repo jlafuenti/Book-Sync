@@ -12,7 +12,9 @@ import zipfile
 
 from sqlalchemy import select, text
 
-from models.book import EBook, AudioBook, BookPair, PairStatus
+from models.book import (
+    AudioBook, AudioBookSeries, BookPair, EBook, EBookSeries, PairStatus,
+)
 from models.sync_map import SyncMap, SyncPoint
 
 _path_seq = itertools.count(1)
@@ -218,16 +220,52 @@ async def ensure_users(db, *user_ids):
     await db.commit()
 
 
+def series_rows(model, entries):
+    """`EBookSeries`/`AudioBookSeries` rows for `entries` (`{"name", "index"}`).
+
+    `model` is `EBook` or `AudioBook`; the rows are positioned in list order, so
+    entry 0 is the primary series.
+    """
+    row_cls = EBookSeries if model is EBook else AudioBookSeries
+    return [
+        row_cls(name=e["name"], index=e.get("index"), position=i)
+        for i, e in enumerate(entries or [])
+    ]
+
+
+def _translate_series(model, fields):
+    """Fold the legacy `series=` / `series_index=` kwargs into `series_list`.
+
+    The scalar columns are gone (issue #905) but dozens of tests seed a book as
+    `make_ebook(db, series="X", series_index=2)`. They keep working: the pair
+    becomes one entry. The old `series=""` sentinel ("the user cleared it")
+    becomes `series_cleared=True`.
+    """
+    fields = dict(fields)
+    legacy_name = fields.pop("series", None)
+    legacy_index = fields.pop("series_index", None)
+    entries = fields.pop("series_list", None)
+    if entries is None and legacy_name:
+        entries = [{"name": legacy_name, "index": legacy_index}]
+    if legacy_name == "":
+        fields.setdefault("series_cleared", True)
+    if entries is not None:
+        fields["series_list"] = series_rows(model, entries)
+    return fields
+
+
 async def make_ebook(db, *, title="E", filename="e.epub", **fields):
     """Create a standalone (unpaired) EBook and return it.
 
-    `**fields` sets any other column directly (`author`, `series`,
-    `series_index`, `file_hash`, `auto_pair_excluded_hashes`, …) — the
-    auto-pairing tests in `test_auto_match.py` need the metadata the matcher
-    reads, and enumerating it as keywords here would just duplicate the model.
+    `**fields` sets any other column directly (`author`, `file_hash`,
+    `auto_pair_excluded_hashes`, …) — the auto-pairing tests in
+    `test_auto_match.py` need the metadata the matcher reads, and enumerating it
+    as keywords here would just duplicate the model. Series are given as
+    `series_list=[{"name": ..., "index": ...}]`; the legacy `series=` /
+    `series_index=` kwargs still work and become a single entry.
     """
     eb = EBook(title=title, filename=filename, file_path=_unique_path(filename),
-               **fields)
+               **_translate_series(EBook, fields))
     db.add(eb)
     await db.commit()
     await db.refresh(eb)
@@ -240,7 +278,7 @@ async def make_audiobook(db, *, title="A", filename="a.m4b", **fields):
     `**fields` sets any other column directly — see `make_ebook`.
     """
     ab = AudioBook(title=title, filename=filename, file_path=_unique_path(filename),
-                   **fields)
+                   **_translate_series(AudioBook, fields))
     db.add(ab)
     await db.commit()
     await db.refresh(ab)

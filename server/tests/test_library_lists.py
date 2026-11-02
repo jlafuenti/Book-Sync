@@ -12,6 +12,7 @@ sort with `id` as the final tiebreak, so pages never overlap or skip.
 import pytest
 
 from models.book import AudioBook, BookPair, EBook, PairStatus
+from tests.factories import series_rows
 
 
 async def _seed_ebooks(db, n, *, author="Same Author", title="Same Title"):
@@ -89,8 +90,8 @@ async def test_ordering_is_author_series_index_title_then_id(db, library_client)
     db.add_all([
         EBook(title="Zeta", author="Beta Author", filename="1.epub", file_path="/x/1.epub"),
         EBook(title="Alpha", author=None, filename="2.epub", file_path="/x/2.epub"),          # null author last
-        EBook(title="Book 2", author="Alpha Author", series="S", series_index=2, filename="3.epub", file_path="/x/3.epub"),
-        EBook(title="Book 1", author="Alpha Author", series="S", series_index=1, filename="4.epub", file_path="/x/4.epub"),
+        EBook(title="Book 2", author="Alpha Author", series_list=series_rows(EBook, [{"name": "S", "index": 2}]), filename="3.epub", file_path="/x/3.epub"),
+        EBook(title="Book 1", author="Alpha Author", series_list=series_rows(EBook, [{"name": "S", "index": 1}]), filename="4.epub", file_path="/x/4.epub"),
     ])
     await db.commit()
 
@@ -107,8 +108,8 @@ async def test_q_narrows_ebooks_by_title_author_or_series_case_insensitively(db,
     c, headers = library_client
     db.add_all([
         EBook(title="Dune", author="Frank Herbert", filename="1.epub", file_path="/x/1.epub"),
-        EBook(title="Mistborn", author="Brandon Sanderson", series="Cosmere", filename="2.epub", file_path="/x/2.epub"),
-        EBook(title="Elantris", author="Brandon Sanderson", series="Cosmere", filename="3.epub", file_path="/x/3.epub"),
+        EBook(title="Mistborn", author="Brandon Sanderson", series_list=series_rows(EBook, [{"name": "Cosmere", "index": None}]), filename="2.epub", file_path="/x/2.epub"),
+        EBook(title="Elantris", author="Brandon Sanderson", series_list=series_rows(EBook, [{"name": "Cosmere", "index": None}]), filename="3.epub", file_path="/x/3.epub"),
     ])
     await db.commit()
 
@@ -298,19 +299,19 @@ async def _seed_library(db):
     ebook  E4: "Delta"  (Author C)         unpaired
     audio  A5: "Epsilon" (Author B, S2 #1) unpaired, unacknowledged
     """
-    e1 = EBook(title="Alpha", author="Author A", series="S1", series_index=1,
+    e1 = EBook(title="Alpha", author="Author A", series_list=series_rows(EBook, [{"name": "S1", "index": 1}]),
                filename="e1.epub", file_path="/x/e1.epub", file_size=100, acknowledged=True)
-    a1 = AudioBook(title="Alpha (audio)", author="Author A", series="S1", series_index=1,
+    a1 = AudioBook(title="Alpha (audio)", author="Author A", series_list=series_rows(AudioBook, [{"name": "S1", "index": 1}]),
                    filename="a1.m4b", file_path="/x/a1.m4b", file_size=1000, acknowledged=True)
     e2 = EBook(title="Beta", author="Author B",
                filename="e2.epub", file_path="/x/e2.epub", file_size=200, acknowledged=True)
     a2 = AudioBook(title="Beta (audio)", author="Author B",
                    filename="a2.m4b", file_path="/x/a2.m4b", file_size=2000, acknowledged=True)
-    e3 = EBook(title="Gamma", author="Author A", series="S1", series_index=2,
+    e3 = EBook(title="Gamma", author="Author A", series_list=series_rows(EBook, [{"name": "S1", "index": 2}]),
                filename="e3.epub", file_path="/x/e3.epub", file_size=300, acknowledged=False)
     e4 = EBook(title="Delta", author="Author C",
                filename="e4.epub", file_path="/x/e4.epub", file_size=50, acknowledged=True)
-    a5 = AudioBook(title="Epsilon", author="Author B", series="S2", series_index=1,
+    a5 = AudioBook(title="Epsilon", author="Author B", series_list=series_rows(AudioBook, [{"name": "S2", "index": 1}]),
                    filename="a5.m4b", file_path="/x/a5.m4b", file_size=5000, acknowledged=False)
     db.add_all([e1, a1, e2, a2, e3, e4, a5])
     await db.flush()

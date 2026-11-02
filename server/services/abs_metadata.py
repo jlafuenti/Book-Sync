@@ -22,7 +22,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from models.settings import SystemSetting
 from services import chapter_repair, credentials
-from services.metadata_utils import extract_series_and_index
+from services.metadata_utils import SERIES_LIST_KEY
+from services.series import abs_series_entries, entries_of, parse_abs_series_name
+from services.tag_writer import apply_mp4_series
 from services.url_safety import assert_safe_url
 
 logger = logging.getLogger(__name__)
@@ -215,15 +217,14 @@ def enrich_from_abs(
         file_meta["is_abridged"] = True
         changed = True
 
-    if force or not file_meta.get("series"):
-        series_str = meta.get("seriesName", "")
-        if series_str:
-            s_name, s_idx = extract_series_and_index(series_str)
-            if s_name:
-                file_meta["series"] = s_name
-                changed = True
-                if s_idx is not None:
-                    file_meta["series_index"] = s_idx
+    # Series. The library listing is minified: it carries only `seriesName`,
+    # ABS's own ", "-join of "Name #seq" pieces (`parse_abs_series_name`); a
+    # full `series` array of {name, sequence} is preferred if one is ever present.
+    if force or not file_meta.get(SERIES_LIST_KEY):
+        found = abs_series_entries(meta.get("series")) or parse_abs_series_name(meta.get("seriesName"))
+        if found:
+            file_meta[SERIES_LIST_KEY] = found
+            changed = True
 
     if changed:
         logger.debug(f"[abs_metadata] Enriched '{file_meta.get('title')}' from ABS")
@@ -238,7 +239,7 @@ def enrich_from_abs(
 #: on every scan. Pinned against a real file by test_abs_writeback_converges.py.
 WRITTEN_BACK_FIELDS: frozenset[str] = frozenset({
     "title", "author", "description", "publish_year", "genres", "publisher",
-    "narrators", "series", "series_index",
+    "narrators", SERIES_LIST_KEY,
 })
 
 
@@ -252,10 +253,14 @@ def fills_written_back_field(before: dict, after: dict) -> bool:
     counting it (a user-cleared series the scan drops, say) rewrote the same
     file on every scan.
     """
-    return any(
-        after.get(f) is not None and after.get(f) != before.get(f)
-        for f in WRITTEN_BACK_FIELDS
-    )
+    def differs(field: str) -> bool:
+        if after.get(field) is None:
+            return False
+        if field == SERIES_LIST_KEY:
+            return entries_of(after) != entries_of(before)
+        return after.get(field) != before.get(field)
+
+    return any(differs(f) for f in WRITTEN_BACK_FIELDS)
 
 
 _CHAPTER_TITLE_ERROR_RE = chapter_repair.CHAPTER_TITLE_ERROR_RE
@@ -352,24 +357,12 @@ def _write_tags(filepath: str, file_meta: dict) -> tuple[bool, Optional[str]]:
         elif key in audio:
             del audio[key]
 
-    # Series → ©grp as "Name #N" (the format extract_series_and_index reads)
-    series = file_meta.get("series")
-    series_index = file_meta.get("series_index")
-    if series:
-        grp = (
-            f"{series} #{int(series_index)}"
-            if series_index is not None
-            else series
-        )
-        audio["\xa9grp"] = [grp]
-    elif series == "" and "\xa9grp" in audio:
-        del audio["\xa9grp"]
-
-    _set_freeform("SERIES", series)
-    if series and series_index is not None:
-        _set_freeform("SERIES-PART", str(series_index))
-    elif series == "":
-        _set_freeform("SERIES-PART", "")
+    # Series → ©grp as "A #1; B #2", plus SERIES / SERIES-PART (what
+    # Audiobookshelf reads). An absent key or None leaves the file's series
+    # alone; an empty list clears it.
+    series_entries = file_meta.get(SERIES_LIST_KEY)
+    if series_entries is not None:
+        apply_mp4_series(audio, entries_of(list(series_entries)))
     _set_freeform("NARRATOR", file_meta.get("narrators"))
 
     audio.save()

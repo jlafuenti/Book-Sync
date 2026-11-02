@@ -71,9 +71,16 @@ def _file(tmp_path, ext, **tags):
     return str(path)
 
 
-def _book(**fields):
+def _book(series=None, series_index=None, series_list=None, **fields):
+    """A stand-in row. `series=` / `series_index=` give one entry, `series=""`
+    the user-cleared (empty) list, `series_list=[...]` several."""
+    if series_list is None:
+        if series:
+            series_list = [{"name": series, "index": series_index}]
+        elif series == "":
+            series_list = []
     base = dict(
-        title=None, author=None, series=None, series_index=None, description=None,
+        title=None, author=None, series_list=series_list, description=None,
         publisher=None, language=None, publish_year=None, genres=None,
     )
     base.update(fields)
@@ -96,8 +103,13 @@ def _track(path):
 
 
 def _read(path):
-    meta = _read_embedded_metadata(path, "audiobook")
-    return meta.get("series"), meta.get("series_index")
+    """(primary name, primary index) as the real extractor reads them back."""
+    entries = _read_embedded_metadata(path, "audiobook").get("series_list") or []
+    return (entries[0]["name"], entries[0]["index"]) if entries else (None, None)
+
+
+def _read_all(path):
+    return _read_embedded_metadata(path, "audiobook").get("series_list")
 
 
 @pytest.mark.parametrize("ext", ["mp3", "flac"])
@@ -202,3 +214,101 @@ def test_a_fractional_series_index_survives_the_round_trip(tmp_path, ext):
     tag_writer.write_audiobook_metadata(path, _book(title="Interlude", series="Saga", series_index=3.5))
 
     assert _read(path) == ("Saga", 3.5)
+
+
+# ----------------------------------------------------------- several series
+
+_TWO = [
+    {"name": "Axis Saga", "index": 4.0},
+    {"name": "Axis Chronological", "index": 2.5},
+]
+
+
+def test_m4b_writes_the_canonical_grouping_and_paired_series_atoms(tmp_path):
+    path = _file(tmp_path, "m4b", title="Old")
+
+    tag_writer.write_audiobook_metadata(path, _book(title="Book", series_list=_TWO))
+
+    audio = mutagen.File(path)
+    assert audio["\xa9grp"] == ["Axis Saga #4; Axis Chronological #2.5"]
+    assert audio["----:com.apple.iTunes:SERIES"] == [b"Axis Saga; Axis Chronological"]
+    assert audio["----:com.apple.iTunes:SERIES-PART"] == [b"4; 2.5"]
+    assert audio["trkn"] == [(4, 0)]
+    assert _read_all(path) == _TWO
+
+
+def test_mp3_writes_the_canonical_grouping_and_paired_series_frames(tmp_path):
+    path = _file(tmp_path, "mp3", title="Old")
+
+    tag_writer.write_audiobook_metadata(path, _book(title="Book", series_list=_TWO))
+
+    tags = mutagen.File(path).tags
+    assert str(tags["TIT1"]) == "Axis Saga #4; Axis Chronological #2.5"
+    assert str(tags["TXXX:SERIES"]) == "Axis Saga; Axis Chronological"
+    assert str(tags["TXXX:SERIES-PART"]) == "4; 2.5"
+    assert _read_all(path) == _TWO
+
+
+def test_flac_writes_the_canonical_grouping_and_paired_series_comments(tmp_path):
+    path = _file(tmp_path, "flac", title="Old")
+
+    tag_writer.write_audiobook_metadata(path, _book(title="Book", series_list=_TWO))
+
+    audio = mutagen.File(path)
+    assert audio["grouping"] == ["Axis Saga #4; Axis Chronological #2.5"]
+    assert audio["series"] == ["Axis Saga; Axis Chronological"]
+    assert audio["series-part"] == ["4; 2.5"]
+    assert _read_all(path) == _TWO
+
+
+@pytest.mark.parametrize("ext", ["mp3", "flac", "m4b"])
+def test_a_series_without_an_index_drops_series_part_but_keeps_every_index(tmp_path, ext):
+    """SERIES-PART is written only when every entry has an index, since the
+    readers pair the two lists by length. The indexes that exist come back from
+    the grouping tag."""
+    path = _file(tmp_path, ext, title="Old")
+    entries = [{"name": "Axis Saga", "index": 4.0}, {"name": "Axis Loose", "index": None}]
+
+    tag_writer.write_audiobook_metadata(path, _book(title="Book", series_list=entries))
+
+    audio = mutagen.File(path)
+    if ext == "mp3":
+        assert "TXXX:SERIES-PART" not in audio.tags
+    elif ext == "flac":
+        assert "series-part" not in audio
+    else:
+        assert "----:com.apple.iTunes:SERIES-PART" not in audio
+    assert _read_all(path) == entries
+
+
+@pytest.mark.parametrize("ext", ["mp3", "flac", "m4b"])
+def test_rewriting_with_fewer_series_removes_the_old_part_tag(tmp_path, ext):
+    path = _file(tmp_path, ext, title="Old")
+    tag_writer.write_audiobook_metadata(path, _book(title="Book", series_list=_TWO))
+
+    tag_writer.write_audiobook_metadata(path, _book(
+        title="Book", series_list=[{"name": "Axis Saga", "index": None}]))
+
+    assert _read_all(path) == [{"name": "Axis Saga", "index": None}]
+
+
+@pytest.mark.parametrize("ext", ["mp3", "flac", "m4b"])
+def test_clearing_every_series_deletes_all_the_series_tags(tmp_path, ext):
+    path = _file(tmp_path, ext, title="Old")
+    tag_writer.write_audiobook_metadata(path, _book(title="Book", series_list=_TWO))
+
+    tag_writer.write_audiobook_metadata(path, _book(title="Book", series_list=[]))
+
+    audio = mutagen.File(path)
+    keys = set(audio.tags.keys()) if ext == "mp3" else set(audio.keys())
+    assert not {k for k in keys if "SERIES" in k.upper() or k in ("TIT1", "grouping", "\xa9grp")}
+    assert _read_all(path) is None
+
+
+def test_a_semicolon_in_a_name_is_written_as_a_comma(tmp_path):
+    path = _file(tmp_path, "m4b", title="Old")
+
+    tag_writer.write_audiobook_metadata(path, _book(
+        title="Book", series_list=[{"name": "Axis; Saga", "index": 1.0}]))
+
+    assert mutagen.File(path)["\xa9grp"] == ["Axis, Saga #1"]

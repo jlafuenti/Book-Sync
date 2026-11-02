@@ -4,10 +4,12 @@ Book models: EBook, AudioBook, and BookPair (the link between them).
 
 import enum
 from datetime import datetime
+from typing import Optional
 from sqlalchemy import (
     String, Text, DateTime, Integer, BigInteger, Boolean, Enum, ForeignKey,
     Float, Index, JSON, inspect,
 )
+from sqlalchemy import event, false
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -58,8 +60,18 @@ class MediaColumnsMixin:
     uploaded_at: Mapped[datetime] = mapped_column(
         DateTime, default=utcnow, nullable=False
     )
-    series: Mapped[str] = mapped_column(String(500), nullable=True)
-    series_index: Mapped[float] = mapped_column(Float, nullable=True)
+    # Series are not columns: a book can belong to several, so they live in the
+    # per-table child rows `series_list` (issue #905). This flag is the one
+    # thing that stays here — it records that a user emptied the list, so a
+    # rescan or an Audiobookshelf enrich does not put it back. It replaces the
+    # old `series = ''` sentinel.
+    # `default=False` gives a freshly flushed row a known value without an
+    # expired-attribute load (which would raise MissingGreenlet in an async
+    # handler); `server_default` matches the migration and lets raw inserts
+    # that do not name the column work, as for `acknowledged`.
+    series_cleared: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=false(),
+    )
     metadata_source: Mapped[str] = mapped_column(String(50), nullable=True)  # 'embedded', 'pattern', 'filename'
     metadata_pattern: Mapped[str] = mapped_column(String(500), nullable=True)  # the pattern that matched, if any
 
@@ -93,6 +105,22 @@ class MediaColumnsMixin:
     # delete-and-reingest at a new id and are what `POST /rehash` remaps.
     auto_pair_excluded_ids: Mapped[list] = mapped_column(JSON_OR_JSONB, nullable=False, default=list)
     auto_pair_excluded_hashes: Mapped[list] = mapped_column(JSON_OR_JSONB, nullable=False, default=list)
+
+
+class _SeriesEntryColumns:
+    """The columns `ebook_series` and `audiobook_series` share (issue #905).
+
+    One row per series a book belongs to. `position` is the display order and
+    entry 0 is the book's *primary* series; `(owner, position)` is unique so the
+    order is always well defined. The index column is named `series_index` in the
+    table (the name the old scalar column had) but `index` on the Python side,
+    which is what the API calls it.
+    """
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(500), nullable=False)
+    index: Mapped[Optional[float]] = mapped_column("series_index", Float, nullable=True)
+    position: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
 
 class EBook(MediaColumnsMixin, Base):
@@ -133,6 +161,12 @@ class EBook(MediaColumnsMixin, Base):
 
     # Relationships
     pairs = relationship("BookPair", back_populates="ebook", cascade="all, delete-orphan")
+    # selectin so every list endpoint serialises `series_list` without an async
+    # lazy-load error.
+    series_list = relationship(
+        "EBookSeries", order_by="EBookSeries.position",
+        cascade="all, delete-orphan", lazy="selectin",
+    )
 
     def __repr__(self) -> str:
         return f"<EBook(id={self.id}, title='{self.title}')>"
@@ -159,9 +193,65 @@ class AudioBook(MediaColumnsMixin, Base):
 
     # Relationships
     pairs = relationship("BookPair", back_populates="audiobook", cascade="all, delete-orphan")
+    series_list = relationship(
+        "AudioBookSeries", order_by="AudioBookSeries.position",
+        cascade="all, delete-orphan", lazy="selectin",
+    )
 
     def __repr__(self) -> str:
         return f"<AudioBook(id={self.id}, title='{self.title}')>"
+
+
+def _start_without_series(target, args, kwargs):
+    """A new row has no series, and says so.
+
+    Without this a freshly inserted row carries an *unloaded* `series_list`, and
+    reading it afterwards (the matcher scoring two rows it has just added, say)
+    is an implicit lazy load, which an async session refuses (`MissingGreenlet`).
+    Rows read back from the database never come through here; `lazy="selectin"`
+    loads theirs with the query.
+    """
+    kwargs.setdefault("series_list", [])
+
+
+event.listen(EBook, "init", _start_without_series)
+event.listen(AudioBook, "init", _start_without_series)
+
+
+class EBookSeries(_SeriesEntryColumns, Base):
+    """One series an ebook belongs to (issue #905)."""
+
+    __tablename__ = "ebook_series"
+
+    ebook_id: Mapped[int] = mapped_column(
+        ForeignKey("ebooks.id", ondelete="CASCADE"), nullable=False
+    )
+
+    __table_args__ = (
+        Index("ux_ebook_series_position", "ebook_id", "position", unique=True),
+        Index("ix_ebook_series_name", "name"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<EBookSeries(ebook_id={self.ebook_id}, name='{self.name}', index={self.index})>"
+
+
+class AudioBookSeries(_SeriesEntryColumns, Base):
+    """One series an audiobook belongs to (issue #905)."""
+
+    __tablename__ = "audiobook_series"
+
+    audiobook_id: Mapped[int] = mapped_column(
+        ForeignKey("audiobooks.id", ondelete="CASCADE"), nullable=False
+    )
+
+    __table_args__ = (
+        Index("ux_audiobook_series_position", "audiobook_id", "position", unique=True),
+        Index("ix_audiobook_series_name", "name"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<AudioBookSeries(audiobook_id={self.audiobook_id}, name='{self.name}', index={self.index})>"
 
 
 class BookPair(Base):

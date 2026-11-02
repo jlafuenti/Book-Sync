@@ -24,11 +24,13 @@ them under the same names and the existing tests reach them there.
 
 from typing import Dict, List, Optional
 
-from sqlalchemy import select, or_, func, literal, null, cast, Integer, String, exists, union_all
+from collections import Counter
+
+from sqlalchemy import select, or_, func, literal, null, cast, case, Integer, String, exists, union_all
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from models.book import EBook, AudioBook, BookPair
+from models.book import AudioBook, AudioBookSeries, BookPair, EBook, EBookSeries
 from schemas import (
     EBookResponse, AudioBookResponse, BookPairResponse, SearchResponse, Page,
     LibraryItem, LibraryItemKind, LibraryTab, LibrarySort, SortDir,
@@ -66,23 +68,49 @@ def _like_term(q: str) -> str:
     return f"%{escaped}%"
 
 
+def _entry_table(model):
+    """`(entry class, its foreign key to the owner)` for `EBook` / `AudioBook`."""
+    if model is EBook:
+        return EBookSeries, EBookSeries.ebook_id
+    return AudioBookSeries, AudioBookSeries.audiobook_id
+
+
+def _has_series(model, predicate):
+    """`EXISTS` one of `model`'s series entries whose name satisfies `predicate`."""
+    entry, fk = _entry_table(model)
+    return exists(select(entry.id).where(fk == model.id, predicate(entry.name)))
+
+
+def _primary_name(model):
+    """The row's primary (position 0) series name, as a correlated scalar."""
+    entry, fk = _entry_table(model)
+    return select(entry.name).where(fk == model.id, entry.position == 0).correlate(model).scalar_subquery()
+
+
+def _primary_index(model):
+    """The row's primary series index, as a correlated scalar."""
+    entry, fk = _entry_table(model)
+    return select(entry.index).where(fk == model.id, entry.position == 0).correlate(model).scalar_subquery()
+
+
 def _search_clause(model, q: Optional[str]):
-    """`WHERE lower(title|author|series) LIKE %q%` for one model, or None."""
+    """`WHERE lower(title|author|any series name) LIKE %q%` for one model, or None."""
     if not q:
         return None
     term = _like_term(q)
     return or_(
         func.lower(model.title).like(term, escape=_LIKE_ESCAPE),
         func.lower(model.author).like(term, escape=_LIKE_ESCAPE),
-        func.lower(model.series).like(term, escape=_LIKE_ESCAPE),
+        _has_series(model, lambda name: func.lower(name).like(term, escape=_LIKE_ESCAPE)),
     )
 
 
 def _library_order(model):
-    """The library's browse order: author → series → series index → title, then id."""
+    """The library's browse order: author → primary series → its index → title,
+    then id."""
     return (
-        model.author.nulls_last(), model.series.nulls_last(),
-        model.series_index.nulls_last(), model.title, model.id,
+        model.author.nulls_last(), _primary_name(model).nulls_last(),
+        _primary_index(model).nulls_last(), model.title, model.id,
     )
 
 
@@ -191,7 +219,20 @@ def _paired_audiobook(): return exists(select(BookPair.id).where(BookPair.audiob
 
 def _pair_arm(where=None):
     """Pairs, ebook-primary: title/author/series/... come from the ebook and
-    fall back to the audiobook — the same rule the web used in memory."""
+    fall back to the audiobook — the same rule the web used in memory.
+
+    A pair's series are the union of both halves' entries, ebook's first
+    (issue #905), so its primary is the ebook's first entry, else the
+    audiobook's. The index follows the name: the ebook's, or — when the ebook
+    has none — the audiobook's for the *same* series.
+    """
+    e_name, a_name = _primary_name(EBook), _primary_name(AudioBook)
+    e_idx, a_idx = _primary_index(EBook), _primary_index(AudioBook)
+    pair_idx = case(
+        (e_name.is_(None), a_idx),
+        else_=func.coalesce(
+            e_idx, case((func.lower(a_name) == func.lower(e_name), a_idx), else_=null())),
+    )
     q = select(
         literal("pair").label("kind"),
         BookPair.id.label("item_id"),
@@ -200,8 +241,8 @@ def _pair_arm(where=None):
         AudioBook.id.label("audiobook_id"),
         func.coalesce(EBook.title, AudioBook.title).label("title"),
         func.coalesce(EBook.author, AudioBook.author).label("author"),
-        func.coalesce(EBook.series, AudioBook.series).label("series"),
-        func.coalesce(EBook.series_index, AudioBook.series_index).label("series_index"),
+        func.coalesce(e_name, a_name).label("series"),
+        pair_idx.label("series_index"),
         func.coalesce(EBook.uploaded_at, AudioBook.uploaded_at).label("uploaded_at"),
         func.coalesce(EBook.file_size, AudioBook.file_size).label("file_size"),
         BookPair.acknowledged.label("acknowledged"),
@@ -209,7 +250,7 @@ def _pair_arm(where=None):
         # display columns above are ebook-primary.
         AudioBook.title.label("alt_title"),
         AudioBook.author.label("alt_author"),
-        AudioBook.series.label("alt_series"),
+        a_name.label("alt_series"),
     ).select_from(BookPair).join(EBook, BookPair.ebook_id == EBook.id).join(
         AudioBook, BookPair.audiobook_id == AudioBook.id)
     return q.where(where) if where is not None else q
@@ -226,8 +267,8 @@ def _media_arm(model, kind: str, where=None):
         audiobook_id.label("audiobook_id"),
         model.title.label("title"),
         model.author.label("author"),
-        model.series.label("series"),
-        model.series_index.label("series_index"),
+        _primary_name(model).label("series"),
+        _primary_index(model).label("series_index"),
         model.uploaded_at.label("uploaded_at"),
         model.file_size.label("file_size"),
         model.acknowledged.label("acknowledged"),
@@ -365,6 +406,18 @@ async def _hydrate_items(db: AsyncSession, rows) -> List[LibraryItem]:
     return items
 
 
+def _item_has_series(u, predicate):
+    """`EXISTS` a series entry matching `predicate` on the browse row's ebook or
+    audiobook half. `u.c.ebook_id` / `u.c.audiobook_id` are NULL on the side a
+    row does not have, which makes that half's `EXISTS` false."""
+    return or_(
+        exists(select(EBookSeries.id).where(
+            EBookSeries.ebook_id == u.c.ebook_id, predicate(EBookSeries.name))),
+        exists(select(AudioBookSeries.id).where(
+            AudioBookSeries.audiobook_id == u.c.audiobook_id, predicate(AudioBookSeries.name))),
+    )
+
+
 async def list_items_impl(
     db: AsyncSession,
     *,
@@ -386,15 +439,15 @@ async def list_items_impl(
         base = base.where(or_(
             func.lower(u.c.title).like(term),
             func.lower(u.c.author).like(term),
-            func.lower(u.c.series).like(term),
             func.lower(u.c.alt_title).like(term),
             func.lower(u.c.alt_author).like(term),
-            func.lower(u.c.alt_series).like(term),
+            _item_has_series(u, lambda name: func.lower(name).like(term)),
         ))
     if author:
         base = base.where(u.c.author == author)
     if series:
-        base = base.where(u.c.series == series)
+        # Any series of the item, on either half of a pair (issue #905).
+        base = base.where(_item_has_series(u, lambda name: name == series))
 
     total = (await db.execute(select(func.count()).select_from(base.subquery()))).scalar_one()
     rows = (await db.execute(
@@ -421,7 +474,19 @@ async def facets_impl(
         return [FacetCount(name=name, count=count) for name, count in rows]
 
     authors = await facet(u.c.author)
-    series = await facet(u.c.series)
+
+    # Series facet: every series of every item in the tab, either half of a pair.
+    # One query of distinct (name, kind, item) from the two entry tables joined to
+    # the browse rows, counted here, so an item tagged with the same series on
+    # both halves of a pair counts once (issue #905).
+    ebook_side = select(EBookSeries.name, u.c.kind, u.c.item_id).select_from(u).join(
+        EBookSeries, EBookSeries.ebook_id == u.c.ebook_id)
+    audio_side = select(AudioBookSeries.name, u.c.kind, u.c.item_id).select_from(u).join(
+        AudioBookSeries, AudioBookSeries.audiobook_id == u.c.audiobook_id)
+    series_rows = (await db.execute(ebook_side.union(audio_side))).all()
+    per_name = Counter(name for name, _kind, _item in series_rows)
+    series = [FacetCount(name=name, count=count)
+              for name, count in sorted(per_name.items(), key=lambda kv: (kv[0].casefold(), kv[0]))]
 
     unpaired_ebooks = await _count(db, select(EBook.id).where(~_paired_ebook()))
     unpaired_audiobooks = await _count(db, select(AudioBook.id).where(~_paired_audiobook()))

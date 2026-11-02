@@ -660,6 +660,25 @@ def test_no_column_is_nullable_that_the_models_declare_not_null():
     assert drift == [], f"nullable in the database, NOT NULL in the models: {drift}"
 
 
+def _raw_book_id(session, table, title, filename, file_path, fmt):
+    """Insert one ebook/audiobook row by raw SQL and return its id.
+
+    Used by the tests that stop at an old revision. A Core `insert(EBook.__table__)`
+    still applies every column with a Python-side default, so it would name
+    columns a later revision adds (`series_cleared`, issue #905) that do not
+    exist yet. A later revision may also add a NOT NULL column with a default,
+    so at an old revision only a raw insert naming the columns of that revision
+    is safe.
+    """
+    return session.execute(
+        text(
+            f"INSERT INTO {table} (title, filename, file_path, format, uploaded_at) "
+            "VALUES (:title, :filename, :file_path, :format, now()) RETURNING id"
+        ),
+        {"title": title, "filename": filename, "file_path": file_path, "format": fmt},
+    ).scalar_one()
+
+
 def test_0024_backfills_a_null_captured_at_from_updated_at():
     """Clients rank "last read" by `captured_at`, falling back to `updated_at`,
     which server-side rewrites bump (issue #679). 0024 copies `updated_at` into
@@ -696,21 +715,9 @@ def test_0024_backfills_a_null_captured_at_from_updated_at():
         ).scalar_one()
         pair_ids = []
         for n in range(2):
-            # Core insert, naming only the columns this test needs: the DB is
-            # still at 0023 here, and an `EBook(...)`/`AudioBook(...)` ORM
-            # insert names every mapped column, including ones a later
-            # revision adds (e.g. `print_page_count`, issue #730) that do not
-            # exist yet at this point in the upgrade.
-            eb_id = session.execute(
-                insert(EBook.__table__)
-                .values(title="E", filename="e.epub", file_path=f"/x/e{n}.epub")
-                .returning(EBook.__table__.c.id)
-            ).scalar_one()
-            ab_id = session.execute(
-                insert(AudioBook.__table__)
-                .values(title="A", filename="a.m4b", file_path=f"/x/a{n}.m4b")
-                .returning(AudioBook.__table__.c.id)
-            ).scalar_one()
+            # Raw insert: the DB is still at 0023 here. See `_raw_book_id`.
+            eb_id = _raw_book_id(session, "ebooks", "E", "e.epub", f"/x/e{n}.epub", "epub")
+            ab_id = _raw_book_id(session, "audiobooks", "A", "a.m4b", f"/x/a{n}.m4b", "m4b")
             pair = BookPair(ebook_id=eb_id, audiobook_id=ab_id, status=PairStatus.SYNCED)
             session.add(pair)
             session.flush()
@@ -769,26 +776,10 @@ def test_0026_moves_an_orphaned_position_onto_its_pair():
                     is_admin=False, is_active=True, created_at=datetime(2026, 1, 1))
             .returning(User.__table__.c.id)
         ).scalar_one()
-        # Core insert, naming only the columns this test needs: the DB is
-        # still at 0025 here, and an `EBook(...)`/`AudioBook(...)` ORM insert
-        # names every mapped column, including ones a later revision adds
-        # (e.g. `print_page_count`, issue #730) that do not exist yet at this
-        # point in the upgrade.
-        eb_id = session.execute(
-            insert(EBook.__table__)
-            .values(title="E", filename="e.epub", file_path="/x/e720.epub")
-            .returning(EBook.__table__.c.id)
-        ).scalar_one()
-        ab_id = session.execute(
-            insert(AudioBook.__table__)
-            .values(title="A", filename="a.m4b", file_path="/x/a720.m4b")
-            .returning(AudioBook.__table__.c.id)
-        ).scalar_one()
-        old_ab_id = session.execute(
-            insert(AudioBook.__table__)
-            .values(title="A0", filename="a0.m4b", file_path="/x/a720-0.m4b")
-            .returning(AudioBook.__table__.c.id)
-        ).scalar_one()
+        # Raw insert: the DB is still at 0025 here. See `_raw_book_id`.
+        eb_id = _raw_book_id(session, "ebooks", "E", "e.epub", "/x/e720.epub", "epub")
+        ab_id = _raw_book_id(session, "audiobooks", "A", "a.m4b", "/x/a720.m4b", "m4b")
+        old_ab_id = _raw_book_id(session, "audiobooks", "A0", "a0.m4b", "/x/a720-0.m4b", "m4b")
         pair = BookPair(ebook_id=eb_id, audiobook_id=ab_id, status=PairStatus.SYNCED)
         session.add(pair)
         session.flush()
@@ -858,21 +849,9 @@ def test_0027_moves_a_false_capture_date_back():
         ).scalar_one()
         ids = []
         for n, device in enumerate((None, "phone")):
-            # Core insert, naming only the columns this test needs: the DB is
-            # still at 0026 here, and an `EBook(...)`/`AudioBook(...)` ORM
-            # insert names every mapped column, including ones a later
-            # revision adds (e.g. `print_page_count`, issue #730) that do not
-            # exist yet at this point in the upgrade.
-            eb_id = session.execute(
-                insert(EBook.__table__)
-                .values(title="E", filename="e.epub", file_path=f"/x/e726-{n}.epub")
-                .returning(EBook.__table__.c.id)
-            ).scalar_one()
-            ab_id = session.execute(
-                insert(AudioBook.__table__)
-                .values(title="A", filename="a.m4b", file_path=f"/x/a726-{n}.m4b")
-                .returning(AudioBook.__table__.c.id)
-            ).scalar_one()
+            # Raw insert: the DB is still at 0026 here. See `_raw_book_id`.
+            eb_id = _raw_book_id(session, "ebooks", "E", "e.epub", f"/x/e726-{n}.epub", "epub")
+            ab_id = _raw_book_id(session, "audiobooks", "A", "a.m4b", f"/x/a726-{n}.m4b", "m4b")
             pair = BookPair(ebook_id=eb_id, audiobook_id=ab_id, status=PairStatus.SYNCED)
             session.add(pair)
             session.flush()

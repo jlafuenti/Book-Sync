@@ -378,8 +378,8 @@ def test_write_tags_leaves_a_tag_alone_for_an_explicit_none(fake_mp4_file):
 def test_write_tags_leaves_the_series_alone_when_the_scan_found_none(fake_mp4_file):
     """Same bug, different field — and this one fires on an ordinary scan.
 
-    The filename parser always emits `series` as a key, `None` when no pattern
-    matched, and that dict is what the write-back receives. So every scan of a
+    The filename parser always emits `series_list` as a key, `None` when no
+    pattern matched, and that dict is what the write-back receives. So every scan of a
     book whose filename carries no series used to delete the series atoms the
     file itself had.
     """
@@ -389,7 +389,7 @@ def test_write_tags_leaves_the_series_alone_when_the_scan_found_none(fake_mp4_fi
     })
 
     abs_metadata.write_metadata_to_file(
-        str(path), {"title": "Successor's Promise", "series": None, "series_index": None}
+        str(path), {"title": "Successor's Promise", "series_list": None}
     )
 
     assert audio["©grp"] == ["Millennium's Rule #2"]
@@ -397,7 +397,7 @@ def test_write_tags_leaves_the_series_alone_when_the_scan_found_none(fake_mp4_fi
 
 
 def test_write_tags_still_clears_a_series_the_user_cleared(fake_mp4_file):
-    """The ingest marks a user-cleared series with `""`, and that must still
+    """A user-cleared series is an empty list, and that must still
     reach the file — otherwise "no opinion" would swallow a real instruction."""
     path, audio = fake_mp4_file({
         "©grp": ["Millennium's Rule #2"],
@@ -406,7 +406,7 @@ def test_write_tags_still_clears_a_series_the_user_cleared(fake_mp4_file):
     })
 
     abs_metadata.write_metadata_to_file(
-        str(path), {"title": "Successor's Promise", "series": ""}
+        str(path), {"title": "Successor's Promise", "series_list": []}
     )
 
     assert "©grp" not in audio

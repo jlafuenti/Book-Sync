@@ -41,7 +41,7 @@ def stub_metadata(monkeypatch):
     """Replace extract_metadata with an async stub returning known values."""
     def _install(**overrides):
         meta = {"title": "Stub Title", "author": "Stub Author",
-                "series": "Stub Series", "series_index": 2.0}
+                "series_list": [{"name": "Stub Series", "index": 2.0}]}
         meta.update(overrides)
 
         async def _fake_extract(filepath, file_type, db, library_root=None):
@@ -81,8 +81,7 @@ async def test_upload_ebook_success(make_user, auth_header, stub_metadata, temp_
     body = r.json()
     assert body["title"] == "Stub Title"
     assert body["author"] == "Stub Author"
-    assert body["series"] == "Stub Series"
-    assert body["series_index"] == 2.0
+    assert body["series_list"] == [{"name": "Stub Series", "index": 2.0}]
     assert body["format"] == "epub"
     assert body["file_size"] == len(content)
 
@@ -230,7 +229,7 @@ async def test_upload_ebook_auto_matches_existing_audiobook(
         session.add(audiobook)
         await session.commit()
 
-    stub_metadata(title="Same Title Book", author="Same Author", series=None, series_index=None)
+    stub_metadata(title="Same Title Book", author="Same Author", series_list=None)
     editor = await make_user(username="ed", role="editor")
 
     async with _library_client() as client:

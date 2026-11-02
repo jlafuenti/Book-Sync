@@ -330,20 +330,19 @@ async def test_a_folder_named_after_the_book_is_not_its_series(db):
 
     assert meta["title"] == "Book Title"
     assert meta["author"] == "Some Author"
-    assert meta["series"] is None
-    assert meta["series_index"] is None
+    assert meta["series_list"] is None
 
 
 async def test_that_holds_through_case_and_punctuation(db):
     meta = await _parse_audio(db, "Some Author/Book Title!/book title.m4b")
 
-    assert meta["series"] is None
+    assert meta["series_list"] is None
 
 
 async def test_a_real_series_folder_is_still_a_series(db):
     meta = await _parse_audio(db, "Some Author/Real Series/Book Title.m4b")
 
-    assert meta["series"] == "Real Series"
+    assert meta["series_list"] == [{"name": "Real Series", "index": None}]
     assert meta["title"] == "Book Title"
 
 
@@ -351,5 +350,4 @@ async def test_a_series_named_like_its_book_is_kept_when_it_has_a_number(db):
     """`Author/Dune/1 - Dune` is book 1 of a series called Dune, not a book folder."""
     meta = await _parse_audio(db, "Some Author/Book Title/1 - Book Title.m4b")
 
-    assert meta["series"] == "Book Title"
-    assert meta["series_index"] == 1.0
+    assert meta["series_list"] == [{"name": "Book Title", "index": 1.0}]
