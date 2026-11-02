@@ -31,6 +31,11 @@ function tieRank(key) {
  *   as 3.5) sit in series order and count. A number the library lacks is skipped
  *   to the next book it has. Ties at one number prefer a pair, then an ebook.
  * - Rows come out most recently active first, like Continue Reading.
+ * - A book in several series is listed once per membership (same `key`,
+ *   different `series`/`index`; the caller expands it, primary series first).
+ *   It is suggested once: after the stable sort by last activity, a row whose
+ *   next book already appeared in an earlier row is dropped. So the more
+ *   recently active series keeps it, and on a tie the series listed first.
  *
  * @param {Array<{key: string, series: ?string, index: ?number}>} books
  *   every book in the library; extra fields ride along to `row.book`.
@@ -82,7 +87,16 @@ export function computeNextUp(books, activity, now) {
         rows.push({ series: next.series, key: next.key, book: next, lastActivity })
     }
 
-    return rows.sort((a, b) => b.lastActivity - a.lastActivity)
+    // Stable sort: rows that tie keep group (input) order. Then keep only the
+    // first row for each suggested book (a book in several series, #906).
+    const seen = new Set()
+    return rows
+        .sort((a, b) => b.lastActivity - a.lastActivity)
+        .filter(row => {
+            if (seen.has(row.key)) return false
+            seen.add(row.key)
+            return true
+        })
 }
 
 /**

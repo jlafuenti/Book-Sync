@@ -24,6 +24,11 @@ import com.booksync.data.repository.lastPlayedAtMs
  *   the library lacks is skipped to the next book it has. Ties at one number
  *   prefer a pair, then an ebook.
  * - Rows come out most recently active first, like Continue Reading.
+ * - A book in several series is listed once per membership (same `key`,
+ *   different `series`/`index`; the caller expands it, primary series first).
+ *   It is suggested once: after the stable sort by last activity, a row whose
+ *   next book already appeared in an earlier row is dropped. So the more
+ *   recently active series keeps it, and on a tie the series listed first.
  */
 const val NEXT_UP_WINDOW_DAYS = 90L
 
@@ -86,7 +91,9 @@ fun computeNextUp(books: List<NextUpBook>, activity: List<NextUpActivity>, nowMs
 
         rows += NextUpRow(series = next.series.orEmpty(), book = next, lastActivityMs = lastActivity)
     }
-    return rows.sortedByDescending { it.lastActivityMs }
+    // sortedByDescending is stable, so ties keep group (input) order; then keep only
+    // the first row for each suggested book (a book in several series, #906).
+    return rows.sortedByDescending { it.lastActivityMs }.distinctBy { it.book.key }
 }
 
 /**
