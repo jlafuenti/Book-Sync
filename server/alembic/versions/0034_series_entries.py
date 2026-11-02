@@ -10,7 +10,9 @@ Upgrade, per table:
 
 1. create `<media>_series` with its unique `(owner, position)` and name indexes;
 2. copy every non-empty `series` (and its index) in as position 0;
-3. add `series_cleared` (false), set it where the old value was `''`;
+3. add `series_cleared` (false, keeping its server default like every other NOT NULL
+   boolean on these tables, so raw inserts that do not name it still work), set it where
+   the old value was `''`;
 4. drop `series` and `series_index` (batch mode, so SQLite can do it too).
 
 Downgrade reverses that. A book with several series keeps only its primary one
@@ -70,7 +72,6 @@ def upgrade() -> None:
         with op.batch_alter_table(media) as batch:
             batch.drop_column("series")
             batch.drop_column("series_index")
-            batch.alter_column("series_cleared", server_default=None)
 
 
 def downgrade() -> None:

@@ -30,7 +30,8 @@ def _legacy_schema(conn):
     for table in ("ebooks", "audiobooks"):
         conn.execute(sa.text(
             f"CREATE TABLE {table} (id INTEGER PRIMARY KEY, title VARCHAR(500), "
-            "series VARCHAR(500), series_index FLOAT)"
+            "filename VARCHAR(1000), file_path VARCHAR(2000), format VARCHAR(10), "
+            "uploaded_at DATETIME, series VARCHAR(500), series_index FLOAT)"
         ))
         conn.execute(sa.text(
             f"INSERT INTO {table} (id, title, series, series_index) VALUES "
@@ -142,3 +143,30 @@ def test_downgrade_round_trips_the_primary_series():
             (3, None, None),
             (4, "Axis Chronological", None),
         ]
+
+
+def test_series_cleared_keeps_its_server_default_for_raw_inserts():
+    """Every other NOT NULL boolean on these tables keeps its server default
+    (`acknowledged`, from the baseline), and callers that insert by raw SQL —
+    the Postgres migration tests, an operator's script — name only the columns
+    they know. The column must therefore default to false in the database, not
+    just in the ORM."""
+    m = _load()
+    engine = sa.create_engine("sqlite://")
+    with engine.begin() as conn:
+        _legacy_schema(conn)
+        _upgrade(m, conn)
+        for table in ("ebooks", "audiobooks"):
+            conn.execute(sa.text(
+                f"INSERT INTO {table} (title, filename, file_path, format, uploaded_at) "
+                "VALUES ('Raw', 'r.bin', '/x/raw', 'bin', CURRENT_TIMESTAMP)"
+            ))
+            flag = conn.execute(sa.text(
+                f"SELECT series_cleared FROM {table} WHERE title = 'Raw'"
+            )).scalar_one()
+            assert bool(flag) is False
+
+
+def test_models_declare_the_same_server_default():
+    for model in (EBook, AudioBook):
+        assert model.__table__.c.series_cleared.server_default is not None

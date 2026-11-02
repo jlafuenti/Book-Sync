@@ -9,7 +9,7 @@ from sqlalchemy import (
     String, Text, DateTime, Integer, BigInteger, Boolean, Enum, ForeignKey,
     Float, Index, JSON, inspect,
 )
-from sqlalchemy import event
+from sqlalchemy import event, false
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -65,7 +65,13 @@ class MediaColumnsMixin:
     # thing that stays here — it records that a user emptied the list, so a
     # rescan or an Audiobookshelf enrich does not put it back. It replaces the
     # old `series = ''` sentinel.
-    series_cleared: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # `default=False` gives a freshly flushed row a known value without an
+    # expired-attribute load (which would raise MissingGreenlet in an async
+    # handler); `server_default` matches the migration and lets raw inserts
+    # that do not name the column work, as for `acknowledged`.
+    series_cleared: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=false(),
+    )
     metadata_source: Mapped[str] = mapped_column(String(50), nullable=True)  # 'embedded', 'pattern', 'filename'
     metadata_pattern: Mapped[str] = mapped_column(String(500), nullable=True)  # the pattern that matched, if any
 
