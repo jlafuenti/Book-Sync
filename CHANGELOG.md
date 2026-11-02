@@ -18,6 +18,13 @@ operator must do by hand rather than read about afterwards.
 
 ### Fixed
 
+- Library files Tandem rewrites keep their mode instead of ending up `0600` (#885). An EPUB
+  metadata write-back or a chapter remux replaced the file with a temp file created as `0600`, so
+  any program reading the library as a different user lost access to it. A rewritten file now
+  keeps the original's mode and, when the server is allowed to set it, its owner, and a file
+  placed into the library by an import gets the normal mode for the server's umask. The EPUB
+  write-back also stages its temp file next to the book, so the replace is an atomic rename rather
+  than a copy between filesystems, which means it now needs write access to the book's folder.
 - Writing metadata back to an MP3 or FLAC/Ogg audiobook no longer puts the series in the album
   tag or the series index in the track number (#886). Readarr-style managers identify an
   audiobook by its album, so after a pairing or a metadata edit their folder watcher re-linked
@@ -44,6 +51,10 @@ operator must do by hand rather than read about afterwards.
 
 ### Upgrade notes
 
+- Files already at `0600` from the #885 bug stay that way, because a rewrite now keeps the mode it
+  finds. If another user needs to read them, run this over the library folders once:
+  `find <library> -type f -perm 600 -exec chmod 644 {} +`. A library that every program reads as
+  the same user is unaffected and doesn't need it.
 - Files written before this change keep the series in their album until Tandem writes their
   tags again (a pairing or a metadata edit). Nothing rewrites them automatically, and books
   another tool has already re-linked have to be fixed in that tool.

@@ -23,7 +23,6 @@ swallows everything and logs.
 import logging
 import os
 import re
-import shutil
 import tempfile
 import zipfile
 
@@ -33,6 +32,8 @@ import mutagen
 # behaviour -- it makes the choice explicit for input that arrives as an
 # attacker-supplied archive, and keeps bandit quiet on a public repo.
 import defusedxml.ElementTree as ET
+
+from services.file_mode import copy_mode_and_owner
 # defusedxml re-exports only the *parsers* (fromstring, parse, tostring …), so
 # parsing stays defused (issue #265) while the two tree builders the writer
 # needs come from the stdlib. The parsed tree is a plain stdlib Element, so the
@@ -256,7 +257,11 @@ def write_ebook_metadata(filepath: str, book) -> None:
         # Write modified OPF back to a new zip file, then replace original
         modified_opf = ET.tostring(root, encoding='utf-8', xml_declaration=True)
         
-        fd, temp_path = tempfile.mkstemp(suffix=".epub")
+        # Next to the target, so the replace is an atomic rename rather than a
+        # copy across filesystems. Hidden and not `.epub`, so a scan of the
+        # folder doesn't take it for a book.
+        directory = os.path.dirname(os.path.abspath(filepath))
+        fd, temp_path = tempfile.mkstemp(dir=directory, prefix=".", suffix=".tandem-tmp")
         os.close(fd)
         
         try:
@@ -270,7 +275,8 @@ def write_ebook_metadata(filepath: str, book) -> None:
                     zout.writestr(opf_path, modified_opf)
                     
             # Replace original
-            shutil.move(temp_path, filepath)
+            copy_mode_and_owner(filepath, temp_path)
+            os.replace(temp_path, filepath)
             logger.info(f"[write-back] EPUB metadata written safely to {filepath}")
         finally:
             if os.path.exists(temp_path):

@@ -37,6 +37,7 @@ from services.audio_duration import probe_duration_seconds
 from config import settings
 from services.audio_integrity import stderr_indicates_corruption
 from services.cache import TTLMemo
+from services.file_mode import copy_mode_and_owner
 
 logger = logging.getLogger(__name__)
 
@@ -432,6 +433,7 @@ def remux_with_chapters(
                 "remux of %s: %s", filepath, e
             )
 
+        copy_mode_and_owner(filepath, temp_out_path)
         os.replace(temp_out_path, filepath)
         return True, None
     except Exception as e:
