@@ -11,6 +11,7 @@ import useIsMobile from '../hooks/useIsMobile'
 import FilterPill from '../components/FilterPill'
 import CoverImg from '../components/CoverImg'
 import { TourAnchors, TourScreens, useTourAnchor, useTourScreen } from '../tour/anchors'
+import { seriesOf, seriesNames, hasSeries, primarySeries, groupBySeries } from '../lib/series'
 import './TranscriptionPage.css'
 // Server timestamps are naive UTC — one parser for the whole app (issue #216).
 // `formatDate` here has always meant date + time; `formatDay` is date-only.
@@ -93,7 +94,7 @@ function SortPill({ sortField, setSortField, sortDir, setSortDir }) {
 const pairMatchesSearch = (p, q) => (
     (p?.ebook?.title  || p?.audiobook?.title  || '').toLowerCase().includes(q) ||
     (p?.ebook?.author || p?.audiobook?.author || '').toLowerCase().includes(q) ||
-    (p?.ebook?.series || p?.audiobook?.series || '').toLowerCase().includes(q)
+    seriesNames(seriesOf(p)).some(n => n.toLowerCase().includes(q))
 )
 
 /* ── Main Component ──────────────────────────────────────────────────────── */
@@ -395,19 +396,19 @@ function TranscriptionPage({ tab }) {
     }, [tabBasePairs])
 
     const allSeriesNames = useMemo(() => {
-        const s = new Set(tabBasePairs.map(p => p.ebook?.series || p.audiobook?.series).filter(Boolean))
+        // Every series any pair is in (issue #907), not just the first.
+        const s = new Set(tabBasePairs.flatMap(p => seriesNames(seriesOf(p))))
         return [...s].sort()
     }, [tabBasePairs])
 
     const filteredPairs = useMemo(() => matchedPairs.filter(p => {
         if (searchQuery) {
             const q = searchQuery.toLowerCase()
-            const series = (p.ebook?.series || p.audiobook?.series || '').toLowerCase()
             if (!(
                 (p.ebook?.title    || '').toLowerCase().includes(q) ||
                 (p.audiobook?.title || '').toLowerCase().includes(q) ||
                 (p.ebook?.author   || '').toLowerCase().includes(q) ||
-                series.includes(q)
+                seriesNames(seriesOf(p)).some(n => n.toLowerCase().includes(q))
             )) return false
         }
         if (authorFilter) {
@@ -415,8 +416,7 @@ function TranscriptionPage({ tab }) {
             if (a !== authorFilter) return false
         }
         if (seriesFilter) {
-            const s = p.ebook?.series || p.audiobook?.series || ''
-            if (s !== seriesFilter) return false
+            if (!hasSeries(seriesOf(p), seriesFilter)) return false
         }
         return true
     }), [matchedPairs, searchQuery, authorFilter, seriesFilter])
@@ -439,7 +439,7 @@ function TranscriptionPage({ tab }) {
     const sortPairs = (arr) => [...arr].sort((a, b) => {
         const getV = p => {
             if (sortField === 'author') return (p.ebook?.author || p.audiobook?.author || '').toLowerCase()
-            if (sortField === 'series') return (p.ebook?.series || p.audiobook?.series || '').toLowerCase()
+            if (sortField === 'series') return (primarySeries(seriesOf(p))?.name || '').toLowerCase()
             return (p.ebook?.title || p.audiobook?.title || '').toLowerCase()
         }
         const va = getV(a), vb = getV(b)
@@ -453,24 +453,17 @@ function TranscriptionPage({ tab }) {
 
     // Series grouping for Not Transcribed
     const { seriesGroups, noSeriesPairs } = useMemo(() => {
-        const groups = {}
-        const noSeries = []
-        notTranscribedPairs.forEach(pair => {
-            const series = pair.ebook?.series || pair.audiobook?.series
-            const idx    = pair.ebook?.series_index ?? pair.audiobook?.series_index
-            if (series) {
-                if (!groups[series]) groups[series] = { name: series, pairs: [] }
-                groups[series].pairs.push({ ...pair, _seriesIndex: idx })
-            } else {
-                noSeries.push(pair)
-            }
-        })
-        Object.values(groups).forEach(g =>
-            g.pairs.sort((a, b) => (a._seriesIndex ?? 999) - (b._seriesIndex ?? 999))
-        )
+        // A pair lands in every series it is in, carrying that series' number
+        // (issue #907).
+        const groups = groupBySeries(notTranscribedPairs, seriesOf).map(g => ({
+            name: g.name,
+            pairs: g.entries
+                .map(({ item, index }) => ({ ...item, _seriesIndex: index }))
+                .sort((a, b) => (a._seriesIndex ?? 999) - (b._seriesIndex ?? 999)),
+        }))
         return {
-            seriesGroups: Object.values(groups).sort((a, b) => a.name.localeCompare(b.name)),
-            noSeriesPairs: noSeries,
+            seriesGroups: groups.sort((a, b) => a.name.localeCompare(b.name)),
+            noSeriesPairs: notTranscribedPairs.filter(p => seriesOf(p).length === 0),
         }
     }, [notTranscribedPairs])
 

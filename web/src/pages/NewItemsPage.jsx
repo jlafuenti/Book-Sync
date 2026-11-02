@@ -5,6 +5,7 @@ import { useAuth } from '../contexts/AuthContext'
 import useListFetch from '../hooks/useListFetch'
 // Server timestamps are naive UTC — parse via the shared helper (issue #216).
 import { formatDate } from '../lib/datetime'
+import { seriesLabel } from '../lib/series'
 
 function formatSize(bytes) {
     if (!bytes) return '—'
@@ -63,7 +64,7 @@ function BookTable({ items, type, selected, onCheck, canEdit, onEdit }) {
                                 ) : book.title}
                             </td>
                             <td>{book.author || '—'}</td>
-                            <td>{book.series ? `${book.series}${book.series_index ? ` #${book.series_index}` : ''}` : '—'}</td>
+                            <td>{seriesLabel(book.series_list) || '—'}</td>
                             <td>{book.format?.toUpperCase()}</td>
                             <td>{formatSize(book.file_size)}</td>
                             <td>{formatDate(book.uploaded_at)}</td>

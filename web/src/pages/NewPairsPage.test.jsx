@@ -84,3 +84,23 @@ describe('NewPairsPage list fetch (issue #276)', () => {
         await waitFor(() => expect(getNewPairsMock).toHaveBeenCalledTimes(2))
     })
 })
+
+// Issue #907: the series mismatch compares the canonical strings of each half
+// as one row. There is no separate "Series #" row any more.
+describe('NewPairsPage series mismatch (issue #907)', () => {
+    it('shows one Series row with the full list from each half', async () => {
+        getMetadataDiscrepanciesMock.mockResolvedValue([{
+            pair_id: 2, title: 'The Mad Ship',
+            discrepancies: [{ field: 'series', ebook_value: 'Axis Saga #4; Axis Chronological #2', audiobook_value: 'Axis Saga #4' }],
+        }])
+        render(<NewPairsPage />)
+        await screen.findByText('The Mad Ship')
+
+        fireEvent.click(screen.getByRole('button', { name: 'Resolve' }))
+
+        expect(screen.getByText('Series')).toBeInTheDocument()
+        expect(screen.queryByText('Series #')).toBeNull()
+        expect(screen.getByText('Axis Saga #4; Axis Chronological #2')).toBeInTheDocument()
+        expect(screen.getByText('Axis Saga #4')).toBeInTheDocument()
+    })
+})

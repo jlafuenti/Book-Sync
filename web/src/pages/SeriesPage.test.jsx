@@ -137,16 +137,16 @@ describe('SeriesPage SeriesBookRow', () => {
 
 describe('SeriesPage — series-level progress actions (issue #270)', () => {
     const EBOOK_1 = {
-        id: 1, title: 'Book One', author: 'An Author', series: 'A Series',
-        series_index: 1, cover_path: null, uploaded_at: '2026-01-01',
+        id: 1, title: 'Book One', author: 'An Author', series_list: [{ name: 'A Series', index: 1 }],
+        cover_path: null, uploaded_at: '2026-01-01',
     }
     const AUDIO_2 = {
-        id: 2, title: 'Book One', author: 'An Author', series: 'A Series',
-        series_index: 1, cover_path: null, uploaded_at: '2026-01-01',
+        id: 2, title: 'Book One', author: 'An Author', series_list: [{ name: 'A Series', index: 1 }],
+        cover_path: null, uploaded_at: '2026-01-01',
     }
     const EBOOK_3 = {
-        id: 3, title: 'Book Two', author: 'An Author', series: 'A Series',
-        series_index: 2, cover_path: null, uploaded_at: '2026-01-02',
+        id: 3, title: 'Book Two', author: 'An Author', series_list: [{ name: 'A Series', index: 2 }],
+        cover_path: null, uploaded_at: '2026-01-02',
     }
 
     async function renderSeriesPage() {
@@ -285,6 +285,75 @@ describe('SeriesPage — series-level progress actions (issue #270)', () => {
     })
 })
 
+// Issue #907: a book is in every series it lists, with that series' number; a
+// pair's series are the union of both halves'.
+describe('SeriesPage — several series per book (issue #907)', () => {
+    const SAGA = (index) => ({ name: 'Axis Saga', index })
+    const CHRONO = (index) => ({ name: 'Axis Chronological', index })
+    const book = (id, title, series_list) => ({
+        id, title, author: 'An Author', series_list, cover_path: null, uploaded_at: '2026-01-01',
+    })
+
+    async function renderMulti() {
+        const both = book(1, 'Both Series', [SAGA(1), CHRONO(3)])
+        const saga2 = book(2, 'Saga Two', [SAGA(2)])
+        const audioOnly = book(3, 'Audio Adds', [CHRONO(1)])
+        const pairedEbook = book(4, 'Audio Adds', [])
+        getEbooksMock.mockResolvedValue([both, saga2, pairedEbook])
+        getAudiobooksMock.mockResolvedValue([audioOnly])
+        getPairsMock.mockResolvedValue([{ id: 9, ebook: pairedEbook, audiobook: audioOnly }])
+        render(<MemoryRouter><SeriesPage /></MemoryRouter>)
+        await screen.findByText('Axis Saga')
+    }
+
+    const cardTitles = () => [...document.querySelectorAll('.series-card-title')].map(n => n.textContent)
+
+    it('shows a book under every series it is in, the audiobook half of a pair included', async () => {
+        await renderMulti()
+
+        expect(cardTitles().sort()).toEqual(['Axis Chronological', 'Axis Saga'])
+        const stats = (name) => screen.getByText(name).closest('.series-card').querySelector('.series-card-stats').textContent
+        expect(stats('Axis Saga')).toMatch(/2 ebooks/)
+        // Both Series (ebook) + the pair whose audiobook carries Axis Chronological
+        expect(stats('Axis Chronological')).toMatch(/2 ebooks/)
+    })
+
+    it('lists each book with the number it has in that series', async () => {
+        await renderMulti()
+        fireEvent.click(screen.getByTitle('List view'))
+        for (const name of ['Axis Chronological', 'Axis Saga']) {
+            fireEvent.click(screen.getByText(name).closest('.series-list-row').querySelector('.series-list-chevron-btn'))
+        }
+
+        const rows = (name) => {
+            const row = screen.getByText(name).closest('.series-list-row')
+            const out = []
+            for (let n = row.nextElementSibling; n && n.classList.contains('series-book-row'); n = n.nextElementSibling) {
+                out.push([n.querySelector('.series-book-row-index').textContent, n.querySelector('.series-book-row-title').textContent])
+            }
+            return out
+        }
+        expect(rows('Axis Saga')).toEqual([['#1', 'Both Series'], ['#2', 'Saga Two']])
+        expect(rows('Axis Chronological')).toEqual([['#1', 'Audio Adds'], ['#3', 'Both Series']])
+    })
+
+    it('bulk edit writes a book in two selected series once', async () => {
+        await renderMulti()
+        fireEvent.click(screen.getByRole('button', { name: 'Select' }))
+        document.querySelectorAll('.series-card-checkbox').forEach(box => fireEvent.click(box))
+        await screen.findByText(/3 selected/)
+
+        fireEvent.click(screen.getByRole('button', { name: 'Edit Metadata' }))
+        fireEvent.change(screen.getAllByPlaceholderText('Leave blank to keep unchanged')[0], { target: { value: 'New Author' } })
+        fireEvent.click(screen.getByRole('button', { name: 'Save to 3 Items' }))
+
+        await waitFor(() => expect(updateEbookMetadataMock).toHaveBeenCalled())
+        const ebookIds = updateEbookMetadataMock.mock.calls.map(c => c[0]).sort()
+        expect(ebookIds).toEqual([1, 2, 4])
+        expect(updateAudiobookMetadataMock.mock.calls.map(c => c[0])).toEqual([3])
+    })
+})
+
 // Issue #598 Track B: the walkthrough's Series step needs a real element to
 // spotlight — present even for a search/filter that empties the list, but
 // never registered when the library genuinely has no series — and needs to
@@ -310,7 +379,7 @@ describe('SeriesPage tour anchor and screen readiness (issue #598 Track B)', () 
 
     it('tags the grid and reports settled once loaded, when series exist', async () => {
         getEbooksMock.mockResolvedValue([{
-            id: 1, title: 'Book 1', author: 'An Author', series: 'A Series', series_index: 1,
+            id: 1, title: 'Book 1', author: 'An Author', series_list: [{ name: 'A Series', index: 1 }],
             cover_path: null, uploaded_at: '2026-01-01',
         }])
         const registry = new TourAnchorRegistry()

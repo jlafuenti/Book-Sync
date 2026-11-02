@@ -11,7 +11,6 @@ const FIELDS_LABEL = {
     title: 'Title',
     author: 'Author',
     series: 'Series',
-    series_index: 'Series #',
     description: 'Description',
     publisher: 'Publisher',
     publish_year: 'Year',

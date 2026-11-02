@@ -637,7 +637,7 @@ describe('HomePage Continue Reading order (issue #679)', () => {
 describe('HomePage Next up (issue #716)', () => {
     const recent = new Date(Date.now() - 2 * 86_400_000).toISOString().replace('Z', '')
     const book = (id, title, index) => ({
-        id, title, author: 'An Author', series: 'Axis', series_index: index,
+        id, title, author: 'An Author', series_list: [{ name: 'Axis', index }],
         cover_path: null, uploaded_at: '2026-01-01T00:00:00',
     })
 
@@ -666,6 +666,26 @@ describe('HomePage Next up (issue #716)', () => {
         fireEvent.click(within(section).getByText('Axis Two'))
 
         expect(await screen.findByText('details for this book')).toBeInTheDocument()
+    })
+
+    // Issue #907: a book in two series is one book. Both series point at the
+    // same next book, so it is suggested once, under the series listed first.
+    it('suggests a book in two series once', async () => {
+        const inBoth = (id, title, a, b) => ({
+            ...book(id, title, a),
+            series_list: [{ name: 'Axis Saga', index: a }, { name: 'Axis Chronological', index: b }],
+        })
+        getEbooksMock.mockResolvedValue([inBoth(1, 'Axis One', 1, 1), inBoth(2, 'Axis Two', 2, 2)])
+        getAllProgressMock.mockResolvedValue([{
+            id: 9, media_type: 'ebook', ebook_id: 1, is_completed: true,
+            epub_progress_percent: 100, updated_at: recent, captured_at: recent,
+        }])
+        renderWithDetails()
+
+        const section = (await screen.findByText('Next up')).closest('section')
+        expect(within(section).getAllByText('Axis Two')).toHaveLength(1)
+        expect(within(section).getByText('Axis Saga')).toBeInTheDocument()
+        expect(within(section).queryByText('Axis Chronological')).toBeNull()
     })
 
     it('shows no Next up row when nothing in a series was touched in 90 days', async () => {
@@ -729,7 +749,7 @@ describe('HomePage tour anchors and screen readiness (issue #598 Track B)', () =
     }
 
     it('tags the three home sections with their tour anchors, and only the ones actually rendered', async () => {
-        getEbooksMock.mockResolvedValue([{ id: 1, title: 'Axis One', author: 'A', series: 'Axis', series_index: 1, cover_path: null, uploaded_at: '2026-01-01T00:00:00' }])
+        getEbooksMock.mockResolvedValue([{ id: 1, title: 'Axis One', author: 'A', series_list: [{ name: 'Axis', index: 1 }], cover_path: null, uploaded_at: '2026-01-01T00:00:00' }])
         getAllProgressMock.mockResolvedValue([{
             id: 9, media_type: 'ebook', ebook_id: 1, epub_progress_percent: 20, epub_chapter: 1,
             is_completed: false, updated_at: '2026-01-01T00:00:00Z', captured_at: '2026-01-01T00:00:00Z',

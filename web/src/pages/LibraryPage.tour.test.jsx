@@ -42,11 +42,11 @@ const { isMobileMock } = vi.hoisted(() => ({ isMobileMock: vi.fn(() => false) })
 vi.mock('../hooks/useIsMobile', () => ({ default: () => isMobileMock() }))
 
 const ebook = (id, extra = {}) => ({
-    id, title: `Ebook ${id}`, author: 'Author A', series: null, series_index: null, format: 'epub',
+    id, title: `Ebook ${id}`, author: 'Author A', series_list: [], format: 'epub',
     cover_path: null, uploaded_at: '2026-01-01T00:00:00Z', file_size: 100, acknowledged: true, ...extra,
 })
 const audiobook = (id, extra = {}) => ({
-    id, title: `Audio ${id}`, author: 'Author B', series: null, series_index: null, format: 'm4b',
+    id, title: `Audio ${id}`, author: 'Author B', series_list: [], format: 'm4b',
     cover_path: null, uploaded_at: '2026-01-01T00:00:00Z', file_size: 1000, acknowledged: true, ...extra,
 })
 const pairItem = (pid, eid, aid, status = 'synced') => ({

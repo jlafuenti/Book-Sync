@@ -11,6 +11,7 @@ import CoverImg from '../components/CoverImg'
 import { useAuth } from '../contexts/AuthContext'
 import { useAudioPlayer } from '../contexts/AudioPlayerContext'
 import { formatDateTime } from '../lib/datetime'
+import { unionSeries, formatSeriesList } from '../lib/series'
 import { switchToEbook } from '../lib/handoff'
 import { handoffPositionMs } from '../lib/playbackOffsets'
 import { TourAnchors, TourScreens, TourEvents, useTourAnchor, useTourScreen, useTourEmit } from '../tour/anchors'
@@ -222,11 +223,18 @@ function BookDetailPage() {
     const isAudiobook = type === 'audiobook'
     const initials = (book.title || '?')[0].toUpperCase()
 
+    // The pair rule (issue #907): the ebook's series first, then any the
+    // audiobook adds. `paired_with` carries the other half's list when the
+    // server sends one.
+    const series = isAudiobook
+        ? unionSeries(book.paired_with?.series_list, book.series_list)
+        : unionSeries(book.series_list, book.paired_with?.series_list)
+
     // Build metadata rows
     const metadataRows = [
         { label: 'Title', value: book.title },
         { label: 'Author', value: book.author },
-        { label: 'Series', value: book.series ? `${book.series}${book.series_index != null ? ` #${book.series_index}` : ''}` : null },
+        { label: 'Series', value: formatSeriesList(series) || null },
         { label: 'Publisher', value: book.publisher },
         { label: 'Published', value: book.publish_year },
         { label: 'Language', value: book.language },
@@ -304,11 +312,16 @@ function BookDetailPage() {
                     </div>
                     <h1 className="book-detail-title">{book.title}</h1>
                     {book.author && <p className="book-detail-author">by {book.author}</p>}
-                    {book.series && (
+                    {series.length > 0 && (
                         <p className="book-detail-series">
-                            {/* Issue #717: the name opens that series in the Library — where the Series page's own cards go, and what the Android link opens; the book number stays text. */}
-                            <Link to={`/library?${new URLSearchParams({ series: book.series })}`}>{book.series}</Link>
-                            {book.series_index != null ? ` · Book ${book.series_index}` : ''}
+                            {/* Issue #717: the name opens that series in the Library — where the Series page's own cards go, and what the Android link opens; the book number stays text. One link per series (issue #907). */}
+                            {series.map((s, i) => (
+                                <React.Fragment key={s.name}>
+                                    {i > 0 && '; '}
+                                    <Link to={`/library?${new URLSearchParams({ series: s.name })}`}>{s.name}</Link>
+                                    {s.index != null ? ` · Book ${s.index}` : ''}
+                                </React.Fragment>
+                            ))}
                         </p>
                     )}
                     {book.description && (

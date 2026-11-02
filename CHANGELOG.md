@@ -16,6 +16,19 @@ operator must do by hand rather than read about afterwards.
 
 ## [Unreleased]
 
+### Changed
+
+- The web app shows, edits and browses several series per book (#907). Library cards and rows
+  show the primary series with a `+N` for the rest, the book page links every series (each to
+  the Library filtered to it, with its own book number), and the Series page lists a book under
+  every series it is in. The metadata editor's two series fields become a series list: add,
+  remove and reorder entries (the first is the primary), with the library's existing series
+  names offered as you type. The Match tab compares and applies a result's whole series list,
+  the Unpaired and Transcription filters and searches match any of a book's series, and Home
+  "Next up" suggests a book that is in two series once. Bulk edit gains a "Replace series" /
+  "Add to series" choice, so a series can be added to many books without touching the ones they
+  already have. Needs the server release that returns `series_list`.
+
 ### Fixed
 
 - Library files Tandem rewrites keep their mode instead of ending up `0600` (#885). An EPUB
