@@ -177,5 +177,51 @@
       {"series": "Other Saga", "key": "ebook_4"},
       {"series": "Axis Saga", "key": "ebook_2"}
     ]
+  },
+  {
+    "name": "a book in two series is suggested once, under the more recently active series",
+    "why": "A book can belong to several series; the client lists it once per membership (same key). Both series point at the same next book, which must not appear twice: the series touched most recently keeps it.",
+    "now": "2026-09-26T00:00:00Z",
+    "books": [
+      {"key": "pair_1", "series": "Axis Saga", "index": 1},
+      {"key": "pair_1", "series": "Axis Chronological", "index": 1},
+      {"key": "pair_2", "series": "Axis Saga", "index": 2},
+      {"key": "pair_2", "series": "Axis Chronological", "index": 2},
+      {"key": "pair_9", "series": "Axis Chronological", "index": 0.5}
+    ],
+    "activity": [
+      {"key": "pair_1", "completed": true, "at": "2026-09-21T00:00:00Z"},
+      {"key": "pair_9", "completed": true, "at": "2026-09-25T00:00:00Z"}
+    ],
+    "expected": [{"series": "Axis Chronological", "key": "pair_2"}]
+  },
+  {
+    "name": "when the two series tie, the series listed first for that book wins",
+    "why": "Equal last activity falls back to input order (stable sort), so the series a client lists first for a book, its primary one, keeps the suggestion.",
+    "now": "2026-09-26T00:00:00Z",
+    "books": [
+      {"key": "pair_1", "series": "Axis Saga", "index": 1},
+      {"key": "pair_1", "series": "Axis Chronological", "index": 1},
+      {"key": "pair_2", "series": "Axis Saga", "index": 2},
+      {"key": "pair_2", "series": "Axis Chronological", "index": 2}
+    ],
+    "activity": [{"key": "pair_1", "completed": true, "at": "2026-09-25T00:00:00Z"}],
+    "expected": [{"series": "Axis Saga", "key": "pair_2"}]
+  },
+  {
+    "name": "a reader of two overlapping series gets two rows when the next books differ",
+    "why": "Deduplication is by the suggested book, not by the shared book you read: different next books each get their own row, in input order when activity ties.",
+    "now": "2026-09-26T00:00:00Z",
+    "books": [
+      {"key": "pair_1", "series": "Axis Saga", "index": 1},
+      {"key": "pair_1", "series": "Axis Chronological", "index": 3},
+      {"key": "pair_2", "series": "Axis Saga", "index": 2},
+      {"key": "pair_4", "series": "Axis Chronological", "index": 4}
+    ],
+    "activity": [{"key": "pair_1", "completed": true, "at": "2026-09-25T00:00:00Z"}],
+    "expected": [
+      {"series": "Axis Saga", "key": "pair_2"},
+      {"series": "Axis Chronological", "key": "pair_4"}
+    ]
   }
 ]

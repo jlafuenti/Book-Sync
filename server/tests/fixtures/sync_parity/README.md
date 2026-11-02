@@ -45,7 +45,10 @@ unbreakable. (Phase 2 — the Android `match_cases.json` half — landed with #4
   screen's "Next up" row: the next book in each series touched in the last 90 days.
   `books` are already one per openable book (`pair_N`, `ebook_N`, `audiobook_N`); how
   each client reduces its own library to them (a pair counts once, 0 % progress is not
-  activity) is tested on its side. No Python half: the rule is client-side.
+  activity) is tested on its side. The same `key` may appear once per series membership
+  (a book in several series); a next book already suggested under a more recently active
+  series is not suggested again, and on equal activity the series listed first wins. No
+  Python half: the rule is client-side.
 - `audio_to_epub_cases.json`: `[{ "name", "why", "points": [{chapter, sentence_index,
   audio_start_ms}], "audio_position_ms", "expected_point_index": int|null }]`. Which point an
   audio position lands on — `expected_point_index` indexes `points` **as written**, so a case can
