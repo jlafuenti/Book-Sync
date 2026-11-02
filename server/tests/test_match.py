@@ -103,8 +103,8 @@ async def test_audible_maps_series_and_rich_fields(make_client, make_user, auth_
     assert res["title"] == "The Name of the Wind"
     assert res["author"] == "Patrick Rothfuss"
     assert res["narrators"] == "Nick Podehl"
-    assert res["series"] == "The Kingkiller Chronicle"
-    assert res["series_index"] == 1.0
+    assert res["series_list"] == [{"name": "The Kingkiller Chronicle", "index": 1.0}]
+    assert "series" not in res and "series_index" not in res
     assert res["publisher"] == "Audible Studios"
     assert res["publish_year"] == 2009
     # HTML stripped from the publisher summary.
@@ -132,8 +132,44 @@ async def test_audible_unparseable_sequence_keeps_series_name(
         r = await c.post("/match/search", headers=auth_header(user),
                          json={"provider": "audible", "query": "kingkiller"})
     (res,) = r.json()
-    assert res["series"] == "The Kingkiller Chronicle"
-    assert res["series_index"] is None
+    assert res["series_list"] == [{"name": "The Kingkiller Chronicle", "index": None}]
+
+
+async def test_audible_returns_every_series_in_order(make_client, make_user, auth_header, monkeypatch):
+    user = await make_user(username="u", role="user")
+    product = dict(_AUDIBLE_PRODUCT, series=[
+        {"sequence": "4", "title": "Axis Saga"},
+        {"sequence": "2.5", "title": "Axis Chronological"},
+        {"sequence": "", "title": ""},           # a blank title is skipped
+        {"sequence": "9", "title": "axis saga"},  # a repeat of the first is skipped
+    ])
+
+    def handler(request):
+        return httpx.Response(200, json={"products": [product]})
+
+    _patch_outbound_transport(monkeypatch, handler)
+    async with make_client(match.router) as c:
+        r = await c.post("/match/search", headers=auth_header(user),
+                         json={"provider": "audible", "query": "axis"})
+    (res,) = r.json()
+    assert res["series_list"] == [
+        {"name": "Axis Saga", "index": 4.0}, {"name": "Axis Chronological", "index": 2.5}]
+
+
+async def test_audible_product_without_series_has_an_empty_list(
+    make_client, make_user, auth_header, monkeypatch
+):
+    user = await make_user(username="u", role="user")
+    product = {k: v for k, v in _AUDIBLE_PRODUCT.items() if k != "series"}
+
+    def handler(request):
+        return httpx.Response(200, json={"products": [product]})
+
+    _patch_outbound_transport(monkeypatch, handler)
+    async with make_client(match.router) as c:
+        r = await c.post("/match/search", headers=auth_header(user),
+                         json={"provider": "audible", "query": "x"})
+    assert r.json()[0]["series_list"] == []
 
 
 async def test_audible_upstream_error_returns_502(make_client, make_user, auth_header, monkeypatch):
@@ -198,8 +234,7 @@ async def test_hardcover_maps_series_and_rich_fields(
     assert res["id"] == "313528"
     assert res["title"] == "The Name of the Wind"
     assert res["author"] == "Patrick Rothfuss"
-    assert res["series"] == "The Kingkiller Chronicle"
-    assert res["series_index"] == 1.0
+    assert res["series_list"] == [{"name": "The Kingkiller Chronicle", "index": 1.0}]
     assert res["publish_year"] == 2007
     assert res["description"] == "Told in Kvothe's own voice, this is the tale."
     assert res["genres"] == "Fantasy, Fiction"
@@ -365,3 +400,60 @@ async def test_match_search_is_rate_limited(
 
     assert codes == [200, 200, 429]
     assert int(over.headers["Retry-After"]) > 0
+
+
+async def _hardcover_search(make_client, make_user, auth_header, monkeypatch, enc_key, document):
+    user = await make_user(username="u", role="user")
+    async with async_session() as s:
+        await credentials.set_credential(s, "hardcover", "hc-test-token")
+        await s.commit()
+
+    def handler(request):
+        return httpx.Response(200, json={
+            "data": {"search": {"results": {"hits": [{"document": document}]}}}})
+
+    _patch_outbound_transport(monkeypatch, handler)
+    async with make_client(match.router) as c:
+        r = await c.post("/match/search", headers=auth_header(user),
+                         json={"provider": "hardcover", "query": "axis"})
+    assert r.status_code == 200
+    return r.json()[0]
+
+
+async def test_hardcover_lists_every_series_name_with_the_position_on_the_featured_one(
+    make_client, make_user, auth_header, monkeypatch, enc_key
+):
+    document = dict(_HARDCOVER_DOCUMENT,
+                    featured_series={"series_name": "Axis Saga", "position": 4},
+                    featured_series_position=4,
+                    series_names=["Axis Chronological", "Axis Saga", "axis chronological"])
+
+    res = await _hardcover_search(make_client, make_user, auth_header, monkeypatch, enc_key, document)
+
+    # The featured series first, with its position; the others by name only.
+    assert res["series_list"] == [
+        {"name": "Axis Saga", "index": 4.0}, {"name": "Axis Chronological", "index": None}]
+
+
+async def test_hardcover_without_a_featured_series_uses_the_names(
+    make_client, make_user, auth_header, monkeypatch, enc_key
+):
+    document = {k: v for k, v in _HARDCOVER_DOCUMENT.items()
+                if k not in ("featured_series", "featured_series_position")}
+    document["series_names"] = ["Axis Saga", "Axis Chronological"]
+
+    res = await _hardcover_search(make_client, make_user, auth_header, monkeypatch, enc_key, document)
+
+    assert res["series_list"] == [
+        {"name": "Axis Saga", "index": None}, {"name": "Axis Chronological", "index": None}]
+
+
+async def test_hardcover_book_without_series_has_an_empty_list(
+    make_client, make_user, auth_header, monkeypatch, enc_key
+):
+    document = {k: v for k, v in _HARDCOVER_DOCUMENT.items()
+                if k not in ("featured_series", "featured_series_position")}
+
+    res = await _hardcover_search(make_client, make_user, auth_header, monkeypatch, enc_key, document)
+
+    assert res["series_list"] == []

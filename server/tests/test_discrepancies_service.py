@@ -13,14 +13,19 @@ from sqlalchemy.orm import selectinload
 from models.book import AudioBook, BookPair, EBook, PairStatus
 from schemas import ResolveDiscrepancyRequest
 from services import discrepancies as svc
+from services.series import entries_of
+from tests.factories import _translate_series
 
 
 async def _seed_pair(db, *, ebook=None, audiobook=None, ignored=None, n=1):
     """A pair whose halves carry the given overrides; identical by default."""
     base = dict(title="Title", author="Author", series="S", series_index=1, publish_year=2000,
                 is_explicit=False, is_abridged=False, cover_path=None)
-    e = EBook(filename=f"e{n}.epub", file_path=f"/x/e{n}.epub", **{**base, **(ebook or {})})
-    a = AudioBook(filename=f"a{n}.m4b", file_path=f"/x/a{n}.m4b", **{**base, **(audiobook or {})})
+    # `series=` / `series_index=` become one entry; `series=""` the cleared flag.
+    e = EBook(filename=f"e{n}.epub", file_path=f"/x/e{n}.epub",
+              **_translate_series(EBook, {**base, **(ebook or {})}))
+    a = AudioBook(filename=f"a{n}.m4b", file_path=f"/x/a{n}.m4b",
+                  **_translate_series(AudioBook, {**base, **(audiobook or {})}))
     db.add_all([e, a])
     await db.flush()
     p = BookPair(ebook_id=e.id, audiobook_id=a.id, status=PairStatus.SYNCED,
@@ -44,6 +49,10 @@ async def _load(db, pair_id):
 
 def test_fields_to_compare_drops_identifiers_and_adds_cover_path():
     assert "cover_path" in svc.FIELDS_TO_COMPARE
+    # Series is one virtual field now (issue #905): the whole list, as its
+    # canonical string. The scalar index is gone.
+    assert "series" in svc.FIELDS_TO_COMPARE
+    assert "series_index" not in svc.FIELDS_TO_COMPARE
     assert "isbn" not in svc.FIELDS_TO_COMPARE
     assert "narrator" not in svc.FIELDS_TO_COMPARE
 
@@ -67,6 +76,11 @@ async def test_empty_string_and_none_compare_equal(db):
 async def test_series_index_compares_numerically(db):
     pair = await _seed_pair(db, ebook={"series_index": 1}, audiobook={"series_index": 1.0})
     assert svc._pair_has_discrepancies(pair) is False
+
+
+async def test_a_differing_series_index_is_a_series_discrepancy(db):
+    pair = await _seed_pair(db, ebook={"series_index": 1}, audiobook={"series_index": 2})
+    assert svc._pair_has_discrepancies(pair) is True
 
 
 async def test_a_differing_field_is_a_discrepancy_unless_ignored(db):
@@ -93,7 +107,7 @@ async def test_find_discrepancies_lists_only_pairs_that_differ_with_stringified_
     d = found[0]
     assert (d.ebook_id, d.audiobook_id, d.title) == (differing.ebook_id, differing.audiobook_id, "Title")
     assert {(f.field, f.ebook_value, f.audiobook_value) for f in d.discrepancies} == {
-        ("series_index", "2.0", "3.0"),
+        ("series", "S #2", "S #3"),
         ("publish_year", None, "1999"),
     }
 
@@ -114,16 +128,26 @@ async def test_apply_resolution_coerces_and_reports_which_halves_changed(db):
     pair = await _seed_pair(db, ebook={"series_index": 1, "publish_year": 2000, "is_explicit": False},
                             audiobook={"series_index": 2, "publish_year": 2001, "is_explicit": True})
     req = ResolveDiscrepancyRequest(
-        ebook_updates={"series_index": "2", "publish_year": "2001", "is_explicit": "true",
-                       "narrator": "ignored: not a compared field", "series": None},
+        ebook_updates={"series": "S #2", "publish_year": "2001", "is_explicit": "true",
+                       "narrator": "ignored: not a compared field"},
         audiobook_updates={},
     )
 
     changed = svc.apply_resolution(pair, req)
 
     assert changed == (True, False)
-    assert (pair.ebook.series_index, pair.ebook.publish_year, pair.ebook.is_explicit) == (2.0, 2001, True)
-    assert pair.ebook.series is None and not hasattr(pair.ebook, "narrator")
+    assert (entries_of(pair.ebook), pair.ebook.publish_year, pair.ebook.is_explicit) == (
+        [{"name": "S", "index": 2.0}], 2001, True)
+    assert not hasattr(pair.ebook, "narrator")
+
+
+async def test_resolving_series_to_none_clears_the_list_and_flags_the_row(db):
+    pair = await _seed_pair(db, ebook={"series": "X"}, audiobook={"series": "X"})
+
+    svc.apply_resolution(pair, ResolveDiscrepancyRequest(
+        ebook_updates={"series": None}, audiobook_updates={}))
+
+    assert pair.ebook.series_list == [] and pair.ebook.series_cleared is True
 
 
 async def test_apply_resolution_acknowledges_the_pair_only_when_nothing_is_left(db):
@@ -134,7 +158,7 @@ async def test_apply_resolution_acknowledges_the_pair_only_when_nothing_is_left(
     assert partial == (False, True) and pair.acknowledged is False
 
     full = svc.apply_resolution(pair, ResolveDiscrepancyRequest(
-        ebook_updates={"series": "Y"}, audiobook_updates={}))
+        ebook_updates={"series": "Y #1"}, audiobook_updates={}))
     assert full == (True, False) and pair.acknowledged is True
 
 
@@ -180,3 +204,51 @@ async def test_ignore_fields_acknowledges_the_pair_once_nothing_is_left(db):
     db.expire_all()
     fresh = await _load(db, pair_id)
     assert fresh.ignored_fields == ["author"] and fresh.acknowledged is True
+
+
+# ------------------------------------------------------------ several series (#905)
+
+
+async def test_series_compare_as_the_whole_list(db):
+    pair = await _seed_pair(
+        db,
+        ebook={"series": None, "series_list": [{"name": "Axis Saga", "index": 4},
+                                               {"name": "Axis Chronological", "index": 2.5}]},
+        audiobook={"series": None, "series_list": [{"name": "Axis Saga", "index": 4}]},
+    )
+
+    found = await svc.find_discrepancies_impl(db)
+
+    assert [d.pair_id for d in found] == [pair.id]
+    assert {(f.field, f.ebook_value, f.audiobook_value) for f in found[0].discrepancies} == {
+        ("series", "Axis Saga #4; Axis Chronological #2.5", "Axis Saga #4"),
+    }
+
+
+async def test_the_same_series_in_a_different_order_is_a_discrepancy(db):
+    """Order is the primary series, so it is part of the comparison."""
+    two = [{"name": "Axis Saga", "index": 4}, {"name": "Axis Chronological", "index": 2.5}]
+    pair = await _seed_pair(
+        db,
+        ebook={"series": None, "series_list": two},
+        audiobook={"series": None, "series_list": list(reversed(two))},
+    )
+    assert svc._pair_has_discrepancies(pair) is True
+
+
+async def test_identical_series_lists_do_not_differ(db):
+    two = [{"name": "Axis Saga", "index": 4}, {"name": "Axis Chronological", "index": 2.5}]
+    pair = await _seed_pair(
+        db, ebook={"series": None, "series_list": two}, audiobook={"series": None, "series_list": two})
+    assert svc._pair_has_discrepancies(pair) is False
+
+
+async def test_resolving_series_parses_the_canonical_string_into_entries(db):
+    pair = await _seed_pair(db, ebook={"series": "X"}, audiobook={"series": "Y"})
+
+    svc.apply_resolution(pair, ResolveDiscrepancyRequest(
+        ebook_updates={}, audiobook_updates={"series": "Axis Saga #4; Axis Chronological #2.5"}))
+
+    assert entries_of(pair.audiobook) == [
+        {"name": "Axis Saga", "index": 4.0}, {"name": "Axis Chronological", "index": 2.5}]
+    assert pair.audiobook.series_cleared is False

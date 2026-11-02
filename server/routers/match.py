@@ -20,6 +20,7 @@ from routers.auth import get_current_user, get_editor_user, rate_limited
 from routers.library import sanitize_filename
 from services import credentials as credential_store
 from services import google_books
+from services.series import normalize_entries
 from services.url_safety import assert_safe_url_async, UnsafeUrlError
 from utils import resolve_cover_url
 
@@ -236,16 +237,16 @@ async def fetch_audible(query: str, author: Optional[str]) -> List[MatchResult]:
 
     results = []
     for product in data.get("products", []):
-        series_name = None
-        series_index = None
+        # Every series Audible lists, in its order (issue #905); a sequence it
+        # cannot read ("1-3" for a bundle) keeps the name and drops the number.
+        series_found = []
         for s in product.get("series", []) or []:
             if s.get("title"):
-                series_name = s["title"]
                 try:
-                    series_index = float(s.get("sequence"))
+                    sequence = float(s.get("sequence"))
                 except (TypeError, ValueError):
-                    series_index = None
-                break
+                    sequence = None
+                series_found.append({"name": s["title"], "index": sequence})
 
         pub_year = None
         release_date = product.get("release_date") or ""
@@ -268,8 +269,7 @@ async def fetch_audible(query: str, author: Optional[str]) -> List[MatchResult]:
             title=product.get("title", "Unknown Title"),
             author=_join_unique(a.get("name") for a in product.get("authors", []) or []),
             narrators=_join_unique(n.get("name") for n in product.get("narrators", []) or []),
-            series=series_name,
-            series_index=series_index,
+            series_list=normalize_entries(series_found),
             publish_year=pub_year,
             publisher=product.get("publisher_name"),
             description=_strip_html(product.get("publisher_summary")
@@ -332,12 +332,14 @@ async def fetch_hardcover(query: str, author: Optional[str], db) -> List[MatchRe
     for hit in hits:
         doc = hit.get("document") or {}
 
+        # Every series Hardcover names (issue #905). Only the featured one has
+        # a position, so it goes first and carries it; the rest are names only.
         featured = doc.get("featured_series")
         series_name = None
         if isinstance(featured, dict):
             series_name = featured.get("series_name") or featured.get("name")
+        names = doc.get("series_names") or []
         if not series_name:
-            names = doc.get("series_names") or []
             series_name = names[0] if names else None
 
         series_index = None
@@ -349,6 +351,11 @@ async def fetch_hardcover(query: str, author: Optional[str], db) -> List[MatchRe
         except (TypeError, ValueError):
             series_index = None
 
+        series_found = []
+        if series_name:
+            series_found.append({"name": series_name, "index": series_index})
+        series_found.extend({"name": n, "index": None} for n in names if n)
+
         image = doc.get("image")
         cover_url = image.get("url") if isinstance(image, dict) else image or None
 
@@ -358,8 +365,7 @@ async def fetch_hardcover(query: str, author: Optional[str], db) -> List[MatchRe
             id=str(doc.get("id", "")),
             title=doc.get("title", "Unknown Title"),
             author=_join_unique(doc.get("author_names") or []),
-            series=series_name,
-            series_index=series_index,
+            series_list=normalize_entries(series_found),
             publish_year=doc.get("release_year"),
             description=doc.get("description"),
             genres=_join_unique(doc.get("genres") or []),
