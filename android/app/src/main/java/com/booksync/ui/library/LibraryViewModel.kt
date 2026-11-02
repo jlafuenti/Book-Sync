@@ -10,6 +10,11 @@ import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkInfo
 import androidx.work.WorkManager
 import androidx.work.workDataOf
+import com.booksync.data.local.SeriesEntry
+import com.booksync.data.local.indexIn
+import com.booksync.data.local.primary
+import com.booksync.data.local.seriesList
+import com.booksync.data.local.seriesNameMatches
 import com.booksync.data.local.entity.AudioBookEntity
 import com.booksync.data.local.entity.BookPairEntity
 import com.booksync.data.local.entity.EBookEntity
@@ -114,10 +119,18 @@ data class LibraryItem(
         get() = pair?.ebookTitle ?: ebook?.title ?: audiobook?.title ?: "Untitled"
     val author: String?
         get() = pair?.ebookAuthor ?: pair?.audiobookAuthor ?: ebook?.author ?: audiobook?.author
-    val series: String?
-        get() = pair?.ebookSeries ?: ebook?.series ?: audiobook?.series
-    val seriesIndex: Float?
-        get() = pair?.ebookSeriesIndex ?: ebook?.seriesIndex ?: audiobook?.seriesIndex
+    /**
+     * Every series this book is in, primary first (issue #908). A pair's list is
+     * already the union of its halves (`LibraryRepository.refreshPairs`), so it
+     * is read on its own rather than falling through to the ebook.
+     */
+    val seriesList: List<SeriesEntry>
+        get() = when {
+            pair != null      -> pair.seriesList
+            ebook != null     -> ebook.seriesList
+            audiobook != null -> audiobook.seriesList
+            else              -> emptyList()
+        }
     /** Server cover path for this card; the grid and series stacks both read it. */
     val coverPath: String?
         get() = pair?.audiobookCoverPath ?: audiobook?.coverFilename ?: ebook?.coverFilename
@@ -683,27 +696,42 @@ class LibraryViewModel @Inject constructor(
 // Series (grouping, drill-in filter, search)
 // ============================================================================
 
-/** The drill-in filter: items whose series is [name], ignoring case. */
+/** The drill-in filter: items in a series called [name], ignoring case. Any of its series counts. */
 internal fun filterBySeries(items: List<LibraryItem>, name: String): List<LibraryItem> =
-    items.filter { it.series.equals(name, ignoreCase = true) }
+    items.filter { item -> item.seriesList.any { seriesNameMatches(it.name, name) } }
 
-/** The search box: title, author or series contains [query], ignoring case. */
+/** The search box: title, author or any series name contains [query], ignoring case. */
 internal fun matchesSearch(item: LibraryItem, query: String): Boolean {
     val q = query.trim().lowercase()
     return item.title.lowercase().contains(q) ||
         item.author?.lowercase()?.contains(q) == true ||
-        item.series?.lowercase()?.contains(q) == true
+        item.seriesList.any { it.name.lowercase().contains(q) }
 }
 
-/** Series mode: one [SeriesStack] per series, books with none under "No Series". */
+private const val NO_SERIES = "No Series"
+
+/**
+ * Series mode: one [SeriesStack] per series. A book in several series is in
+ * every one of those stacks (issue #908); a book in none goes under "No Series".
+ * Names group ignoring case and outer spaces, the stack taking the first spelling seen.
+ */
 internal fun buildSeriesStacks(list: List<LibraryItem>, sort: LibrarySort): List<SeriesStack> {
-    val groups = list.groupBy { it.series?.trim().takeIf { s -> !s.isNullOrEmpty() } ?: "No Series" }
-    val sorted = when (sort) {
-        LibrarySort.TitleAsc    -> groups.entries.sortedBy { it.key.lowercase() }
-        LibrarySort.SeriesCount -> groups.entries.sortedByDescending { it.value.size }
-        else                    -> groups.entries.sortedBy { it.key.lowercase() }
+    val names = LinkedHashMap<String, String>()             // key -> display name
+    val groups = LinkedHashMap<String, MutableList<LibraryItem>>()
+    for (item in list) {
+        val memberships = item.seriesList.map { it.name.trim() }.filter { it.isNotEmpty() }
+            .ifEmpty { listOf(NO_SERIES) }
+        for (name in memberships.distinctBy { it.lowercase() }) {
+            val key = name.lowercase()
+            names.getOrPut(key) { name }
+            groups.getOrPut(key) { mutableListOf() } += item
+        }
     }
-    return sorted.map { (name, items) -> SeriesStack(name, items) }
+    val sorted = when (sort) {
+        LibrarySort.SeriesCount -> groups.entries.sortedByDescending { it.value.size }
+        else                    -> groups.entries.sortedBy { it.key }
+    }
+    return sorted.map { (key, items) -> SeriesStack(names.getValue(key), items) }
 }
 
 // ============================================================================
@@ -729,7 +757,12 @@ internal fun comparatorFor(sort: LibrarySort, seriesName: String? = null): Compa
     // (server/routers/library.py) — otherwise "Zebra" sorts ahead of "aardvark".
     LibrarySort.TitleAsc       -> compareBy { it.title.lowercase() }
     LibrarySort.AuthorAsc      -> compareBy(nullsLast()) { it.author?.lowercase() }
-    LibrarySort.SeriesOrder    -> compareBy(nullsLast()) { it.seriesIndex }
+    // The number inside the series being browsed, not the primary's: a book can be
+    // #3 of one series and #1 of another (issue #908). Outside a drill-in there is
+    // no series to ask about, so fall back to the primary.
+    LibrarySort.SeriesOrder    -> compareBy(nullsLast()) { item ->
+        seriesName?.let { item.seriesList.indexIn(it) } ?: item.seriesList.primary()?.index
+    }
     LibrarySort.SeriesCount    -> compareBy { it.title.lowercase() } // only meaningful in series mode
 }
 

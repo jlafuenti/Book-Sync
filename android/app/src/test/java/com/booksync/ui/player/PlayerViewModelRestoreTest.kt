@@ -249,7 +249,7 @@ class PlayerViewModelRestoreTest {
             SyncState.pendingAudioSeekMs = 250_000L
             coEvery { repository.getAudiobookById(17) } returns AudioBookEntity(
                 id = 17, title = "t", author = null, filename = "b.m4b", durationSeconds = 7200,
-                format = "m4b", series = null, seriesIndex = null,
+                format = "m4b",
                 uploadedAt = "2026-01-01T00:00:00", isDownloaded = true,
             )
             coEvery { repository.getProgressOnce("audiobook", 17) } returns UserProgressEntity(

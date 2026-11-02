@@ -10,7 +10,8 @@ data class AutoSearchable(
     val mediaId: String,
     val title: String,
     val author: String? = null,
-    val series: String? = null,
+    /** Every series the book is in (issue #908); any of them can be asked for by name. */
+    val seriesNames: List<String> = emptyList(),
 )
 
 /** Never hand a car UI (or Assistant) an unbounded result list. */
@@ -58,15 +59,15 @@ fun autoSearch(query: String, books: List<AutoSearchable>): List<AutoSearchable>
 private fun rankOf(q: String, book: AutoSearchable): Int? {
     val title = normalizeForSearch(book.title)
     val author = book.author?.let { normalizeForSearch(it) }.orEmpty()
-    val series = book.series?.let { normalizeForSearch(it) }.orEmpty()
+    val series = book.seriesNames.map { normalizeForSearch(it) }.filter { it.isNotEmpty() }
     return when {
         title == q -> 0
         title.startsWith(q) -> 1
         title.contains(q) -> 2
         author.isNotEmpty() && author == q -> 3
-        series.isNotEmpty() && series == q -> 4
+        series.any { it == q } -> 4
         author.isNotEmpty() && author.contains(q) -> 5
-        series.isNotEmpty() && series.contains(q) -> 6
+        series.any { it.contains(q) } -> 6
         else -> null
     }
 }

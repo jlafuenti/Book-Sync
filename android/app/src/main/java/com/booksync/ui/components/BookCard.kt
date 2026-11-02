@@ -41,6 +41,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.booksync.data.local.SeriesEntry
+import com.booksync.data.local.seriesLabel
 import com.booksync.ui.theme.Tandem
 
 /**
@@ -70,8 +72,7 @@ sealed class BookCardVariant {
         val hasEbookDownloaded: Boolean = false,
         val hasAudiobookDownloaded: Boolean = false,
         val hasMismatchWarning: Boolean = false,
-        val series: String? = null,
-        val seriesIndex: Float? = null,
+        val seriesList: List<SeriesEntry> = emptyList(),
     ) : BookCardVariant()
 
     data class SingleMedia(
@@ -81,8 +82,7 @@ sealed class BookCardVariant {
         val author: String?,
         val coverImageModel: Any? = null,      // File, Uri, URL string — loaded by Coil
         val isDownloaded: Boolean = false,
-        val series: String? = null,
-        val seriesIndex: Float? = null,
+        val seriesList: List<SeriesEntry> = emptyList(),
     ) : BookCardVariant() {
         enum class MediaKind { EBOOK, AUDIOBOOK }
     }
@@ -414,13 +414,9 @@ private fun cardSubtitle(variant: BookCardVariant): String? = when (variant) {
     is BookCardVariant.SeriesStack  -> variant.author
 }
 
-private fun cardSeriesLabel(variant: BookCardVariant): String? {
-    val (series, index) = when (variant) {
-        is BookCardVariant.Pair        -> variant.series to variant.seriesIndex
-        is BookCardVariant.SingleMedia -> variant.series to variant.seriesIndex
-        else -> return null
-    }
-    if (series.isNullOrBlank()) return null
-    val suffix = index?.let { v -> if (v % 1f == 0f) " #${v.toInt()}" else " #$v" } ?: ""
-    return "$series$suffix"
+/** The primary series with a `+N` for the rest (issue #908); detail pages list them all. */
+private fun cardSeriesLabel(variant: BookCardVariant): String? = when (variant) {
+    is BookCardVariant.Pair        -> seriesLabel(variant.seriesList)
+    is BookCardVariant.SingleMedia -> seriesLabel(variant.seriesList)
+    else -> null
 }

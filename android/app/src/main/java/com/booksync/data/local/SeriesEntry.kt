@@ -1,5 +1,9 @@
 package com.booksync.data.local
 
+import com.booksync.data.local.entity.AudioBookEntity
+import com.booksync.data.local.entity.BookPairEntity
+import com.booksync.data.local.entity.EBookEntity
+import com.booksync.data.remote.SeriesEntryDto
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
@@ -50,9 +54,12 @@ fun formatSeriesIndex(index: Double): String {
     return if (rounded % 1.0 == 0.0) rounded.toLong().toString() else rounded.toString()
 }
 
+/** ` #4` for an entry with an index, empty without one; the part after the name. */
+fun seriesIndexSuffix(entry: SeriesEntry): String =
+    entry.index?.let { " #${formatSeriesIndex(it)}" }.orEmpty()
+
 /** `Axis Saga #4`, or the bare name when the entry has no index. */
-fun formatSeriesEntry(entry: SeriesEntry): String =
-    entry.index?.let { "${entry.name.trim()} #${formatSeriesIndex(it)}" } ?: entry.name.trim()
+fun formatSeriesEntry(entry: SeriesEntry): String = entry.name.trim() + seriesIndexSuffix(entry)
 
 /** The canonical string: entries joined by `"; "`, empty for no series. */
 fun formatSeriesList(list: List<SeriesEntry>): String =
@@ -78,3 +85,12 @@ fun unionSeries(ebook: List<SeriesEntry>, audiobook: List<SeriesEntry>): List<Se
     }
     return out
 }
+
+/** The decoded `seriesJson` column of each entity; primary series first. */
+val BookPairEntity.seriesList: List<SeriesEntry> get() = decodeSeries(seriesJson)
+val EBookEntity.seriesList: List<SeriesEntry> get() = decodeSeries(seriesJson)
+val AudioBookEntity.seriesList: List<SeriesEntry> get() = decodeSeries(seriesJson)
+
+/** The server's `series_list`, as the entries Room stores. */
+fun List<SeriesEntryDto>.toSeriesEntries(): List<SeriesEntry> =
+    mapNotNull { dto -> dto.name.trim().takeIf { it.isNotEmpty() }?.let { SeriesEntry(it, dto.index) } }

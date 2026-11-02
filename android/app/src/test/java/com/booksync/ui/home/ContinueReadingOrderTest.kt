@@ -188,7 +188,7 @@ class ContinueReadingOrderTest {
     fun `a book that is not downloaded still appears in Continue Reading`() {
         val streamed = AudioBookEntity(
             id = 50, title = "Streamed", author = null, filename = "s.m4b",
-            durationSeconds = 3600, format = "m4b", series = null, seriesIndex = null,
+            durationSeconds = 3600, format = "m4b",
             uploadedAt = "2026-01-01T00:00:00", isDownloaded = false,
         )
         every { repository.getRecentlyPlayedPairsFlow() } returns flowOf(listOf(pair(1)))
@@ -216,7 +216,7 @@ class ContinueReadingOrderTest {
     fun `a pair and a standalone audiobook interleave by real time`() {
         val audiobook = AudioBookEntity(
             id = 50, title = "Standalone", author = null, filename = "s.m4b",
-            durationSeconds = 3600, format = "m4b", series = null, seriesIndex = null,
+            durationSeconds = 3600, format = "m4b",
             uploadedAt = "2026-01-01T00:00:00", isDownloaded = true,
         )
         every { repository.getRecentlyPlayedPairsFlow() } returns flowOf(listOf(pair(1)))
@@ -246,7 +246,7 @@ class ContinueReadingOrderTest {
     fun `a paired book with a progress row does not appear twice`() {
         val pairedAudiobook = AudioBookEntity(
             id = 1, title = "A1", author = null, filename = "a1.m4b",
-            durationSeconds = 3600, format = "m4b", series = null, seriesIndex = null,
+            durationSeconds = 3600, format = "m4b",
             uploadedAt = "2026-01-01T00:00:00", isDownloaded = true,
         )
         every { repository.getRecentlyPlayedPairsFlow() } returns flowOf(listOf(pair(1)))
@@ -267,7 +267,7 @@ class ContinueReadingOrderTest {
             AudioBookEntity(
                 id = it.audiobookId, title = it.audiobookTitle ?: "A${it.audiobookId}", author = null,
                 filename = "a${it.audiobookId}.m4b", durationSeconds = 3600, format = "m4b",
-                series = null, seriesIndex = null, uploadedAt = "2026-01-01T00:00:00", isDownloaded = true,
+                uploadedAt = "2026-01-01T00:00:00", isDownloaded = true,
             )
         }
         every { repository.getRecentlyPlayedPairsFlow() } returns flowOf(pairs)
@@ -281,7 +281,7 @@ class ContinueReadingOrderTest {
 
     private fun ebook(id: Int) = EBookEntity(
         id = id, title = "E$id", author = null, filename = "e$id.epub", fileSize = null,
-        format = "epub", series = null, seriesIndex = null,
+        format = "epub",
         uploadedAt = "2026-01-01T00:00:00", isDownloaded = true,
     )
 

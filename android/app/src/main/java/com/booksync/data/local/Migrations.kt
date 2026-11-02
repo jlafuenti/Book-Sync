@@ -233,3 +233,70 @@ val MIGRATION_23_24 = object : Migration(23, 24) {
         )
     }
 }
+
+/**
+ * v24 -> v25: several series per book (issue #908).
+ *
+ * `ebooks.series`/`seriesIndex`, `audiobooks.series`/`seriesIndex` and
+ * `book_pairs.ebookSeries`/`ebookSeriesIndex` collapse into one JSON column,
+ * `seriesJson`: an array of `{"name", "index"}` entries, primary first
+ * (`SeriesEntry.kt`). Each old scalar becomes a one-entry array, so an offline
+ * library keeps showing its series until the next refresh brings the server's
+ * full list. A NULL or empty series stays NULL.
+ *
+ * The conversion is plain SQL rather than a Kotlin read-and-write loop so the
+ * migration needs nothing but `execSQL` (and so runs, unmodified, in the JDBC
+ * bridge the execution test uses). Backslash and double quote are the only
+ * characters JSON makes us escape in a series name that the server would let
+ * through. The number is rounded to 4 places to drop the noise a 32-bit REAL
+ * carries (2.1 stored as 2.0999999...).
+ *
+ * The three tables are rebuilt rather than altered: DROP COLUMN needs SQLite
+ * 3.35, newer than the oldest Android we support. The CREATE statements are
+ * Room's own for schema 25 (see `schemas/.../25.json`); column lists are
+ * explicit, so a column added later without updating this fails loudly.
+ */
+val MIGRATION_24_25 = object : Migration(24, 25) {
+    /** SQL for the one-entry JSON array of a scalar series name and number, or NULL. */
+    private fun seriesJsonSql(nameCol: String, indexCol: String): String =
+        "CASE WHEN $nameCol IS NULL OR trim($nameCol) = '' THEN NULL " +
+            "ELSE '[{\"name\":\"' || " +
+            "replace(replace(trim($nameCol), '\\', '\\\\'), '\"', '\\\"') || '\"' || " +
+            "CASE WHEN $indexCol IS NULL THEN '' " +
+            "ELSE ',\"index\":' || CAST(round($indexCol, 4) AS TEXT) END || '}]' END"
+
+    override fun migrate(db: SupportSQLiteDatabase) {
+        // --- ebooks ---
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `ebooks_new` (`id` INTEGER NOT NULL, `title` TEXT NOT NULL, `author` TEXT, `filename` TEXT NOT NULL, `fileSize` INTEGER, `format` TEXT NOT NULL, `seriesJson` TEXT, `uploadedAt` TEXT NOT NULL, `isDownloaded` INTEGER NOT NULL, `coverFilename` TEXT, PRIMARY KEY(`id`))"
+        )
+        db.execSQL(
+            "INSERT INTO ebooks_new (id, title, author, filename, fileSize, format, seriesJson, uploadedAt, isDownloaded, coverFilename) " +
+                "SELECT id, title, author, filename, fileSize, format, ${seriesJsonSql("series", "seriesIndex")}, uploadedAt, isDownloaded, coverFilename FROM ebooks"
+        )
+        db.execSQL("DROP TABLE ebooks")
+        db.execSQL("ALTER TABLE ebooks_new RENAME TO ebooks")
+
+        // --- audiobooks ---
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `audiobooks_new` (`id` INTEGER NOT NULL, `title` TEXT NOT NULL, `author` TEXT, `filename` TEXT NOT NULL, `durationSeconds` INTEGER, `format` TEXT NOT NULL, `seriesJson` TEXT, `uploadedAt` TEXT NOT NULL, `isDownloaded` INTEGER NOT NULL, `coverFilename` TEXT, PRIMARY KEY(`id`))"
+        )
+        db.execSQL(
+            "INSERT INTO audiobooks_new (id, title, author, filename, durationSeconds, format, seriesJson, uploadedAt, isDownloaded, coverFilename) " +
+                "SELECT id, title, author, filename, durationSeconds, format, ${seriesJsonSql("series", "seriesIndex")}, uploadedAt, isDownloaded, coverFilename FROM audiobooks"
+        )
+        db.execSQL("DROP TABLE audiobooks")
+        db.execSQL("ALTER TABLE audiobooks_new RENAME TO audiobooks")
+
+        // --- book_pairs ---
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `book_pairs_new` (`id` INTEGER NOT NULL, `ebookId` INTEGER NOT NULL, `ebookTitle` TEXT NOT NULL, `ebookAuthor` TEXT, `ebookFilename` TEXT NOT NULL, `ebookFormat` TEXT NOT NULL, `audiobookId` INTEGER NOT NULL, `audiobookTitle` TEXT NOT NULL, `audiobookAuthor` TEXT, `audiobookFilename` TEXT NOT NULL, `audiobookFormat` TEXT NOT NULL, `audiobookDurationSeconds` INTEGER, `status` TEXT NOT NULL, `ebookDownloaded` INTEGER NOT NULL, `audiobookDownloaded` INTEGER NOT NULL, `syncMapDownloaded` INTEGER NOT NULL, `syncMapVersion` INTEGER, `audiobookCoverPath` TEXT, `seriesJson` TEXT, PRIMARY KEY(`id`))"
+        )
+        db.execSQL(
+            "INSERT INTO book_pairs_new (id, ebookId, ebookTitle, ebookAuthor, ebookFilename, ebookFormat, audiobookId, audiobookTitle, audiobookAuthor, audiobookFilename, audiobookFormat, audiobookDurationSeconds, status, ebookDownloaded, audiobookDownloaded, syncMapDownloaded, syncMapVersion, audiobookCoverPath, seriesJson) " +
+                "SELECT id, ebookId, ebookTitle, ebookAuthor, ebookFilename, ebookFormat, audiobookId, audiobookTitle, audiobookAuthor, audiobookFilename, audiobookFormat, audiobookDurationSeconds, status, ebookDownloaded, audiobookDownloaded, syncMapDownloaded, syncMapVersion, audiobookCoverPath, ${seriesJsonSql("ebookSeries", "ebookSeriesIndex")} FROM book_pairs"
+        )
+        db.execSQL("DROP TABLE book_pairs")
+        db.execSQL("ALTER TABLE book_pairs_new RENAME TO book_pairs")
+    }
+}

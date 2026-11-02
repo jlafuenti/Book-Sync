@@ -180,6 +180,13 @@ data class AccountDeleteRequest(
 
 // ============ Library ============
 
+/** One entry of a book's `series_list` (issue #908). */
+@Serializable
+data class SeriesEntryDto(
+    val name: String,
+    val index: Double? = null,
+)
+
 @Serializable
 data class EBookResponse(
     val id: Int,
@@ -188,8 +195,9 @@ data class EBookResponse(
     val filename: String,
     val file_size: Long? = null,
     val format: String,
-    val series: String? = null,
-    val series_index: Float? = null,
+    // Every series the book is in, primary first (issue #908). Always sent, but
+    // defaulted so a server too old to send it reads as "no series".
+    val series_list: List<SeriesEntryDto> = emptyList(),
     val uploaded_at: String,
     val cover_path: String? = null,
     // Server-side "seen" flag (issue #222). Defaults to true so a server too old
@@ -211,8 +219,9 @@ data class AudioBookResponse(
     val file_size: Long? = null,
     val duration_seconds: Int? = null,
     val format: String,
-    val series: String? = null,
-    val series_index: Float? = null,
+    // Every series the book is in, primary first (issue #908). Always sent, but
+    // defaulted so a server too old to send it reads as "no series".
+    val series_list: List<SeriesEntryDto> = emptyList(),
     val uploaded_at: String,
     val cover_path: String? = null,
     // See EBookResponse.acknowledged (issue #222).
@@ -246,8 +255,9 @@ data class BookMetadataResponse(
     val id: Int,
     val title: String,
     val author: String? = null,
-    val series: String? = null,
-    val series_index: Float? = null,
+    // Every series the book is in, primary first (issue #908). Always sent, but
+    // defaulted so a server too old to send it reads as "no series".
+    val series_list: List<SeriesEntryDto> = emptyList(),
     val description: String? = null,
     val publisher: String? = null,
     val publish_year: Int? = null,

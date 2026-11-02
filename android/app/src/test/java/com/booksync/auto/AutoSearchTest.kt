@@ -17,8 +17,8 @@ class AutoSearchTest {
     private val library = listOf(
         AutoSearchable("pair_1", "Bartleby, the Scrivener", "Herman Melville"),
         AutoSearchable("audiobook_2", "Moby-Dick", "Herman Melville"),
-        AutoSearchable("pair_3", "The Fellowship of the Ring", "J. R. R. Tolkien", "The Lord of the Rings"),
-        AutoSearchable("audiobook_4", "The Two Towers", "J. R. R. Tolkien", "The Lord of the Rings"),
+        AutoSearchable("pair_3", "The Fellowship of the Ring", "J. R. R. Tolkien", listOf("The Lord of the Rings")),
+        AutoSearchable("audiobook_4", "The Two Towers", "J. R. R. Tolkien", listOf("The Lord of the Rings")),
         AutoSearchable("pair_5", "Bartleby and Benito Cereno", "Herman Melville"),
         AutoSearchable("audiobook_6", "Bartleby", "Herman Melville"),
     )
@@ -60,6 +60,29 @@ class AutoSearchTest {
     }
 
     @Test
+    fun `a book in two series is found by either one`() {
+        val books = listOf(
+            AutoSearchable("pair_1", "Axis Crossover", "An Author", listOf("Axis Saga", "Axis Chronological")),
+            AutoSearchable("pair_2", "Axis Prequel", "An Author", listOf("Axis Chronological")),
+            AutoSearchable("pair_3", "Elsewhere", "An Author", listOf("Another Series")),
+        )
+
+        assertEquals(listOf("pair_1"), autoSearch("axis saga", books).map { it.mediaId })
+        assertEquals(setOf("pair_1", "pair_2"), autoSearch("axis chronological", books).map { it.mediaId }.toSet())
+        assertEquals(setOf("pair_1", "pair_2"), autoSearch("chronolog", books).map { it.mediaId }.toSet())
+    }
+
+    @Test
+    fun `an exact series match outranks a partial one on another series of the same book`() {
+        val books = listOf(
+            AutoSearchable("pair_1", "Book A", null, listOf("Axis Saga Extended")),
+            AutoSearchable("pair_2", "Book B", null, listOf("Other", "Axis Saga")),
+        )
+
+        assertEquals(listOf("pair_2", "pair_1"), autoSearch("axis saga", books).map { it.mediaId })
+    }
+
+    @Test
     fun `matching ignores case and punctuation`() {
         // "moby dick" — no hyphen, lower case — must still find "Moby-Dick".
         assertEquals(listOf("audiobook_2"), ids("moby dick"))
@@ -94,7 +117,7 @@ class AutoSearchTest {
 
     @Test
     fun `a null author and series only match on title`() {
-        val books = listOf(AutoSearchable("audiobook_9", "Ulysses", null, null))
+        val books = listOf(AutoSearchable("audiobook_9", "Ulysses", null, emptyList()))
         assertTrue(autoSearch("Joyce", books).isEmpty())
         assertEquals(listOf("audiobook_9"), autoSearch("ulysses", books).map { it.mediaId })
     }

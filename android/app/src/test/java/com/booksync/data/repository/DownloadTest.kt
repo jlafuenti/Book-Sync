@@ -77,11 +77,11 @@ class DownloadTest {
     )
     private val ebook = EBookEntity(
         id = 2, title = "E", author = null, filename = "solo.epub", fileSize = null,
-        format = "epub", series = null, seriesIndex = null, uploadedAt = "2026-01-01",
+        format = "epub", uploadedAt = "2026-01-01",
     )
     private val audio = AudioBookEntity(
         id = 3, title = "A", author = null, filename = "solo.m4b", durationSeconds = 60,
-        format = "m4b", series = null, seriesIndex = null, uploadedAt = "2026-01-01",
+        format = "m4b", uploadedAt = "2026-01-01",
     )
 
     private fun notFound(): Response<ResponseBody> =

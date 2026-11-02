@@ -1,5 +1,8 @@
 package com.booksync.ui.home
 
+import com.booksync.data.local.SeriesEntry
+import com.booksync.data.local.seriesList
+import com.booksync.data.local.unionSeries
 import com.booksync.data.local.entity.AudioBookEntity
 import com.booksync.data.local.entity.BookPairEntity
 import com.booksync.data.local.entity.BookmarkEntity
@@ -99,8 +102,8 @@ fun computeNextUp(books: List<NextUpBook>, activity: List<NextUpActivity>, nowMs
 /**
  * The Room library, reduced to [computeNextUp]'s inputs.
  *
- * A pair becomes one book, taking its series and number from the ebook and
- * falling back to the audiobook. Progress counts as activity only when it is
+ * A pair becomes one book per series, taking its series and numbers from the
+ * ebook and then the audiobook's names it lacks (the union, issue #908). Progress counts as activity only when it is
  * real: finished, or with some position; a book merely opened at 0 % is not
  * being read. Its time is the capture time, falling back to `updatedAt`
  * ([lastPlayedAtMs]), since `updatedAt` also moves on server-side rewrites such
@@ -120,31 +123,44 @@ fun libraryToNextUpInput(
     val pairByAudiobook = pairs.associateBy { it.audiobookId }
 
     val books = mutableListOf<NextUpBook>()
+    // A book in several series is listed once per membership, primary first
+    // (issue #908), so the dedupe in computeNextUp can tell them apart by series.
+    fun addBook(series: List<SeriesEntry>, make: (name: String?, index: Double?) -> NextUpBook) {
+        if (series.isEmpty()) books += make(null, null)
+        else series.forEach { books += make(it.name, it.index) }
+    }
     for (p in pairs) {
         val ab = audiobookById[p.audiobookId]
-        val series = p.ebookSeries?.takeIf { it.isNotBlank() } ?: ab?.series
-        val index = p.ebookSeriesIndex ?: ab?.seriesIndex
-        books += NextUpBook(
-            key = "pair_${p.id}", series = series, index = index?.toDouble(),
-            title = p.ebookTitle ?: p.audiobookTitle, author = p.ebookAuthor ?: p.audiobookAuthor,
-            pairId = p.id, ebookId = p.ebookId, audiobookId = p.audiobookId,
-            ebookCoverPath = ebookById[p.ebookId]?.coverFilename,
-            audiobookCoverPath = p.audiobookCoverPath,
-        )
+        // The pair's stored list already holds both halves; the union is repeated
+        // here so a row cached before the first refresh still sees the audiobook's.
+        val series = unionSeries(p.seriesList, ab?.seriesList.orEmpty())
+        addBook(series) { name, index ->
+            NextUpBook(
+                key = "pair_${p.id}", series = name, index = index,
+                title = p.ebookTitle ?: p.audiobookTitle, author = p.ebookAuthor ?: p.audiobookAuthor,
+                pairId = p.id, ebookId = p.ebookId, audiobookId = p.audiobookId,
+                ebookCoverPath = ebookById[p.ebookId]?.coverFilename,
+                audiobookCoverPath = p.audiobookCoverPath,
+            )
+        }
     }
     for (eb in ebooks) {
         if (eb.id in pairByEbook) continue
-        books += NextUpBook(
-            key = "ebook_${eb.id}", series = eb.series, index = eb.seriesIndex?.toDouble(),
-            title = eb.title, author = eb.author, ebookId = eb.id, ebookCoverPath = eb.coverFilename,
-        )
+        addBook(eb.seriesList) { name, index ->
+            NextUpBook(
+                key = "ebook_${eb.id}", series = name, index = index,
+                title = eb.title, author = eb.author, ebookId = eb.id, ebookCoverPath = eb.coverFilename,
+            )
+        }
     }
     for (ab in audiobooks) {
         if (ab.id in pairByAudiobook) continue
-        books += NextUpBook(
-            key = "audiobook_${ab.id}", series = ab.series, index = ab.seriesIndex?.toDouble(),
-            title = ab.title, author = ab.author, audiobookId = ab.id, audiobookCoverPath = ab.coverFilename,
-        )
+        addBook(ab.seriesList) { name, index ->
+            NextUpBook(
+                key = "audiobook_${ab.id}", series = name, index = index,
+                title = ab.title, author = ab.author, audiobookId = ab.id, audiobookCoverPath = ab.coverFilename,
+            )
+        }
     }
 
     val activity = mutableListOf<NextUpActivity>()
@@ -184,6 +200,7 @@ internal fun NextUpRow.toHomeItem(): HomeItem = HomeItem(
     ebookId = book.ebookId,
     audiobookCoverPath = book.audiobookCoverPath,
     ebookCoverPath = book.ebookCoverPath,
-    series = series,
-    seriesIndex = book.index?.toFloat(),
+    // The series this row is for, not every series the book is in: the card says
+    // why it is here ("Axis Saga #4"), with no "+N" to second-guess it.
+    seriesList = listOf(SeriesEntry(series, book.index)),
 )

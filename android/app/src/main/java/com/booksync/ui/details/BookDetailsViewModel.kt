@@ -10,6 +10,12 @@ import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkInfo
 import androidx.work.WorkManager
 import androidx.work.workDataOf
+import com.booksync.data.local.SeriesEntry
+import com.booksync.data.local.formatSeriesList
+import com.booksync.data.local.primary
+import com.booksync.data.local.seriesList
+import com.booksync.data.local.toSeriesEntries
+import com.booksync.data.local.unionSeries
 import com.booksync.data.local.entity.AudioBookEntity
 import com.booksync.data.local.entity.BookPairEntity
 import com.booksync.data.local.entity.EBookEntity
@@ -51,8 +57,7 @@ sealed class DetailsTarget {
  */
 data class BookExtendedMeta(
     val description: String? = null,
-    val series: String? = null,
-    val seriesIndex: Float? = null,
+    val seriesList: List<SeriesEntry> = emptyList(),
     val publisher: String? = null,
     val publishYear: Int? = null,
     val language: String? = null,
@@ -86,23 +91,30 @@ data class BookDetailsUi(
     val author: String?
         get() = pair?.ebookAuthor ?: pair?.audiobookAuthor ?: ebook?.author ?: audiobook?.author
     /**
-     * The series name alone, for the tap-to-open-series link (issue #717): the
-     * Library filter matches on the name, so the "#39" suffix must not ride along.
+     * Every series the book is in, primary first (issue #908): the network
+     * metadata if it has any, else the cached ebook, else the audiobook. A pair
+     * adds the names only its stored union knows (a series tagged on the
+     * audiobook alone), since the metadata fetched for a pair is the ebook's.
+     */
+    val seriesList: List<SeriesEntry>
+        get() {
+            val own = (extendedMeta?.seriesList.orEmpty())
+                .ifEmpty { ebook?.seriesList.orEmpty() }
+                .ifEmpty { audiobook?.seriesList.orEmpty() }
+            return if (pair != null) unionSeries(own, pair.seriesList) else own
+        }
+
+    /**
+     * The primary series' name alone, for the tap-to-open-series link (issue
+     * #717): the Library filter matches on the name, so the "#39" suffix must not
+     * ride along. Each series has its own link; see [seriesList].
      */
     val seriesName: String?
-        get() = (extendedMeta?.series ?: ebook?.series ?: audiobook?.series)?.takeIf { it.isNotBlank() }
+        get() = seriesList.primary()?.name
 
-    /** Pretty-printed series label, e.g. "Discworld #39". */
+    /** Every series in the canonical form, e.g. "Discworld #39; Witches #3". Null for none. */
     val seriesLabel: String?
-        get() {
-            val name = seriesName ?: return null
-            val idx = extendedMeta?.seriesIndex ?: ebook?.seriesIndex ?: audiobook?.seriesIndex
-            val suffix = idx?.let { v ->
-                // Drop trailing .0 for integer indices
-                if (v % 1f == 0f) " #${v.toInt()}" else " #$v"
-            } ?: ""
-            return "$name$suffix"
-        }
+        get() = formatSeriesList(seriesList).takeIf { it.isNotEmpty() }
     val description: String?
         get() = extendedMeta?.description?.takeIf { it.isNotBlank() }
     val audiobookIdForCover: Int?
@@ -266,8 +278,7 @@ class BookDetailsViewModel @Inject constructor(
                 }
                 _extendedMeta.value = BookExtendedMeta(
                     description = resp.description,
-                    series = resp.series,
-                    seriesIndex = resp.series_index,
+                    seriesList = resp.series_list.toSeriesEntries(),
                     publisher = resp.publisher,
                     publishYear = resp.publish_year,
                     language = resp.language,

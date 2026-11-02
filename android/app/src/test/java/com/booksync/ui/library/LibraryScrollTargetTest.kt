@@ -26,12 +26,12 @@ class LibraryScrollTargetTest {
 
     private fun ebook(id: Int) = EBookEntity(
         id = id, title = "Ebook $id", author = null, filename = "e$id.epub", fileSize = null,
-        format = "epub", series = null, seriesIndex = null, uploadedAt = "2026-01-01T00:00:00",
+        format = "epub", uploadedAt = "2026-01-01T00:00:00",
     )
 
     private fun audiobook(id: Int) = AudioBookEntity(
         id = id, title = "Audiobook $id", author = null, filename = "a$id.m4b", durationSeconds = null,
-        format = "m4b", series = null, seriesIndex = null, uploadedAt = "2026-01-01T00:00:00",
+        format = "m4b", uploadedAt = "2026-01-01T00:00:00",
     )
 
     @Test

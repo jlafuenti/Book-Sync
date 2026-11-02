@@ -1,5 +1,8 @@
 package com.booksync.data.repository
 
+import com.booksync.data.local.encodeSeries
+import com.booksync.data.local.toSeriesEntries
+import com.booksync.data.local.unionSeries
 import com.booksync.data.local.dao.*
 import com.booksync.data.local.entity.*
 import com.booksync.data.remote.UserScopeProvider
@@ -152,8 +155,14 @@ class LibraryRepository @Inject constructor(
                 syncMapDownloaded = if (cacheIsStale) false else existing?.syncMapDownloaded ?: false,
                 syncMapVersion = if (cacheIsStale) null else existing?.syncMapVersion,
                 audiobookCoverPath = pair.audiobook.cover_path ?: existing?.audiobookCoverPath,
-                ebookSeries = pair.ebook.series,
-                ebookSeriesIndex = pair.ebook.series_index,
+                // The union of both halves (issue #908), so a series tagged only
+                // on the audiobook still shows on the pair's card.
+                seriesJson = encodeSeries(
+                    unionSeries(
+                        pair.ebook.series_list.toSeriesEntries(),
+                        pair.audiobook.series_list.toSeriesEntries(),
+                    )
+                ),
             )
         }
         bookPairDao.upsertPairs(entities)
@@ -182,8 +191,7 @@ class LibraryRepository @Inject constructor(
                 filename = ebook.filename,
                 fileSize = ebook.file_size,
                 format = ebook.format,
-                series = ebook.series,
-                seriesIndex = ebook.series_index,
+                seriesJson = encodeSeries(ebook.series_list.toSeriesEntries()),
                 uploadedAt = ebook.uploaded_at,
                 isDownloaded = existing?.isDownloaded ?: false,
                 coverFilename = ebook.cover_path ?: existing?.coverFilename
@@ -327,8 +335,7 @@ class LibraryRepository @Inject constructor(
                 filename = audio.filename,
                 durationSeconds = audio.duration_seconds,
                 format = audio.format,
-                series = audio.series,
-                seriesIndex = audio.series_index,
+                seriesJson = encodeSeries(audio.series_list.toSeriesEntries()),
                 uploadedAt = audio.uploaded_at,
                 isDownloaded = existing?.isDownloaded ?: false,
                 coverFilename = audio.cover_path ?: existing?.coverFilename
@@ -491,8 +498,7 @@ class LibraryRepository @Inject constructor(
             filename = remote.filename,
             fileSize = remote.file_size,
             format = remote.format,
-            series = remote.series,
-            seriesIndex = remote.series_index,
+            seriesJson = encodeSeries(remote.series_list.toSeriesEntries()),
             uploadedAt = remote.uploaded_at,
             isDownloaded = false,
             coverFilename = remote.cover_path,
@@ -511,8 +517,7 @@ class LibraryRepository @Inject constructor(
             filename = remote.filename,
             durationSeconds = remote.duration_seconds,
             format = remote.format,
-            series = remote.series,
-            seriesIndex = remote.series_index,
+            seriesJson = encodeSeries(remote.series_list.toSeriesEntries()),
             uploadedAt = remote.uploaded_at,
             isDownloaded = false,
             coverFilename = remote.cover_path,

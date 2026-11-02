@@ -1,5 +1,7 @@
 package com.booksync.auto
 
+import com.booksync.data.local.SeriesEntry
+import com.booksync.data.local.encodeSeries
 import com.booksync.data.local.entity.AudioBookEntity
 import com.booksync.data.local.entity.BookPairEntity
 import com.booksync.data.local.entity.BookmarkEntity
@@ -26,7 +28,7 @@ class AutoBookRowsTest {
         id: Int = 7,
         audiobookId: Int = 70,
         durationSeconds: Int? = 3600,
-        series: String? = "Discworld",
+        series: List<SeriesEntry> = listOf(SeriesEntry("Discworld", 1.0)),
     ) = BookPairEntity(
         id = id,
         ebookId = 700,
@@ -42,13 +44,13 @@ class AutoBookRowsTest {
         audiobookDurationSeconds = durationSeconds,
         status = "ready",
         audiobookCoverPath = "covers/70.jpg",
-        ebookSeries = series,
+        seriesJson = encodeSeries(series),
     )
 
     private fun audioRow(
         id: Int = 9,
         durationSeconds: Int? = 120,
-        series: String? = null,
+        series: List<SeriesEntry> = emptyList(),
     ) = AudioBookEntity(
         id = id,
         title = "Standalone title",
@@ -56,8 +58,7 @@ class AutoBookRowsTest {
         filename = "solo.mp3",
         durationSeconds = durationSeconds,
         format = "mp3",
-        series = series,
-        seriesIndex = null,
+        seriesJson = encodeSeries(series),
         uploadedAt = "2026-01-01",
         coverFilename = "covers/9.jpg",
     )
@@ -112,7 +113,7 @@ class AutoBookRowsTest {
         // the car reads aloud and what the notification shows.
         assertEquals("Audiobook title", book.title)
         assertEquals("Narrator", book.author)
-        assertEquals("Discworld", book.series)
+        assertEquals(listOf("Discworld"), book.seriesNames)
         assertEquals(4_500L, book.resumePositionMs)
         assertEquals("book.m4b", book.audioFilename)
         assertEquals("covers/70.jpg", book.serverCoverPath)
@@ -190,6 +191,23 @@ class AutoBookRowsTest {
     // --- Standalone rows ---
 
     @Test
+    fun `every series of a pair reaches the car's search, primary first`() {
+        val book = pairRow(series = listOf(SeriesEntry("Discworld", 1.0), SeriesEntry("Witches", 2.0)))
+            .toAutoBook(bookmark(audioPositionMs = 0))
+
+        assertEquals(listOf("Discworld", "Witches"), book.seriesNames)
+        assertEquals(listOf("Discworld", "Witches"), book.asSearchable().seriesNames)
+    }
+
+    @Test
+    fun `every series of a standalone audiobook reaches the car's search`() {
+        val book = audioRow(series = listOf(SeriesEntry("Witches", 2.0), SeriesEntry("Discworld", 1.0)))
+            .toAutoBook(progress(audioPositionMs = 0))
+
+        assertEquals(listOf("Witches", "Discworld"), book.seriesNames)
+    }
+
+    @Test
     fun `a standalone row has no pair id and an audiobook media id`() {
         val book = audioRow().toAutoBook(progress(audioPositionMs = 99))
         assertEquals("audiobook_9", book.mediaId)
@@ -197,7 +215,7 @@ class AutoBookRowsTest {
         assertEquals(9, book.audiobookId)
         assertEquals("Standalone title", book.title)
         assertEquals("Standalone author", book.author)
-        assertNull(book.series)
+        assertEquals(emptyList<String>(), book.seriesNames)
         assertEquals(99L, book.resumePositionMs)
         assertEquals("solo.mp3", book.audioFilename)
         assertEquals("covers/9.jpg", book.serverCoverPath)

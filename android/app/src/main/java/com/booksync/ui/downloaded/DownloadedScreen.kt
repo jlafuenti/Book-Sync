@@ -39,6 +39,7 @@ import java.io.File
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.booksync.data.local.seriesList
 import com.booksync.data.local.entity.AudioBookEntity
 import com.booksync.data.local.entity.BookPairEntity
 import com.booksync.data.local.entity.EBookEntity
@@ -213,8 +214,7 @@ fun DownloadedScreen(
                                         coverImageModel = coverModel,
                                         hasEbookDownloaded = pair.ebookDownloaded,
                                         hasAudiobookDownloaded = pair.audiobookDownloaded,
-                                        series = pair.ebookSeries,
-                                        seriesIndex = pair.ebookSeriesIndex,
+                                        seriesList = pair.seriesList,
                                     ),
                                     // Was `if (ebookDownloaded) reader else player`,
                                     // which ignored `bookmarks.source` entirely — so
@@ -256,8 +256,7 @@ fun DownloadedScreen(
                                         author = ebook.author,
                                         coverImageModel = coverModel,
                                         isDownloaded = true,
-                                        series = ebook.series,
-                                        seriesIndex = ebook.seriesIndex,
+                                        seriesList = ebook.seriesList,
                                     ),
                                     onClick = { onEbookSelect(ebook.id) },
                                     onOverflow = {
@@ -286,8 +285,7 @@ fun DownloadedScreen(
                                         author = audio.author,
                                         coverImageModel = coverModel,
                                         isDownloaded = true,
-                                        series = audio.series,
-                                        seriesIndex = audio.seriesIndex,
+                                        seriesList = audio.seriesList,
                                     ),
                                     onClick = { onAudiobookSelect(audio.id) },
                                     onOverflow = {

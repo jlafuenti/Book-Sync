@@ -38,8 +38,10 @@ data class BookPairEntity(
     // Audiobook cover filename as served by /api/files/covers/{filename}.
     // Populated from AudioBookResponse.cover_path on library sync.
     val audiobookCoverPath: String? = null,
-    val ebookSeries: String? = null,
-    val ebookSeriesIndex: Float? = null,
+    // The pair's series as a JSON array of SeriesEntry (issue #908): the ebook's
+    // entries, then the audiobook's names not already present. Null for none.
+    // Read it through `BookPairEntity.seriesList` (data/local/SeriesEntry.kt).
+    val seriesJson: String? = null,
 )
 
 @Entity(tableName = "ebooks")
@@ -50,8 +52,8 @@ data class EBookEntity(
     val filename: String,
     val fileSize: Long?,
     val format: String,
-    val series: String?,
-    val seriesIndex: Float?,
+    // JSON array of SeriesEntry, primary first (issue #908); null for none.
+    val seriesJson: String? = null,
     val uploadedAt: String,
     val isDownloaded: Boolean = false,
     // Cover image path as served by /api/files/covers/{filename}, from
@@ -67,8 +69,8 @@ data class AudioBookEntity(
     val filename: String,
     val durationSeconds: Int?,
     val format: String,
-    val series: String?,
-    val seriesIndex: Float?,
+    // JSON array of SeriesEntry, primary first (issue #908); null for none.
+    val seriesJson: String? = null,
     val uploadedAt: String,
     val isDownloaded: Boolean = false,
     // Cover image filename as served by /api/files/covers/{filename}. Null until server provides it.

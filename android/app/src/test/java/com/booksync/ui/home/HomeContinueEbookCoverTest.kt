@@ -78,7 +78,7 @@ class HomeContinueEbookCoverTest {
     fun `a recently read standalone ebook carries its cover`() {
         val ebook = EBookEntity(
             id = 71, title = "Standalone", author = null, filename = "s.epub", fileSize = null,
-            format = "epub", series = null, seriesIndex = null, uploadedAt = "2026-01-01T00:00:00",
+            format = "epub", uploadedAt = "2026-01-01T00:00:00",
             isDownloaded = true, coverFilename = "/api/files/covers/ebook_71.jpg",
         )
         every { repository.getRecentlyReadEbooksFlow() } returns flowOf(listOf(ebook))

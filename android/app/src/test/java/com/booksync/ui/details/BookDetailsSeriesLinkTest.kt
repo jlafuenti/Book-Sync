@@ -1,6 +1,10 @@
 package com.booksync.ui.details
 
+import com.booksync.data.local.SeriesEntry
+import com.booksync.data.local.encodeSeries
+import com.booksync.data.local.entity.BookPairEntity
 import com.booksync.data.local.entity.EBookEntity
+import com.booksync.data.local.seriesIndexSuffix
 import java.io.File
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -22,17 +26,24 @@ import org.junit.Test
  */
 class BookDetailsSeriesLinkTest {
 
-    private fun ebook(series: String?) = EBookEntity(
+    private fun ebook(series: String?, index: Double? = 3.0) = EBookEntity(
         id = 7,
         title = "A Test Book",
         author = "An Author",
         filename = "a-test-book.epub",
         fileSize = 1_024L,
         format = "epub",
-        series = series,
-        seriesIndex = 3f,
+        seriesJson = encodeSeries(listOfNotNull(series?.let { SeriesEntry(it, index) })),
         uploadedAt = "2026-01-01T00:00:00Z",
         isDownloaded = false,
+    )
+
+    private fun pair(vararg series: SeriesEntry) = BookPairEntity(
+        id = 9, ebookId = 7, ebookTitle = "A Test Book", ebookAuthor = "An Author",
+        ebookFilename = "a.epub", ebookFormat = "epub", audiobookId = 8,
+        audiobookTitle = "A Test Book", audiobookAuthor = "A Narrator",
+        audiobookFilename = "a.m4b", audiobookFormat = "m4b", audiobookDurationSeconds = 3600,
+        status = "synced", seriesJson = encodeSeries(series.toList()),
     )
 
     @Test
@@ -48,16 +59,69 @@ class BookDetailsSeriesLinkTest {
         val ui = BookDetailsUi(
             loading = false,
             ebook = ebook("Cached Name"),
-            extendedMeta = BookExtendedMeta(series = "Server Name"),
+            extendedMeta = BookExtendedMeta(seriesList = listOf(SeriesEntry("Server Name", 2.0))),
         )
 
         assertEquals("Server Name", ui.seriesName)
+        assertEquals("Server Name #2", ui.seriesLabel)
+    }
+
+    @Test
+    fun `metadata with no series falls back to the cached row`() {
+        val ui = BookDetailsUi(loading = false, ebook = ebook("Cached Name"), extendedMeta = BookExtendedMeta())
+
+        assertEquals("Cached Name", ui.seriesName)
     }
 
     @Test
     fun `a blank series is no series, so nothing is offered to tap`() {
         assertNull(BookDetailsUi(loading = false, ebook = ebook("  ")).seriesName)
         assertNull(BookDetailsUi(loading = false, ebook = ebook(null)).seriesName)
+        assertEquals(emptyList<SeriesEntry>(), BookDetailsUi(loading = false, ebook = ebook(null)).seriesList)
+        assertNull(BookDetailsUi(loading = false, ebook = ebook(null)).seriesLabel)
+    }
+
+    // ---- several series (issue #908) ---------------------------------------
+
+    private val saga = SeriesEntry("Axis Saga", 4.0)
+    private val chrono = SeriesEntry("Axis Chronological", 2.5)
+
+    @Test
+    fun `every series is offered, primary first, and the label lists them all`() {
+        val ui = BookDetailsUi(
+            loading = false,
+            ebook = ebook(null),
+            extendedMeta = BookExtendedMeta(seriesList = listOf(saga, chrono)),
+        )
+
+        assertEquals(listOf(saga, chrono), ui.seriesList)
+        assertEquals("Axis Saga", ui.seriesName)
+        assertEquals("Axis Saga #4; Axis Chronological #2.5", ui.seriesLabel)
+    }
+
+    @Test
+    fun `a pair also shows a series only its audiobook half has`() {
+        // The metadata fetched for a pair is the ebook's; the pair row carries the union.
+        val ui = BookDetailsUi(
+            loading = false,
+            pair = pair(saga, chrono),
+            extendedMeta = BookExtendedMeta(seriesList = listOf(saga)),
+        )
+
+        assertEquals(listOf(saga, chrono), ui.seriesList)
+    }
+
+    @Test
+    fun `a pair with no network metadata shows its stored union`() {
+        val ui = BookDetailsUi(loading = false, pair = pair(saga, chrono))
+
+        assertEquals(listOf(saga, chrono), ui.seriesList)
+    }
+
+    @Test
+    fun `a number is only shown when the series has one`() {
+        assertEquals(" #4", seriesIndexSuffix(saga))
+        assertEquals("", seriesIndexSuffix(SeriesEntry("Axis Saga")))
     }
 
     // ---- wiring -------------------------------------------------------------

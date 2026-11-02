@@ -7,6 +7,8 @@ import androidx.work.ExistingWorkPolicy
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.workDataOf
+import com.booksync.data.local.SeriesEntry
+import com.booksync.data.local.seriesList
 import com.booksync.data.local.entity.AudioBookEntity
 import com.booksync.data.local.entity.BookPairEntity
 import com.booksync.data.local.entity.EBookEntity
@@ -59,8 +61,7 @@ data class HomeItem(
     val ebookCoverPath: String? = null,
     val ebookDownloaded: Boolean = false,
     val audiobookDownloaded: Boolean = false,
-    val series: String? = null,
-    val seriesIndex: Float? = null,
+    val seriesList: List<SeriesEntry> = emptyList(),
 ) {
     enum class MediaType { PAIR, EBOOK, AUDIOBOOK }
 }
@@ -285,8 +286,7 @@ class HomeViewModel @Inject constructor(
                         audiobookCoverPath = pair.audiobookCoverPath,
                         ebookDownloaded = pair.ebookDownloaded,
                         audiobookDownloaded = pair.audiobookDownloaded,
-                        series = pair.ebookSeries,
-                        seriesIndex = pair.ebookSeriesIndex,
+                        seriesList = pair.seriesList,
                     )
                 }
                 for (ab in audiobooks) {
@@ -305,8 +305,7 @@ class HomeViewModel @Inject constructor(
                         updatedAtMs = progress?.lastPlayedAtMs() ?: 0L,
                         audiobookCoverPath = ab.coverFilename,
                         audiobookDownloaded = ab.isDownloaded,
-                        series = ab.series,
-                        seriesIndex = ab.seriesIndex,
+                        seriesList = ab.seriesList,
                     )
                 }
                 for (eb in ebooks) {
@@ -322,8 +321,7 @@ class HomeViewModel @Inject constructor(
                         updatedAtMs = progress?.lastPlayedAtMs() ?: 0L,
                         ebookCoverPath = eb.coverFilename,
                         ebookDownloaded = eb.isDownloaded,
-                        series = eb.series,
-                        seriesIndex = eb.seriesIndex,
+                        seriesList = eb.seriesList,
                     )
                 }
                 items.sortedByDescending { it.updatedAtMs }

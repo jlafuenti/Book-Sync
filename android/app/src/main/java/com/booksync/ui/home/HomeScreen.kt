@@ -49,6 +49,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.net.toUri
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.booksync.data.local.seriesList
 import com.booksync.BuildConfig
 import com.booksync.R
 import java.io.File
@@ -481,8 +482,7 @@ private fun ContinueRow(
                     title = item.title,
                     author = item.author,
                     coverImageModel = coverModel,
-                    series = item.series,
-                    seriesIndex = item.seriesIndex,
+                    seriesList = item.seriesList,
                 )
                 HomeItem.MediaType.EBOOK -> BookCardVariant.SingleMedia(
                     id = item.ebookId ?: 0,
@@ -490,8 +490,7 @@ private fun ContinueRow(
                     title = item.title,
                     author = item.author,
                     coverImageModel = coverModel,
-                    series = item.series,
-                    seriesIndex = item.seriesIndex,
+                    seriesList = item.seriesList,
                 )
                 HomeItem.MediaType.AUDIOBOOK -> BookCardVariant.SingleMedia(
                     id = item.audiobookId ?: 0,
@@ -499,8 +498,7 @@ private fun ContinueRow(
                     title = item.title,
                     author = item.author,
                     coverImageModel = coverModel,
-                    series = item.series,
-                    seriesIndex = item.seriesIndex,
+                    seriesList = item.seriesList,
                 )
             }
             Box(modifier = Modifier.width(140.dp)) {
@@ -549,8 +547,7 @@ private fun PairRow(
                         hasAudiobookDownloaded = pair.audiobookDownloaded,
                         // Plan: mismatch warning appears only in the "New Pairs" section.
                         hasMismatchWarning = showNewBadge && pair.hasMetadataMismatch(),
-                        series = pair.ebookSeries,
-                        seriesIndex = pair.ebookSeriesIndex,
+                        seriesList = pair.seriesList,
                     ),
                     onClick = { onPairClick(pair) },
                     onOverflow = { onPairOverflow(pair) },
