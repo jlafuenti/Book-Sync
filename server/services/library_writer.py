@@ -23,6 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from config import settings
 from models.settings import SystemSetting
 from routers.settings import DEFAULT_SETTINGS
+from services.file_mode import apply_default_mode
 
 logger = logging.getLogger(__name__)
 
@@ -145,6 +146,8 @@ async def place_file(
         shutil.move(source_path, target)
     else:
         shutil.copy2(source_path, target)
+    # The source is usually a temp file, and both of the above keep its 0600.
+    apply_default_mode(str(target))
 
     logger.info(f"[library_writer] Placed {book_type} at {target}")
     return str(target)
