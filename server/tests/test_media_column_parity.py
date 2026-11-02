@@ -24,7 +24,7 @@ from `services.metadata_utils`. These tests are the gates that keep it that way:
 
 import pytest
 
-from models.book import AudioBook, EBook
+from models.book import AudioBook, AudioBookSeries, EBook, EBookSeries
 from routers.library import FIELDS_TO_COMPARE, MetadataUpdate
 from schemas import AudioBookResponse, EBookResponse
 from services.metadata_utils import (
@@ -57,6 +57,9 @@ NON_METADATA_COLUMNS = frozenset({
     "acknowledged",
     "auto_pair_excluded_ids",
     "auto_pair_excluded_hashes",
+    # Series live in child tables (`ebook_series`/`audiobook_series`); this
+    # flag only records that a user emptied them, so a rescan leaves them empty.
+    "series_cleared",
 })
 
 
@@ -203,7 +206,9 @@ def test_metadata_update_schema_matches_the_field_list():
     the copy-on-write and rescan/enrich code paths share across both media
     types.
     """
-    assert set(MetadataUpdate.model_fields) == set(MEDIA_METADATA_FIELDS) | {"print_page_count"}
+    assert set(MetadataUpdate.model_fields) == (
+        set(MEDIA_METADATA_FIELDS) | {"print_page_count", "series_list", "series_add"}
+    )
 
 
 def test_fields_to_compare_is_derived_not_retyped():
@@ -211,7 +216,8 @@ def test_fields_to_compare_is_derived_not_retyped():
     identifiers (an ISBN mismatch between an ebook and its audiobook is normal)
     and adds `cover_path`. It is still built from the shared groups."""
     assert tuple(FIELDS_TO_COMPARE) == (
-        MEDIA_CORE_FIELDS + MEDIA_DESCRIPTIVE_FIELDS + MEDIA_FLAG_FIELDS + ("cover_path",)
+        MEDIA_CORE_FIELDS + ("series",) + MEDIA_DESCRIPTIVE_FIELDS
+        + MEDIA_FLAG_FIELDS + ("cover_path",)
     )
 
 
@@ -223,7 +229,7 @@ def test_fields_to_compare_is_derived_not_retyped():
 # refactor did not add, drop or rename one.
 _EXPECTED_EBOOK_RESPONSE_FIELDS = frozenset({
     "id", "title", "author", "filename", "file_path", "file_size", "format",
-    "series", "series_index", "metadata_source", "metadata_pattern",
+    "series_list", "metadata_source", "metadata_pattern",
     "uploaded_at", "description", "publisher", "publish_year", "language",
     "genres", "tags", "isbn", "asin", "narrators", "is_explicit",
     "is_abridged", "cover_path", "acknowledged",
@@ -256,3 +262,27 @@ def test_response_models_stay_optional_where_they_were_optional():
         "id", "title", "author", "filename", "file_size", "format", "uploaded_at",
     }
     assert audio_required == ebook_required | {"duration_seconds"}
+
+
+# ---------- the series entry tables stay the same table too ----------
+
+def test_series_entry_tables_have_identical_columns():
+    """`ebook_series` and `audiobook_series` differ only in the owning FK."""
+    e = _columns(EBookSeries)
+    a = _columns(AudioBookSeries)
+    assert set(e) - {"ebook_id"} == set(a) - {"audiobook_id"}
+    for name in set(e) - {"ebook_id"}:
+        assert str(e[name].type) == str(a[name].type)
+        assert e[name].nullable == a[name].nullable
+    assert EBookSeries.__tablename__ == "ebook_series"
+    assert AudioBookSeries.__tablename__ == "audiobook_series"
+
+
+def test_series_is_a_relationship_not_a_metadata_column():
+    """The scalar columns are gone; the list is a relationship, so it cannot sit
+    in the column-keyed field lists."""
+    assert "series" not in _columns(EBook)
+    assert "series_index" not in _columns(AudioBook)
+    assert "series" not in MEDIA_METADATA_FIELDS
+    assert "series_index" not in MEDIA_METADATA_FIELDS
+    assert MEDIA_CORE_FIELDS == ("title", "author")

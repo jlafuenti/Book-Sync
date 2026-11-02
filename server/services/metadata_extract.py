@@ -44,10 +44,12 @@ from services.audio_duration import probe_duration_seconds
 from services.filename_patterns import compile_pattern
 from services.metadata_utils import (
     MEDIA_EXTRACTED_FIELDS,
+    SERIES_LIST_KEY,
     extract_series_and_index,
     normalize_author,
     normalize_series,
 )
+from services.series import normalize_entries, parse_series, split_tag_pair
 
 logger = logging.getLogger(__name__)
 
@@ -149,8 +151,7 @@ async def parse_filename_metadata_with_settings(
     meta = {
         "title": None,
         "author": None,
-        "series": None,
-        "series_index": None,
+        "series_list": [],
         "_metadata_source": "filename",
         "_metadata_pattern": None,
     }
@@ -185,12 +186,13 @@ async def parse_filename_metadata_with_settings(
                 logger.debug(f"[metadata]   Matched pattern '{pattern_str}' -> groups={groups}")
                 
                 if "author" in groups: meta["author"] = normalize_author(groups["author"])
-                if "series" in groups: meta["series"] = normalize_series(groups["series"])
+                series_name = normalize_series(groups["series"]) if "series" in groups else None
+                series_index = None
                 if "title" in groups: meta["title"] = groups["title"].strip()
                 if "series_index" in groups:
                     try:
-                        meta["series_index"] = float(groups["series_index"])
-                    except ValueError:
+                        series_index = float(groups["series_index"])
+                    except (TypeError, ValueError):
                         pass
                 
                 # A <Series> that reads the same as the <Title> and has no
@@ -199,9 +201,12 @@ async def parse_filename_metadata_with_settings(
                 # `<Author>/<Title>/<Title>`, so `Author/Book Title/Book
                 # Title.m4b` landed here with series = "Book Title", and the
                 # auto-matcher then refused its ebook's real series (#712).
-                if (meta["series"] and meta["series_index"] is None
-                        and _same_name(meta["series"], meta["title"])):
-                    meta["series"] = None
+                if (series_name and series_index is None
+                        and _same_name(series_name, meta["title"])):
+                    series_name = None
+                meta["series_list"] = (
+                    [{"name": series_name, "index": series_index}] if series_name else []
+                )
 
                 # If we have at least a title, we consider it a match
                 if meta["title"]:
@@ -230,6 +235,54 @@ async def parse_filename_metadata_with_settings(
     
     logger.debug(f"[metadata]   Final (fallback): {meta}")
     return meta
+
+
+def _epub_series(opf_metas) -> List[Dict[str, Any]]:
+    """Every series an EPUB's OPF `<meta>` elements name, in document order.
+
+    `opf_metas` is ebooklib's ``get_metadata('OPF', 'meta')``: ``(text, attrs)``
+    pairs. Two dialects are read:
+
+    * Calibre: each ``calibre:series`` meta takes the **next**
+      ``calibre:series_index`` meta as its index (the rule Audiobookshelf uses,
+      so a file written by either tool reads back the same). A series with no
+      index after it keeps ``None``.
+    * EPUB3 ``belongs-to-collection`` metas, with their ``refines`` metas
+      ``collection-type`` and ``group-position``. Any type but ``set`` counts.
+
+    Names are normalised and deduplicated by `normalize_entries`.
+    """
+    calibre: List[Dict[str, Any]] = []
+    awaiting_index: Optional[Dict[str, Any]] = None
+    collections: Dict[str, Dict[str, Any]] = {}
+    refinements: Dict[str, Dict[str, str]] = {}
+
+    for item in opf_metas or []:
+        text = item[0] if item else None
+        attrs = item[1] if len(item) > 1 and isinstance(item[1], dict) else {}
+        name = attrs.get('name')
+        prop = attrs.get('property')
+        if name == 'calibre:series':
+            awaiting_index = {"name": attrs.get('content', ''), "index": None}
+            calibre.append(awaiting_index)
+        elif name == 'calibre:series_index':
+            if awaiting_index is not None:
+                awaiting_index["index"] = attrs.get('content')
+                awaiting_index = None
+        elif prop == 'belongs-to-collection':
+            collections[attrs.get('id') or f"anon{len(collections)}"] = {"name": text, "index": None}
+        elif prop in ('collection-type', 'group-position') and attrs.get('refines'):
+            target = attrs['refines'].lstrip('#')
+            refinements.setdefault(target, {})[prop] = (text or '').strip()
+
+    found = list(calibre)
+    for cid, entry in collections.items():
+        refined = refinements.get(cid, {})
+        if refined.get('collection-type', 'series').lower() == 'set':
+            continue
+        entry["index"] = refined.get('group-position')
+        found.append(entry)
+    return normalize_entries(found)
 
 
 def _read_embedded_metadata(filepath: str, file_type: str) -> Dict[str, Any]:
@@ -286,26 +339,17 @@ def _read_embedded_metadata(filepath: str, file_type: str) -> Dict[str, Any]:
                     elif 'asin' in val or (len(id_tuple)>1 and isinstance(id_tuple[1], dict) and 'asin' in str(id_tuple[1]).lower()):
                         file_meta["asin"] = id_tuple[0].replace('urn:asin:', '')
             
-            # Series (Calibre stores in <meta name="calibre:series" content="..."/>)
-            all_meta = book.get_metadata('OPF', 'meta')
-            if all_meta:
-                for m in all_meta:
-                    attrs = m[1] if len(m) > 1 else {}
-                    if attrs.get('name') == 'calibre:series':
-                        file_meta["series"] = normalize_series(attrs.get('content', ''))
-                    elif attrs.get('name') == 'calibre:series_index':
-                        try:
-                            file_meta["series_index"] = float(attrs.get('content', '0'))
-                        except ValueError:
-                            pass
-            
-            # If no series found in Calibre meta, try extracting from title
-            if not file_meta.get('series'):
-                title_str = file_meta.get('title', '')
-                s_name, s_idx = extract_series_and_index(title_str)
+            # Series: every Calibre pair and every EPUB3 series collection
+            # (a book can belong to several, issue #905).
+            series_list = _epub_series(book.get_metadata('OPF', 'meta'))
+
+            # If the file names no series, try extracting from the title
+            if not series_list:
+                s_name, s_idx = extract_series_and_index(file_meta.get('title', ''))
                 if s_name and s_idx is not None:
-                    file_meta['series'] = s_name
-                    file_meta['series_index'] = s_idx
+                    series_list = [{"name": s_name, "index": s_idx}]
+            if series_list:
+                file_meta[SERIES_LIST_KEY] = series_list
 
             logger.debug(f"[extract_metadata]   EPUB embedded: {file_meta}")
 
@@ -348,24 +392,22 @@ def _read_embedded_metadata(filepath: str, file_type: str) -> Dict[str, Any]:
                         if '\xa9nam' in audio: file_meta["title"] = str(audio['\xa9nam'][0])
                         if '\xa9ART' in audio: file_meta["author"] = normalize_author(str(audio['\xa9ART'][0]))
                         
-                        series_str = None
+                        # The explicit SERIES / SERIES-PART atoms (paired by
+                        # `split_tag_pair`) win, then the grouping atom, which
+                        # carries the canonical "A #1; B #2" string.
                         custom_series = audio.get('----:com.apple.iTunes:SERIES')
-                        if custom_series:
-                            series_str = bytes(custom_series[0]).decode('utf-8', 'replace').strip()
-                        elif '\xa9grp' in audio:
-                            series_str = str(audio['\xa9grp'][0])
-
-                        if series_str:
-                            s_name, s_idx = extract_series_and_index(series_str)
-                            if s_name: file_meta["series"] = s_name
-                            if s_idx is not None: file_meta["series_index"] = s_idx
-
                         custom_series_part = audio.get('----:com.apple.iTunes:SERIES-PART')
-                        if custom_series_part and not file_meta.get('series_index'):
-                            try:
-                                file_meta['series_index'] = float(bytes(custom_series_part[0]).decode('utf-8', 'replace').strip())
-                            except ValueError:
-                                pass
+                        series_list = []
+                        if custom_series:
+                            series_list = split_tag_pair(
+                                bytes(custom_series[0]).decode('utf-8', 'replace'),
+                                bytes(custom_series_part[0]).decode('utf-8', 'replace')
+                                if custom_series_part else None,
+                            )
+                        elif '\xa9grp' in audio:
+                            series_list = parse_series(str(audio['\xa9grp'][0]))
+                        if series_list:
+                            file_meta[SERIES_LIST_KEY] = series_list
                         
                         if '\xa9des' in audio: file_meta["description"] = md(str(audio['\xa9des'][0])).strip()
                         elif 'desc' in audio: file_meta["description"] = md(str(audio['desc'][0])).strip()
@@ -398,9 +440,16 @@ def _read_embedded_metadata(filepath: str, file_type: str) -> Dict[str, Any]:
                         
                         # The explicit SERIES tag Tandem writes wins, as the
                         # SERIES atom does for MP4; then subtitle and grouping.
+                        series_list = []
                         series_str = None
-                        if 'TXXX:SERIES' in audio: series_str = str(audio['TXXX:SERIES'])
-                        elif 'series' in audio: series_str = str(audio['series'][0])
+                        part = None
+                        if 'TXXX:SERIES-PART' in audio: part = str(audio['TXXX:SERIES-PART'])
+                        elif 'series-part' in audio: part = str(audio['series-part'][0])
+                        explicit = None
+                        if 'TXXX:SERIES' in audio: explicit = str(audio['TXXX:SERIES'])
+                        elif 'series' in audio: explicit = str(audio['series'][0])
+                        if explicit is not None:
+                            series_list = split_tag_pair(explicit, part)
                         elif 'TIT3' in audio: series_str = str(audio['TIT3'])
                         elif 'subtitle' in audio: series_str = str(audio['subtitle'][0])
                         elif 'TIT1' in audio: series_str = str(audio['TIT1'])
@@ -418,18 +467,9 @@ def _read_embedded_metadata(filepath: str, file_type: str) -> Dict[str, Any]:
                                 series_str = album
 
                         if series_str:
-                            s_name, s_idx = extract_series_and_index(series_str)
-                            if s_name: file_meta["series"] = s_name
-                            if s_idx is not None: file_meta["series_index"] = s_idx
-
-                        part = None
-                        if 'TXXX:SERIES-PART' in audio: part = str(audio['TXXX:SERIES-PART'])
-                        elif 'series-part' in audio: part = str(audio['series-part'][0])
-                        if part and file_meta.get("series") and file_meta.get("series_index") is None:
-                            try:
-                                file_meta["series_index"] = float(part.strip())
-                            except ValueError:
-                                pass
+                            series_list = parse_series(series_str)
+                        if series_list:
+                            file_meta[SERIES_LIST_KEY] = series_list
                         
                         # Extended fields
                         for kv in audio.keys():
@@ -475,7 +515,9 @@ def _read_embedded_metadata(filepath: str, file_type: str) -> Dict[str, Any]:
                         for album_key in ['\xa9alb', 'TALB', 'album', 'ALBUM']:
                             if album_key in audio:
                                 val = audio[album_key]
-                                file_meta["series"] = normalize_series(str(val[0]) if isinstance(val, list) else str(val))
+                                album = normalize_series(str(val[0]) if isinstance(val, list) else str(val))
+                                if album:
+                                    file_meta[SERIES_LIST_KEY] = [{"name": album, "index": None}]
                                 break
                 
                 logger.debug(f"[extract_metadata]   Audio embedded: {file_meta}")
@@ -535,6 +577,14 @@ async def extract_metadata(
         if file_meta.get(field) is not None:
             meta[field] = file_meta[field]
             has_embedded = True
+
+    # Series is a list, not a column, so it is not in the loop above. A file
+    # that names any series replaces the path pattern's wholesale: the two are
+    # not merged, because the pattern's single guess would otherwise be
+    # appended to a list the file already settled.
+    if file_meta.get(SERIES_LIST_KEY):
+        meta[SERIES_LIST_KEY] = file_meta[SERIES_LIST_KEY]
+        has_embedded = True
 
     # Duration is a physical property of the file rather than something a
     # tagger wrote, so it merges outside the loop above: a readable length must

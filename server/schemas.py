@@ -252,6 +252,20 @@ class UserPasswordReset(BaseModel):
 # Book Schemas
 # ============================================================
 
+class SeriesEntry(BaseModel):
+    """One series a book belongs to (issue #905): a name and an optional index.
+
+    The same shape in responses, in `MetadataUpdate` and in `MatchResult`. A
+    list of these is ordered; entry 0 is the book's primary series.
+    """
+
+    name: str = Field(..., min_length=1, max_length=500)
+    index: Optional[float] = None
+
+    class Config:
+        from_attributes = True
+
+
 class MediaResponseBase(BaseModel):
     """The response fields `EBookResponse` and `AudioBookResponse` share.
 
@@ -270,8 +284,7 @@ class MediaResponseBase(BaseModel):
     file_path: Optional[str] = None
     file_size: Optional[int]
     format: str
-    series: Optional[str] = None
-    series_index: Optional[float] = None
+    series_list: List[SeriesEntry] = []
     metadata_source: Optional[str] = None
     metadata_pattern: Optional[str] = None
     uploaded_at: datetime
@@ -377,8 +390,7 @@ class MatchResult(BaseModel):
     description: Optional[str] = None
     isbn: Optional[str] = None
     cover_url: Optional[str] = None
-    series: Optional[str] = None
-    series_index: Optional[float] = None
+    series_list: List[SeriesEntry] = []
     genres: Optional[str] = None      # comma-separated, mirrors EBook/AudioBook columns
     tags: Optional[str] = None        # comma-separated
     language: Optional[str] = None

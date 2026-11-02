@@ -106,8 +106,7 @@ def test_epub_series_comes_out_of_the_title(tmp_path):
 
     meta = _read_embedded_metadata(path, "ebook")
 
-    assert meta["series"] == "The Quartet"
-    assert meta["series_index"] == 3
+    assert meta["series_list"] == [{"name": "The Quartet", "index": 3.0}]
 
 
 def test_an_unreadable_epub_yields_no_metadata_rather_than_an_error(tmp_path):
@@ -190,8 +189,7 @@ def test_mp4_atoms_are_read(audio, monkeypatch):
 
     assert meta["title"] == "The Long Way Down"
     assert meta["author"] == "Ursula Example"
-    assert meta["series"] == "The Quartet"
-    assert meta["series_index"] == 4
+    assert meta["series_list"] == [{"name": "The Quartet", "index": 4.0}]
     assert meta["publish_year"] == 2019
     assert meta["genres"] == "Science Fiction"
     assert meta["narrators"] == "A Reader"
@@ -209,8 +207,7 @@ def test_mp4_falls_back_to_the_grouping_atom_for_the_series(audio, monkeypatch):
 
     meta = _read_embedded_metadata(audio, "audiobook")
 
-    assert meta["series"] == "The Quartet"
-    assert meta["series_index"] == 3
+    assert meta["series_list"] == [{"name": "The Quartet", "index": 3.0}]
     assert meta["narrators"] == "Another Reader"
     assert "A comment blurb." in meta["description"]
 
@@ -230,8 +227,7 @@ def test_id3_frames_are_read(audio, monkeypatch):
 
     assert meta["title"] == "The Long Way Down"
     assert meta["author"] == "Ursula Example"
-    assert meta["series"] == "The Quartet"
-    assert meta["series_index"] == 2
+    assert meta["series_list"] == [{"name": "The Quartet", "index": 2.0}]
     assert meta["genres"] == "Science Fiction"
     assert meta["publish_year"] == 2019
     assert meta["publisher"] == "Imaginary Press"
@@ -261,7 +257,7 @@ def test_an_unknown_container_falls_back_to_sniffing_common_keys(audio, monkeypa
 
     assert meta["title"] == "Sniffed Title"
     assert meta["author"] == "Sniffed Author"
-    assert meta["series"] == "Sniffed Series"
+    assert meta["series_list"] == [{"name": "Sniffed Series", "index": None}]
 
 
 def test_a_file_with_no_tags_still_yields_its_runtime(audio, monkeypatch):
@@ -306,3 +302,162 @@ def test_a_container_mutagen_cannot_open_yields_no_metadata(audio, monkeypatch):
     monkeypatch.setattr(metadata_extract.mutagen, "File", _explode)
 
     assert _read_embedded_metadata(audio, "audiobook") == {}
+
+
+# --------------------------------------------------------- several series
+#
+# A book can belong to several series (issue #905). The readers below follow
+# what Audiobookshelf reads, so a file tagged by either tool comes through.
+
+def _entries(*pairs):
+    return [{"name": n, "index": i} for n, i in pairs]
+
+
+def test_epub_reads_every_calibre_series_with_the_next_index(tmp_path):
+    path = _epub(tmp_path / "b.epub", (
+        '<dc:identifier id="bookid">urn:uuid:x</dc:identifier><dc:title>Two Series</dc:title>'
+        '<meta name="calibre:series" content="Axis Saga"/>'
+        '<meta name="calibre:series_index" content="4"/>'
+        '<meta name="calibre:series" content="Axis Chronological"/>'
+        '<meta name="calibre:series_index" content="2.5"/>'
+    ))
+
+    meta = _read_embedded_metadata(path, "ebook")
+
+    assert meta["series_list"] == _entries(("Axis Saga", 4.0), ("Axis Chronological", 2.5))
+
+
+def test_epub_calibre_series_without_an_index_keeps_the_name(tmp_path):
+    path = _epub(tmp_path / "b.epub", (
+        '<dc:identifier id="bookid">urn:uuid:x</dc:identifier><dc:title>Plain</dc:title>'
+        '<meta name="calibre:series" content="Axis Saga"/>'
+        '<meta name="calibre:series" content="Axis Chronological"/>'
+        '<meta name="calibre:series_index" content="3"/>'
+    ))
+
+    meta = _read_embedded_metadata(path, "ebook")
+
+    assert meta["series_list"] == _entries(("Axis Saga", None), ("Axis Chronological", 3.0))
+
+
+def test_epub3_collections_are_series_unless_they_are_sets(tmp_path):
+    path = _epub(tmp_path / "b.epub", (
+        '<dc:identifier id="bookid">urn:uuid:x</dc:identifier><dc:title>Collected</dc:title>'
+        '<meta property="belongs-to-collection" id="c1">Axis Saga</meta>'
+        '<meta refines="#c1" property="collection-type">series</meta>'
+        '<meta refines="#c1" property="group-position">7</meta>'
+        '<meta property="belongs-to-collection" id="c2">Axis Boxed Set</meta>'
+        '<meta refines="#c2" property="collection-type">set</meta>'
+    ))
+
+    meta = _read_embedded_metadata(path, "ebook")
+
+    assert meta["series_list"] == _entries(("Axis Saga", 7.0))
+
+
+def test_epub_calibre_and_collection_entries_are_deduplicated(tmp_path):
+    path = _epub(tmp_path / "b.epub", (
+        '<dc:identifier id="bookid">urn:uuid:x</dc:identifier><dc:title>Both</dc:title>'
+        '<meta name="calibre:series" content="Axis Saga"/>'
+        '<meta name="calibre:series_index" content="1"/>'
+        '<meta property="belongs-to-collection" id="c1">axis saga</meta>'
+        '<meta refines="#c1" property="collection-type">series</meta>'
+        '<meta property="belongs-to-collection" id="c2">Axis Chronological</meta>'
+    ))
+
+    meta = _read_embedded_metadata(path, "ebook")
+
+    assert meta["series_list"] == _entries(("Axis Saga", 1.0), ("Axis Chronological", None))
+
+
+def test_epub_title_is_only_a_fallback_when_no_series_meta_exists(tmp_path):
+    path = _epub(tmp_path / "b.epub", (
+        '<dc:identifier id="bookid">urn:uuid:x</dc:identifier>'
+        '<dc:title>The Quartet #3: Third Movement</dc:title>'
+        '<meta name="calibre:series" content="Axis Saga"/>'
+    ))
+
+    assert _read_embedded_metadata(path, "ebook")["series_list"] == _entries(("Axis Saga", None))
+
+
+def test_mp4_grouping_atom_with_several_series(audio, monkeypatch):
+    _tagged(monkeypatch, MP4({
+        "\xa9nam": ["Two Series"],
+        "\xa9grp": ["Axis Saga #1; Axis Chronological #2.5"],
+    }))
+
+    meta = _read_embedded_metadata(audio, "audiobook")
+
+    assert meta["series_list"] == _entries(("Axis Saga", 1.0), ("Axis Chronological", 2.5))
+
+
+def test_mp4_series_and_series_part_atoms_are_split_on_semicolons(audio, monkeypatch):
+    _tagged(monkeypatch, MP4({
+        "\xa9nam": ["Two Series"],
+        "----:com.apple.iTunes:SERIES": [b"Axis Saga; Axis Chronological"],
+        "----:com.apple.iTunes:SERIES-PART": [b"1; 2"],
+    }))
+
+    meta = _read_embedded_metadata(audio, "audiobook")
+
+    assert meta["series_list"] == _entries(("Axis Saga", 1.0), ("Axis Chronological", 2.0))
+
+
+def test_mp4_mismatched_series_and_part_counts_drop_the_indexes(audio, monkeypatch):
+    _tagged(monkeypatch, MP4({
+        "----:com.apple.iTunes:SERIES": [b"Axis Saga; Axis Chronological"],
+        "----:com.apple.iTunes:SERIES-PART": [b"1"],
+    }))
+
+    meta = _read_embedded_metadata(audio, "audiobook")
+
+    assert meta["series_list"] == _entries(("Axis Saga", None), ("Axis Chronological", None))
+
+
+def test_id3_txxx_series_and_part_frames(audio, monkeypatch):
+    _tagged(monkeypatch, MP3({
+        "TIT2": "Two Series",
+        "TXXX:SERIES": "Axis Saga; Axis Chronological",
+        "TXXX:SERIES-PART": "3; 1.5",
+    }))
+
+    meta = _read_embedded_metadata(audio, "audiobook")
+
+    assert meta["series_list"] == _entries(("Axis Saga", 3.0), ("Axis Chronological", 1.5))
+
+
+def test_id3_grouping_frame_with_several_series(audio, monkeypatch):
+    _tagged(monkeypatch, MP3({
+        "TIT2": "Two Series",
+        "TIT1": "Axis Saga #1; Axis Chronological #2",
+    }))
+
+    meta = _read_embedded_metadata(audio, "audiobook")
+
+    assert meta["series_list"] == _entries(("Axis Saga", 1.0), ("Axis Chronological", 2.0))
+
+
+def test_vorbis_series_part_and_grouping_tags(audio, monkeypatch):
+    class OggVorbis(_Tags):
+        pass
+
+    _tagged(monkeypatch, OggVorbis({
+        "title": ["Two Series"],
+        "series": ["Axis Saga; Axis Chronological"],
+        "series-part": ["1; 2"],
+    }))
+    assert _read_embedded_metadata(audio, "audiobook")["series_list"] == _entries(
+        ("Axis Saga", 1.0), ("Axis Chronological", 2.0))
+
+    _tagged(monkeypatch, OggVorbis({
+        "title": ["Two Series"],
+        "grouping": ["Axis Saga #1; Axis Chronological #2"],
+    }))
+    assert _read_embedded_metadata(audio, "audiobook")["series_list"] == _entries(
+        ("Axis Saga", 1.0), ("Axis Chronological", 2.0))
+
+
+def test_a_book_with_no_series_tags_has_no_series_key(audio, monkeypatch):
+    _tagged(monkeypatch, MP4({"\xa9nam": ["Standalone"]}))
+
+    assert "series_list" not in _read_embedded_metadata(audio, "audiobook")
