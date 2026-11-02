@@ -41,9 +41,17 @@ OPF = "{http://www.idpf.org/2007/opf}"
 CHAPTER = "<html><body><p>Chapter one.</p></body></html>"
 
 
-def _book(**fields):
+def _book(series=None, series_index=None, series_list=None, **fields):
+    """A stand-in row. `series=` / `series_index=` give one entry, `series=""`
+    the user-cleared (empty) list, and neither leaves the series untouched
+    (`series_list=None`); `series_list=[...]` gives several."""
+    if series_list is None:
+        if series:
+            series_list = [{"name": series, "index": series_index}]
+        elif series == "":
+            series_list = []
     base = dict(
-        title=None, author=None, series=None, series_index=None, description=None,
+        title=None, author=None, series_list=series_list, description=None,
         publisher=None, language=None, publish_year=None, genres=None,
     )
     base.update(fields)
@@ -66,6 +74,15 @@ def _metadata(path):
 
 def _dc(meta, tag):
     return [c.text for c in meta if c.tag == DC + tag]
+
+
+def _calibre_pairs(meta):
+    """Every calibre series meta, in document order: [(name, content)]."""
+    return [
+        (m.attrib["name"], m.attrib.get("content"))
+        for m in meta
+        if m.tag == OPF + "meta" and m.attrib.get("name", "").startswith("calibre:")
+    ]
 
 
 def _calibre(meta):
@@ -91,7 +108,7 @@ def test_epub_fields_round_trip_and_the_rest_of_the_archive_survives(epub):
     assert _dc(meta, "publisher") == ["Pub House"]
     assert _dc(meta, "language") == ["fr"]
     assert _dc(meta, "date") == ["1999"]
-    assert _calibre(meta) == {"calibre:series": "The Series", "calibre:series_index": "2.0"}
+    assert _calibre(meta) == {"calibre:series": "The Series", "calibre:series_index": "2"}
     with zipfile.ZipFile(epub) as z:
         assert z.read("OEBPS/ch1.xhtml").decode() == CHAPTER
         assert z.read("mimetype") == b"application/epub+zip"
@@ -118,7 +135,7 @@ def test_no_series_on_the_book_leaves_the_existing_calibre_meta_alone(epub):
 
     meta = _metadata(epub)
     assert _dc(meta, "title") == ["Retitled"]
-    assert _calibre(meta) == {"calibre:series": "Keep", "calibre:series_index": "3.0"}
+    assert _calibre(meta) == {"calibre:series": "Keep", "calibre:series_index": "3"}
 
 
 def test_an_empty_string_series_removes_the_calibre_series_and_index_metas(epub):
@@ -129,7 +146,7 @@ def test_an_empty_string_series_removes_the_calibre_series_and_index_metas(epub)
     onto the row — the clear never stuck.
     """
     tag_writer.write_ebook_metadata(epub, _book(title="T", series="Old", series_index=1.0))
-    assert _calibre(_metadata(epub)) == {"calibre:series": "Old", "calibre:series_index": "1.0"}
+    assert _calibre(_metadata(epub)) == {"calibre:series": "Old", "calibre:series_index": "1"}
 
     tag_writer.write_ebook_metadata(epub, _book(title="T", series=""))
 
@@ -137,16 +154,79 @@ def test_an_empty_string_series_removes_the_calibre_series_and_index_metas(epub)
     # And the scan's embedded-metadata read — the actual consumer of these
     # tags — must not resurrect the series from anywhere else in the OPF.
     reread = _read_embedded_metadata(epub, "ebook")
-    assert reread.get("series") is None
-    assert reread.get("series_index") is None
+    assert reread.get("series_list") is None
 
 
 def test_a_set_series_still_round_trips_through_the_real_extractor(epub):
     tag_writer.write_ebook_metadata(epub, _book(title="T", series="The Series", series_index=2.0))
 
     reread = _read_embedded_metadata(epub, "ebook")
-    assert reread["series"] == "The Series"
-    assert reread["series_index"] == 2.0
+    assert reread["series_list"] == [{"name": "The Series", "index": 2.0}]
+
+
+def test_several_series_are_written_as_adjacent_calibre_pairs_in_order(epub):
+    tag_writer.write_ebook_metadata(epub, _book(title="T", series_list=[
+        {"name": "Axis Saga", "index": 4.0},
+        {"name": "Axis Chronological", "index": 2.5},
+        {"name": "Axis Standalone", "index": None},
+    ]))
+
+    assert _calibre_pairs(_metadata(epub)) == [
+        ("calibre:series", "Axis Saga"), ("calibre:series_index", "4"),
+        ("calibre:series", "Axis Chronological"), ("calibre:series_index", "2.5"),
+        ("calibre:series", "Axis Standalone"),
+    ]
+    reread = _read_embedded_metadata(epub, "ebook")
+    assert reread["series_list"] == [
+        {"name": "Axis Saga", "index": 4.0},
+        {"name": "Axis Chronological", "index": 2.5},
+        {"name": "Axis Standalone", "index": None},
+    ]
+
+
+def test_writing_series_replaces_every_old_pair_and_epub3_collection(epub):
+    """Old calibre pairs and EPUB3 `belongs-to-collection` metas (with the
+    metas refining them) all go, or the next read would resurrect them."""
+    with zipfile.ZipFile(epub) as z:
+        files = {n: z.read(n) for n in z.namelist()}
+    opf = files["OEBPS/content.opf"].decode().replace(
+        "</metadata>",
+        '<meta name="calibre:series" content="Gone One"/>'
+        '<meta name="calibre:series_index" content="9"/>'
+        '<meta name="calibre:series" content="Gone Two"/>'
+        '<meta property="belongs-to-collection" id="c1">Gone Three</meta>'
+        '<meta refines="#c1" property="collection-type">series</meta>'
+        '<meta refines="#c1" property="group-position">5</meta>'
+        "</metadata>",
+    )
+    files["OEBPS/content.opf"] = opf.encode()
+    with zipfile.ZipFile(epub, "w") as z:
+        for name, data in files.items():
+            z.writestr(name, data)
+
+    tag_writer.write_ebook_metadata(epub, _book(title="T", series="Fresh", series_index=1.0))
+
+    meta = _metadata(epub)
+    assert _calibre_pairs(meta) == [("calibre:series", "Fresh"), ("calibre:series_index", "1")]
+    assert not [m for m in meta if m.attrib.get("property") in
+                ("belongs-to-collection", "collection-type", "group-position")]
+    assert _read_embedded_metadata(epub, "ebook")["series_list"] == [{"name": "Fresh", "index": 1.0}]
+
+
+def test_an_orm_style_row_with_no_series_and_no_cleared_flag_is_left_alone(epub):
+    """An ORM row with an empty `series_list` has either never had a series or
+    had it cleared; only `series_cleared` says which."""
+    tag_writer.write_ebook_metadata(epub, _book(title="T", series="Keep", series_index=1.0))
+
+    untouched = _book(title="T2", series_list=[])
+    untouched.series_cleared = False
+    tag_writer.write_ebook_metadata(epub, untouched)
+    assert _calibre(_metadata(epub)) == {"calibre:series": "Keep", "calibre:series_index": "1"}
+
+    cleared = _book(title="T2", series_list=[])
+    cleared.series_cleared = True
+    tag_writer.write_ebook_metadata(epub, cleared)
+    assert _calibre(_metadata(epub)) == {}
 
 
 def test_the_opf_is_found_by_extension_when_container_xml_is_unreadable(tmp_path):

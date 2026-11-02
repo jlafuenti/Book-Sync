@@ -224,3 +224,29 @@ async def test_factory_translates_legacy_scalar_kwargs(db):
     assert entries_of(eb) == [E("Axis Saga", 3.0)]
     ab = await make_audiobook(db, series_list=[E("A", 1), E("B", 2)])
     assert [e["name"] for e in entries_of(ab)] == ["A", "B"]
+
+
+# ---------- tag_values / fill_missing_indexes ----------
+
+from services.series import fill_missing_indexes, tag_values  # noqa: E402
+
+
+def test_tag_values_for_a_full_list():
+    assert tag_values([E("A", 1), E("B", 2.5)]) == ("A #1; B #2.5", "A; B", "1; 2.5")
+
+
+def test_tag_values_drop_the_part_tag_unless_every_entry_has_an_index():
+    assert tag_values([E("A", 1), E("B")]) == ("A #1; B", "A; B", None)
+
+
+def test_tag_values_replace_a_semicolon_in_a_name():
+    assert tag_values([E("A; B", 1)]) == ("A, B #1", "A, B", "1")
+
+
+def test_tag_values_for_an_empty_list():
+    assert tag_values([]) == ("", "", None)
+
+
+def test_fill_missing_indexes_takes_them_from_the_grouping_by_name():
+    filled = fill_missing_indexes([E("A"), E("B", 7)], [E("a", 1), E("B", 9)])
+    assert filled == [E("A", 1.0), E("B", 7.0)]

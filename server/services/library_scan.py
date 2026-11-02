@@ -48,7 +48,12 @@ from services.metadata_extract import (
     compute_file_hash,
     extract_metadata,
 )
-from services.metadata_utils import MEDIA_FILL_IF_NULL_FIELDS, is_hidden_or_system_name
+from services.metadata_utils import (
+    MEDIA_FILL_IF_NULL_FIELDS,
+    SERIES_LIST_KEY,
+    is_hidden_or_system_name,
+)
+from services.series import entries_of, set_series
 
 logger = logging.getLogger(__name__)
 
@@ -110,6 +115,15 @@ async def _insert_or_reread(db: AsyncSession, row, model, filepath: str):
     return row, True
 
 
+def _writable(meta: dict) -> dict:
+    """`meta` as the file writer should see it: an empty series list becomes
+    "no opinion" (key dropped), so a scan that found no series never deletes the
+    series tags the file carries. Only a user's explicit clear writes `[]`."""
+    if meta.get(SERIES_LIST_KEY):
+        return meta
+    return {k: v for k, v in meta.items() if k != SERIES_LIST_KEY}
+
+
 async def _ingest_one_ebook(db: AsyncSession, filepath: str, ebook_dir: str) -> bool:
     """
     Process a single ebook file: enrich an existing row, or create a new
@@ -131,9 +145,11 @@ async def _ingest_one_ebook(db: AsyncSession, filepath: str, ebook_dir: str) -> 
             existing_ebook.metadata_pattern = meta.get("_metadata_pattern")
             updated = True
 
-        if meta.get("series") and not existing_ebook.series:
-            existing_ebook.series = meta["series"]
-            existing_ebook.series_index = meta.get("series_index")
+        # A normal scan fills only a row with no series, and never one whose
+        # series the user cleared (issue #905).
+        if (entries_of(meta) and not existing_ebook.series_list
+                and not existing_ebook.series_cleared):
+            set_series(existing_ebook, entries_of(meta), user_edit=False)
             updated = True
 
         # Shared with the audiobook ingest below (issue #257). This list used to
@@ -170,8 +186,6 @@ async def _ingest_one_ebook(db: AsyncSession, filepath: str, ebook_dir: str) -> 
     ebook = EBook(
         title=meta.get("title") or filename,
         author=meta.get("author"),
-        series=meta.get("series"),
-        series_index=meta.get("series_index"),
         description=meta.get("description"),
         publisher=meta.get("publisher"),
         publish_year=meta.get("publish_year"),
@@ -188,6 +202,7 @@ async def _ingest_one_ebook(db: AsyncSession, filepath: str, ebook_dir: str) -> 
         file_size=file_size,
         format=ext.lstrip("."),
     )
+    set_series(ebook, entries_of(meta), user_edit=False)
     ebook, created = await _insert_or_reread(db, ebook, EBook, filepath)
 
     if not ebook.cover_path:
@@ -234,17 +249,16 @@ async def _ingest_one_audiobook(
         if abs_index:
             extracted = dict(meta)
             meta, abs_changed, _ = enrich_from_abs(meta, filepath, abs_index, audiobook_dir)
-            # Respect user-cleared fields: empty string means user explicitly cleared it.
-            if existing_audiobook.series == "":
-                meta.pop("series", None)
-                meta.pop("series_index", None)
+            # Respect a series the user cleared: leave it out of the write-back.
+            if existing_audiobook.series_cleared:
+                meta.pop(SERIES_LIST_KEY, None)
             # Only a fill the file will actually hold is worth writing: anything
             # else is "missing" again on the next scan, which rewrote the file on
             # every scan forever (#878). Judged after the series drop above, or
             # ABS's series for a user-cleared row counts on every scan. The
             # database still gets every fill below.
             if abs_changed and fills_written_back_field(extracted, meta):
-                await asyncio.to_thread(write_metadata_to_file, filepath, meta)
+                await asyncio.to_thread(write_metadata_to_file, filepath, _writable(meta))
                 # Tandem's own write just changed the file's bytes -- move the
                 # hash forward so the *next* scan doesn't mistake this write
                 # for a replacement (issue #588, mirrors issue #533).
@@ -258,9 +272,9 @@ async def _ingest_one_audiobook(
             existing_audiobook.metadata_pattern = meta.get("_metadata_pattern")
             updated = True
 
-        if meta.get("series") and existing_audiobook.series is None:
-            existing_audiobook.series = meta["series"]
-            existing_audiobook.series_index = meta.get("series_index")
+        if (entries_of(meta) and not existing_audiobook.series_list
+                and not existing_audiobook.series_cleared):
+            set_series(existing_audiobook, entries_of(meta), user_edit=False)
             updated = True
 
         for f in MEDIA_FILL_IF_NULL_FIELDS:
@@ -303,13 +317,11 @@ async def _ingest_one_audiobook(
         extracted = dict(meta)
         meta, abs_changed, _ = enrich_from_abs(meta, filepath, abs_index, audiobook_dir)
         if abs_changed and fills_written_back_field(extracted, meta):  # (#878)
-            await asyncio.to_thread(write_metadata_to_file, filepath, meta)
+            await asyncio.to_thread(write_metadata_to_file, filepath, _writable(meta))
 
     audiobook = AudioBook(
         title=meta["title"] or filename,
         author=meta["author"],
-        series=meta["series"],
-        series_index=meta["series_index"],
         description=meta.get("description"),
         publisher=meta.get("publisher"),
         publish_year=meta.get("publish_year"),
@@ -330,6 +342,7 @@ async def _ingest_one_audiobook(
         file_size=file_size,
         format=ext.lstrip("."),
     )
+    set_series(audiobook, entries_of(meta), user_edit=False)
     audiobook, created = await _insert_or_reread(db, audiobook, AudioBook, filepath)
 
     if not audiobook.cover_path:

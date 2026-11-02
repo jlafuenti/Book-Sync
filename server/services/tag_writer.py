@@ -41,6 +41,7 @@ from services.file_mode import copy_mode_and_owner
 from xml.etree.ElementTree import SubElement, register_namespace
 
 from services.metadata_utils import normalize_author
+from services.series import entries_of, tag_values
 
 logger = logging.getLogger(__name__)
 
@@ -228,31 +229,27 @@ def write_ebook_metadata(filepath: str, book) -> None:
         clear_dc_tag("language", getattr(book, 'language', None))
         clear_dc_tag("date", getattr(book, 'publish_year', None))
         
-        # Calibre series meta tags. `None` means "not touched" (leave whatever
-        # is in the OPF alone); `""` means the user explicitly cleared the
-        # series and the calibre:series* metas must go, or the next scan's
-        # fill-empty-fields step reads them straight back onto the row and
-        # undoes the clear (issue #526) — the audio writer already treats an
-        # empty string this way, this makes the EPUB path match it.
-        book_series = getattr(book, 'series', None)
-        if book_series is not None:
-            # Remove existing series tags either way: cleared, or about to be
-            # replaced by the new value below.
-            for meta_tag in list(metadata):
-                if meta_tag.tag.endswith('meta'):
-                    name_attr = meta_tag.attrib.get('name')
-                    if name_attr in ('calibre:series', 'calibre:series_index'):
-                        metadata.remove(meta_tag)
-
-            if book_series:
+        # Series (issue #905). `None` means "not touched" (leave whatever is in
+        # the OPF alone); an empty list means the user cleared the series and
+        # every series meta must go, or the next scan's fill-empty-fields step
+        # reads them straight back onto the row and undoes the clear (issue
+        # #526); a non-empty list replaces them.
+        series_entries = _series_to_write(book)
+        if series_entries is not None:
+            _drop_series_metas(metadata)
+            # One `calibre:series` meta per series, each immediately followed by
+            # its `calibre:series_index`: the pairing Calibre, Audiobookshelf and
+            # Tandem's own reader all use. EPUB3 collection metas are not
+            # emitted (they are invalid on an EPUB2 OPF).
+            for entry in series_entries:
                 series_meta = SubElement(metadata, "{http://www.idpf.org/2007/opf}meta")
                 series_meta.attrib['name'] = 'calibre:series'
-                series_meta.attrib['content'] = str(book_series)
+                series_meta.attrib['content'] = entry['name']
 
-                if getattr(book, 'series_index', None) is not None:
+                if entry['index'] is not None:
                     index_meta = SubElement(metadata, "{http://www.idpf.org/2007/opf}meta")
                     index_meta.attrib['name'] = 'calibre:series_index'
-                    index_meta.attrib['content'] = str(book.series_index)
+                    index_meta.attrib['content'] = f"{entry['index']:g}"
                 
         # Write modified OPF back to a new zip file, then replace original
         modified_opf = ET.tostring(root, encoding='utf-8', xml_declaration=True)
@@ -287,19 +284,81 @@ def write_ebook_metadata(filepath: str, book) -> None:
         raise
 
 
-def _series_part(book) -> str:
-    """The series index as text: `3` for a whole number, `3.5` for a novella
-    between books, so a rescan reads back the same index."""
-    index = float(book.series_index)
-    return str(int(index)) if index.is_integer() else f"{index:g}"
+def _series_to_write(book):
+    """The series entries to write into the file, or None to leave it alone.
+
+    `book` is an ORM row, or any object/dict carrying ``series_list``:
+
+    * ``None`` or no such key — the caller has no opinion (the filename parser
+      emits ``None`` for a path that names no series); the file's series tags
+      stay. Deleting on "unknown" is what once turned a read gap into data
+      loss (#135).
+    * a non-empty list — written, replacing whatever the file had.
+    * an empty list — the series was cleared; the series tags are deleted. An
+      ORM row with an empty list *and no* ``series_cleared`` flag has simply
+      never had a series, which is "no opinion", not a clear.
+    """
+    raw = book.get('series_list') if isinstance(book, dict) else getattr(book, 'series_list', None)
+    if raw is None:
+        return None
+    entries = entries_of(list(raw))
+    if not entries:
+        cleared = book.get('series_cleared', True) if isinstance(book, dict) \
+            else getattr(book, 'series_cleared', True)
+        if not cleared:
+            return None
+    return entries
 
 
-def _series_grouping(book) -> str:
-    """`Series #N`, or the bare name without an index: the grouping value
-    extract_metadata splits back into series and index."""
-    if book.series_index is None:
-        return book.series
-    return f"{book.series} #{_series_part(book)}"
+def _drop_series_metas(metadata) -> None:
+    """Remove every series meta from an OPF `<metadata>`: Calibre's
+    ``calibre:series`` / ``calibre:series_index`` and the EPUB3
+    ``belongs-to-collection`` metas with the metas refining them
+    (``collection-type``, ``group-position``)."""
+    collection_ids = {
+        m.attrib.get('id') for m in metadata
+        if _local_name(m) == 'meta' and m.attrib.get('property') == 'belongs-to-collection'
+        and m.attrib.get('id')
+    }
+    for meta_tag in list(metadata):
+        if _local_name(meta_tag) != 'meta':
+            continue
+        if meta_tag.attrib.get('name') in ('calibre:series', 'calibre:series_index'):
+            metadata.remove(meta_tag)
+        elif meta_tag.attrib.get('property') == 'belongs-to-collection':
+            metadata.remove(meta_tag)
+        elif meta_tag.attrib.get('refines', '').lstrip('#') in collection_ids \
+                and meta_tag.attrib.get('refines', '').startswith('#'):
+            metadata.remove(meta_tag)
+
+
+MP4_SERIES_ATOMS = (
+    '\xa9grp',
+    '----:com.apple.iTunes:SERIES',
+    '----:com.apple.iTunes:SERIES-PART',
+)
+
+
+def apply_mp4_series(audio, entries) -> None:
+    """Write `entries` into an MP4's series atoms: ``©grp`` as the canonical
+    ``A #1; B #2``, ``SERIES`` as the names, ``SERIES-PART`` as the indexes
+    (deleted unless every entry has one). Empty entries delete all three.
+
+    Never ``©alb``: that is the book's title to Readarr-style tools (#886), and
+    the reader takes no series from it. Shared with the ABS write-back.
+    """
+    grouping, names, parts = tag_values(entries)
+    if not grouping:
+        for tag in MP4_SERIES_ATOMS:
+            if tag in audio:
+                del audio[tag]
+        return
+    audio['\xa9grp'] = [grouping]
+    audio['----:com.apple.iTunes:SERIES'] = [names.encode('utf-8')]
+    if parts is not None:
+        audio['----:com.apple.iTunes:SERIES-PART'] = [parts.encode('utf-8')]
+    elif '----:com.apple.iTunes:SERIES-PART' in audio:
+        del audio['----:com.apple.iTunes:SERIES-PART']
 
 
 def write_audiobook_metadata(filepath: str, book) -> None:
@@ -326,26 +385,16 @@ def write_audiobook_metadata(filepath: str, book) -> None:
             # iTunes-style atoms for M4B/M4A
             if book.title is not None: audio['\xa9nam'] = [book.title]
             if book.author is not None: audio['\xa9ART'] = [book.author]
-            # Write series to the tags that extract_metadata reads (©grp, SERIES atom)
-            # so that clearing series actually takes effect on subsequent scans.
-            if book.series is not None:
-                if book.series:
-                    audio['\xa9grp'] = [_series_grouping(book)]
-                    audio['----:com.apple.iTunes:SERIES'] = [book.series.encode('utf-8')]
-                    if book.series_index is not None:
-                        audio['----:com.apple.iTunes:SERIES-PART'] = [
-                            _series_part(book).encode('utf-8')
-                        ]
-                else:
-                    # Empty string = user cleared series; delete the series tags.
-                    # Never ©alb: it is the book's title to Readarr-style tools
-                    # (#886), and extract_metadata does not read a series from it.
-                    for tag in ('\xa9grp', '----:com.apple.iTunes:SERIES',
-                                '----:com.apple.iTunes:SERIES-PART'):
-                        if tag in audio:
-                            del audio[tag]
-            if book.series_index is not None:
-                audio['trkn'] = [(int(book.series_index), 0)]
+            # Write series to the tags that extract_metadata reads (©grp, SERIES
+            # and SERIES-PART atoms) so that clearing series actually takes
+            # effect on subsequent scans.
+            series_entries = _series_to_write(book)
+            if series_entries is not None:
+                apply_mp4_series(audio, series_entries)
+                # The track number keeps today's behaviour, from the primary
+                # series' index (issue #895 tracks changing that).
+                if series_entries and series_entries[0]['index'] is not None:
+                    audio['trkn'] = [(int(series_entries[0]['index']), 0)]
             # extract_metadata reads an MP4 description from `©des` first, then
             # `desc`, then `©cmt` (issue #538). Setting writes both of the first
             # two so a stale `©des` can't outrank the new text; clearing removes
@@ -379,16 +428,17 @@ def write_audiobook_metadata(filepath: str, book) -> None:
             # Series in grouping plus explicit SERIES / SERIES-PART frames, as the
             # MP4 branch does. The track number is left alone: it is not the
             # series index.
-            if book.series is not None:
+            series_entries = _series_to_write(book)
+            if series_entries is not None:
                 for key in ('TIT1', 'TXXX:SERIES', 'TXXX:SERIES-PART'):
                     if key in audio.tags:
                         del audio.tags[key]
-                if book.series:
-                    audio.tags['TIT1'] = TIT1(encoding=3, text=_series_grouping(book))
-                    audio.tags.add(TXXX(encoding=3, desc='SERIES', text=book.series))
-                    if book.series_index is not None:
-                        audio.tags.add(TXXX(encoding=3, desc='SERIES-PART',
-                                            text=_series_part(book)))
+                grouping, names, parts = tag_values(series_entries)
+                if grouping:
+                    audio.tags['TIT1'] = TIT1(encoding=3, text=grouping)
+                    audio.tags.add(TXXX(encoding=3, desc='SERIES', text=names))
+                    if parts is not None:
+                        audio.tags.add(TXXX(encoding=3, desc='SERIES-PART', text=parts))
             if book.description:
                 # extract_metadata takes the first COMM* frame it finds, so a
                 # ripper's `COMM::eng` left beside the new frame could still be
@@ -422,15 +472,17 @@ def write_audiobook_metadata(filepath: str, book) -> None:
                 audio['title'] = [book.title]
                 audio['album'] = [book.title]   # the book's title, not the series (#886)
             if book.author is not None: audio['artist'] = [book.author]
-            if book.series is not None:
+            series_entries = _series_to_write(book)
+            if series_entries is not None:
                 for tag in ('grouping', 'series', 'series-part'):
                     if tag in audio:
                         del audio[tag]
-                if book.series:
-                    audio['grouping'] = [_series_grouping(book)]
-                    audio['series'] = [book.series]
-                    if book.series_index is not None:
-                        audio['series-part'] = [_series_part(book)]
+                grouping, names, parts = tag_values(series_entries)
+                if grouping:
+                    audio['grouping'] = [grouping]
+                    audio['series'] = [names]
+                    if parts is not None:
+                        audio['series-part'] = [parts]
             if book.description:
                 audio['description'] = [book.description]
             else:

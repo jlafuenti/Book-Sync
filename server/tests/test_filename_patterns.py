@@ -330,13 +330,13 @@ async def test_a_folder_named_after_the_book_is_not_its_series(db):
 
     assert meta["title"] == "Book Title"
     assert meta["author"] == "Some Author"
-    assert meta["series_list"] == []
+    assert meta["series_list"] is None
 
 
 async def test_that_holds_through_case_and_punctuation(db):
     meta = await _parse_audio(db, "Some Author/Book Title!/book title.m4b")
 
-    assert meta["series_list"] == []
+    assert meta["series_list"] is None
 
 
 async def test_a_real_series_folder_is_still_a_series(db):

@@ -187,6 +187,45 @@ def merge_missing(existing: Optional[Iterable[Any]], found: Optional[Iterable[An
     return merged
 
 
+def tag_values(entries: Optional[Iterable[Any]]) -> tuple[str, str, Optional[str]]:
+    """``(grouping, names, parts)`` for writing `entries` into audio tags.
+
+    * ``grouping`` — the canonical string, for ``grouping`` / ``©grp`` / ``TIT1``;
+    * ``names`` — the names joined with ``"; "``, for ``SERIES``;
+    * ``parts`` — the indexes joined with ``"; "``, for ``SERIES-PART``, or None
+      unless **every** entry has one: a shorter list would no longer pair with
+      the names (the reader, like Audiobookshelf, pairs them only when the two
+      lists are the same length), so the tag is deleted instead and the
+      indexes are recovered from the grouping tag on the way back
+      (`fill_missing_indexes`).
+    """
+    normalized = normalize_entries(entries)
+    names = "; ".join(e["name"].replace(";", ",") for e in normalized)
+    parts = None
+    if normalized and all(e["index"] is not None for e in normalized):
+        parts = "; ".join(f"{e['index']:g}" for e in normalized)
+    return format_series(normalized), names, parts
+
+
+def fill_missing_indexes(
+    entries: Optional[Iterable[Any]], donors: Optional[Iterable[Any]]
+) -> list[dict]:
+    """`entries`, with a missing index taken from the same-named entry in `donors`.
+
+    Used by the tag readers: the ``SERIES`` tag holds names only, so a book
+    with a mix of indexed and unindexed series gets its indexes back from the
+    grouping tag, which holds the full canonical string.
+    """
+    by_name = {e["name"].casefold(): e["index"] for e in normalize_entries(donors)}
+    filled = []
+    for entry in normalize_entries(entries):
+        index = entry["index"]
+        if index is None:
+            index = by_name.get(entry["name"].casefold())
+        filled.append({"name": entry["name"], "index": index})
+    return filled
+
+
 def entries_of(obj: Any) -> list[dict]:
     """Normalised entries from an ORM row, a metadata dict, or a plain list."""
     if obj is None:

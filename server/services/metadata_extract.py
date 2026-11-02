@@ -49,7 +49,12 @@ from services.metadata_utils import (
     normalize_author,
     normalize_series,
 )
-from services.series import normalize_entries, parse_series, split_tag_pair
+from services.series import (
+    fill_missing_indexes,
+    normalize_entries,
+    parse_series,
+    split_tag_pair,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -151,7 +156,11 @@ async def parse_filename_metadata_with_settings(
     meta = {
         "title": None,
         "author": None,
-        "series_list": [],
+        # None, not []: the write-back reads an absent/None list as "the scan
+        # has no opinion, leave the file's series tags alone" and an empty list
+        # as "the user cleared it, delete them". A path that names no series
+        # must stay the former.
+        "series_list": None,
         "_metadata_source": "filename",
         "_metadata_pattern": None,
     }
@@ -205,7 +214,7 @@ async def parse_filename_metadata_with_settings(
                         and _same_name(series_name, meta["title"])):
                     series_name = None
                 meta["series_list"] = (
-                    [{"name": series_name, "index": series_index}] if series_name else []
+                    [{"name": series_name, "index": series_index}] if series_name else None
                 )
 
                 # If we have at least a title, we consider it a match
@@ -404,6 +413,11 @@ def _read_embedded_metadata(filepath: str, file_type: str) -> Dict[str, Any]:
                                 bytes(custom_series_part[0]).decode('utf-8', 'replace')
                                 if custom_series_part else None,
                             )
+                            if '\xa9grp' in audio:
+                                # SERIES holds names only; indexes it could not
+                                # pair come back from the grouping atom.
+                                series_list = fill_missing_indexes(
+                                    series_list, parse_series(str(audio['\xa9grp'][0])))
                         elif '\xa9grp' in audio:
                             series_list = parse_series(str(audio['\xa9grp'][0]))
                         if series_list:
@@ -450,6 +464,14 @@ def _read_embedded_metadata(filepath: str, file_type: str) -> Dict[str, Any]:
                         elif 'series' in audio: explicit = str(audio['series'][0])
                         if explicit is not None:
                             series_list = split_tag_pair(explicit, part)
+                            grouping = None
+                            for key in ('TIT1', 'GRP1', 'grouping'):
+                                if key in audio:
+                                    value = audio[key]
+                                    grouping = str(value[0] if isinstance(value, list) else value)
+                                    break
+                            if grouping:
+                                series_list = fill_missing_indexes(series_list, parse_series(grouping))
                         elif 'TIT3' in audio: series_str = str(audio['TIT3'])
                         elif 'subtitle' in audio: series_str = str(audio['subtitle'][0])
                         elif 'TIT1' in audio: series_str = str(audio['TIT1'])
