@@ -212,6 +212,26 @@ async def test_clearing_reaches_the_writer_as_a_cleared_row(db, editor_client, m
     assert seen == {"entries": [], "cleared": True}
 
 
+async def test_detail_paired_with_carries_the_other_halfs_series(db, editor_client):
+    """The web applies the pair rule (union, ebook first) from the detail
+    response alone, so `paired_with` must carry the other half's list."""
+    from models.book import BookPair, PairStatus
+
+    c, headers = editor_client
+    eb = await make_ebook(db, series_list=[AXIS])
+    ab = await make_audiobook(db, series_list=[CHRONO, {"name": "Axis Audio", "index": None}])
+    db.add(BookPair(ebook_id=eb.id, audiobook_id=ab.id, status=PairStatus.SYNCED))
+    await db.commit()
+
+    ebook_detail = (await c.get(f"/api/library/ebooks/{eb.id}", headers=headers)).json()
+    audio_detail = (await c.get(f"/api/library/audiobooks/{ab.id}", headers=headers)).json()
+
+    assert ebook_detail["series_list"] == [AXIS]
+    assert ebook_detail["paired_with"]["series_list"] == [
+        CHRONO, {"name": "Axis Audio", "index": None}]
+    assert audio_detail["paired_with"]["series_list"] == [AXIS]
+
+
 async def test_deleting_a_book_removes_its_series_rows(db, editor_client):
     row = await make_ebook(db, series_list=[AXIS, CHRONO])
     await db.delete(row)

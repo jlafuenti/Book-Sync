@@ -182,7 +182,7 @@ async def _load_auth(db: AsyncSession) -> Optional[audible.Authenticator]:
 def _list_library(auth: audible.Authenticator) -> list[dict]:
     """
     Page through the user's full Audible library. Returns a list of dicts
-    with at least: asin, title, authors, narrators, series, series_index.
+    with at least: asin, title, authors, narrators, series_list.
     """
     items: list[dict] = []
     page = 1

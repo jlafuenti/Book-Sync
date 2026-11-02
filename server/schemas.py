@@ -345,6 +345,9 @@ class PairedBookSummary(BaseModel):
     title: str
     author: Optional[str]
     format: str
+    # The other half's series, so a detail page can apply the pair rule (union,
+    # ebook first) without a second fetch (issue #905).
+    series_list: List[SeriesEntry] = []
 
     class Config:
         from_attributes = True
