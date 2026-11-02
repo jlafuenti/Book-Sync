@@ -14,7 +14,7 @@ pytest-asyncio==1.4.*
 # #451 for the numbers.
 pytest-cov==7.1.*
 pytest-watch==4.2.*
-diff-cover==10.*
+diff-cover==11.*
 aiosqlite==0.22.*
 # services.alignment imports numpy directly; in production it arrives transitively
 # via torch/whisper, but the test suite runs without that heavy stack, so pin it here
