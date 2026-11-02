@@ -37,6 +37,26 @@ describe('computeNextUp', () => {
         expect(row.book).toBe(book)
     })
 
+    it('suggests a book once when it is the next book of two series, keeping the first row', () => {
+        // A multi-series book is listed once per membership (same key). After the
+        // stable sort by last activity, a later row for a key already suggested is
+        // dropped, so equal activity leaves the series listed first.
+        const books = [
+            { key: 'pair_1', series: 'Axis Saga', index: 1 },
+            { key: 'pair_1', series: 'Axis Chronological', index: 1 },
+            { key: 'pair_2', series: 'Axis Saga', index: 2 },
+            { key: 'pair_2', series: 'Axis Chronological', index: 2 },
+        ]
+        const activity = [{ key: 'pair_1', completed: true, at: '2026-09-25T00:00:00Z' }]
+        const now = new Date('2026-09-26T00:00:00Z')
+
+        const rows = computeNextUp(books, activity, now)
+        expect(rows.map(r => [r.series, r.key])).toEqual([['Axis Saga', 'pair_2']])
+
+        const flipped = computeNextUp([books[1], books[0], books[3], books[2]], activity, now)
+        expect(flipped.map(r => [r.series, r.key])).toEqual([['Axis Chronological', 'pair_2']])
+    })
+
     it('reads naive server timestamps as UTC', () => {
         // user_progress.updated_at arrives without a zone (issue #216). 23:30 UTC
         // on the 90th day is inside the window whatever the runner's zone is.

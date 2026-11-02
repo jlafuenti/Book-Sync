@@ -70,6 +70,28 @@ class NextUpParityTest {
     }
 
     @Test
+    fun `a book that is the next book of two series is suggested once, keeping the first row`() {
+        // A multi-series book is listed once per membership (same key). After the stable
+        // sort by last activity, a later row for a key already suggested is dropped, so
+        // equal activity leaves the series listed first.
+        val books = listOf(
+            NextUpBook("pair_1", "Axis Saga", 1.0),
+            NextUpBook("pair_1", "Axis Chronological", 1.0),
+            NextUpBook("pair_2", "Axis Saga", 2.0),
+            NextUpBook("pair_2", "Axis Chronological", 2.0),
+        )
+        val activity = listOf(NextUpActivity("pair_1", completed = true, atMs = 1_000_000_000L))
+        val now = 1_000_000_000L + 24L * 60 * 60 * 1000
+
+        val rows = computeNextUp(books, activity, now).map { it.series to it.book.key }
+        assertEquals(listOf("Axis Saga" to "pair_2"), rows)
+
+        val flipped = computeNextUp(listOf(books[1], books[0], books[3], books[2]), activity, now)
+            .map { it.series to it.book.key }
+        assertEquals(listOf("Axis Chronological" to "pair_2"), flipped)
+    }
+
+    @Test
     fun `the window is 90 days, the owner-chosen value`() {
         assertEquals(90L, NEXT_UP_WINDOW_DAYS)
     }
