@@ -1,4 +1,5 @@
 import { pairSourceFromProgress } from '../utils/pairRouting'
+import { seriesOf } from './series'
 
 /**
  * Adapters between `LibraryItem`s (what `GET /api/library/items` returns —
@@ -57,8 +58,9 @@ export function toDisplayEntry(item, progressByPair = {}) {
             cover_path: eb?.cover_path || ab?.cover_path || null,
             title: eb?.title || ab?.title,
             author: eb?.author || ab?.author || null,
-            series: eb?.series || ab?.series || null,
-            series_index: eb?.series_index ?? ab?.series_index ?? null,
+            // The pair rule (issue #907): the ebook's series, then any the
+            // audiobook has that the ebook lacks.
+            series_list: seriesOf({ ebook: eb, audiobook: ab }),
             uploaded_at: eb?.uploaded_at || ab?.uploaded_at,
             pair_id: p.id,
             pair_status: p.status,
@@ -82,6 +84,18 @@ export function toDisplayEntry(item, progressByPair = {}) {
     if (item.kind === 'ebook') entry.paired_audiobook_id = p?.audiobook?.id ?? null
     else entry.paired_ebook_id = p?.ebook?.id ?? null
     return entry
+}
+
+/**
+ * The part of a metadata PATCH that can be applied to loaded items as-is
+ * (issue #907). `series_add` is an instruction ("append these"), not a value,
+ * so it is replaced by the `series_list` the server answered with; every other
+ * key is the new value already.
+ */
+export function localPatch(patch, response) {
+    const { series_add, ...rest } = patch
+    if (series_add && Array.isArray(response?.series_list)) rest.series_list = response.series_list
+    return rest
 }
 
 /**
