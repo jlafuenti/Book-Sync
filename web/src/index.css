@@ -668,6 +668,49 @@ select.form-input {
     min-width: 0;
 }
 
+/* Series name type-ahead (issue #907): the library's existing series, below the input */
+.series-typeahead {
+    position: relative;
+    width: 100%;
+}
+
+.series-typeahead-list {
+    position: absolute;
+    top: calc(100% + 4px);
+    left: 0;
+    right: 0;
+    z-index: 50;
+    margin: 0;
+    padding: 6px;
+    list-style: none;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    max-height: 220px;
+    overflow-y: auto;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+}
+
+.series-typeahead-option {
+    padding: 8px 12px;
+    border-radius: 6px;
+    color: var(--text-secondary);
+    font-size: 0.85rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: var(--transition);
+}
+
+.series-typeahead-option:hover,
+.series-typeahead-option.active {
+    background: var(--accent-light);
+    color: var(--text-primary);
+}
+
+.series-typeahead-option.active {
+    color: var(--accent-ink);
+}
+
 .series-editor-number {
     flex: 0 0 90px;
     width: 90px;

@@ -244,12 +244,16 @@ describe('EnhancedMetadataModal series list (issue #907)', () => {
         expect((await save(onSave)).series_list).toEqual([])
     })
 
-    it('offers the library\'s series names as suggestions', async () => {
-        const { container } = render(<EnhancedMetadataModal book={{ ...book, series_list: TWO }} type="ebook" onClose={vi.fn()} onSave={vi.fn()} />)
+    it('suggests the library\'s series as a new series is typed', async () => {
+        render(<EnhancedMetadataModal book={book} type="ebook" onClose={vi.fn()} onSave={vi.fn()} />)
+        await waitFor(() => expect(getLibraryFacetsMock).toHaveBeenCalledWith({ tab: 'all' }))
 
-        await waitFor(() => expect(container.ownerDocument.querySelectorAll('datalist option')).toHaveLength(2))
-        const values = [...document.querySelectorAll('datalist option')].map(o => o.value)
-        expect(values).toEqual(['Axis Saga', 'Other Series'])
+        fireEvent.click(screen.getByRole('button', { name: 'Add series' }))
+        const input = screen.getByLabelText('Series name 1')
+        fireEvent.focus(input)
+        fireEvent.change(input, { target: { value: 'oth' } })
+
+        expect(await screen.findByRole('option', { name: 'Other Series' })).toBeInTheDocument()
     })
 
     it('still opens when the series names cannot be loaded', async () => {

@@ -1,9 +1,10 @@
-import React, { useState, useEffect } from 'react';
-import { uploadEbookCover, uploadAudiobookCover, applyRemoteCover, rescanBook, enrichAudiobookFromAbs, getLibraryFacets } from '../api';
+import React, { useState } from 'react';
+import { uploadEbookCover, uploadAudiobookCover, applyRemoteCover, rescanBook, enrichAudiobookFromAbs } from '../api';
 import ChapterEditor from './ChapterEditor';
 import MatchTab from './MatchTab';
 import SeriesListEditor from './SeriesListEditor';
 import { cleanSeriesList } from '../lib/series';
+import useKnownSeries from '../lib/useKnownSeries';
 import { formatDateTime } from '../lib/datetime';
 import Modal from './Modal';
 
@@ -66,19 +67,8 @@ export default function EnhancedMetadataModal({ book, type, onClose, onSave, ini
     const [coverPreview, setCoverPreview] = useState(book.cover_path || null);
     const [remoteCoverUrl, setRemoteCoverUrl] = useState(null); // Track if a matched cover needs to be downloaded
 
-    // Series names already in the library, offered as type-ahead in the series
-    // editor. Nice to have: a failure just leaves the suggestions empty.
-    const [knownSeries, setKnownSeries] = useState([]);
-    useEffect(() => {
-        let cancelled = false;
-        (async () => {
-            try {
-                const facets = await getLibraryFacets({ tab: 'all' });
-                if (!cancelled) setKnownSeries((facets?.series || []).map(s => s.name));
-            } catch { /* no suggestions */ }
-        })();
-        return () => { cancelled = true; };
-    }, []);
+    // Series names already in the library, suggested as a series is typed.
+    const knownSeries = useKnownSeries();
 
     const handleChange = (e) => {
         const { name, value, type: inputType, checked } = e.target;

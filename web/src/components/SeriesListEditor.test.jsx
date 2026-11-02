@@ -99,14 +99,52 @@ describe('SeriesListEditor (issue #907)', () => {
         expect(screen.getByRole('button', { name: 'Move series 1 down' })).toBeEnabled()
     })
 
-    it('offers the known series names as suggestions on every name input', () => {
-        const { container } = render(<Harness initial={TWO} suggestions={['Axis Saga', 'Axis Chronological', 'Other Series']} />)
+    it('suggests the library\'s series as you type in a name input', () => {
+        const { container } = render(<Harness suggestions={['The Quill Files', 'Axis Saga', 'Other Series']} initial={[{ name: '', index: null }]} />)
 
-        const listId = screen.getByLabelText('Series name 1').getAttribute('list')
-        expect(listId).toBeTruthy()
-        expect(screen.getByLabelText('Series name 2')).toHaveAttribute('list', listId)
-        const options = [...container.querySelectorAll(`datalist#${CSS.escape(listId)} option`)].map(o => o.value)
-        expect(options).toEqual(['Axis Saga', 'Axis Chronological', 'Other Series'])
+        const input = screen.getByLabelText('Series name 1')
+        fireEvent.focus(input)
+        fireEvent.change(input, { target: { value: 'quil' } })
+
+        expect(screen.getAllByRole('option').map(o => o.textContent)).toEqual(['The Quill Files'])
+        expect(container.querySelector('datalist')).toBeNull()
+        expect(input).not.toHaveAttribute('list')
+    })
+
+    it('picking a suggestion fills that row with the exact name', () => {
+        const onChange = vi.fn()
+        render(<Harness suggestions={['The Quill Files']} initial={[{ name: '', index: '3' }]} onChange={onChange} />)
+
+        const input = screen.getByLabelText('Series name 1')
+        fireEvent.focus(input)
+        fireEvent.change(input, { target: { value: 'quil' } })
+        fireEvent.click(screen.getByRole('option', { name: 'The Quill Files' }))
+
+        expect(onChange).toHaveBeenLastCalledWith([{ name: 'The Quill Files', index: '3' }])
+    })
+
+    it('does not suggest a name another row already uses', () => {
+        render(<Harness suggestions={['Axis Saga', 'Axis Chronological']} initial={[TWO[0], { name: '', index: null }]} />)
+
+        const second = screen.getByLabelText('Series name 2')
+        fireEvent.focus(second)
+        fireEvent.change(second, { target: { value: 'axis' } })
+
+        expect(screen.getAllByRole('option').map(o => o.textContent)).toEqual(['Axis Chronological'])
+    })
+
+    it('Enter on a highlighted suggestion does not submit the surrounding form', () => {
+        const onSubmit = vi.fn(e => e.preventDefault())
+        render(<form onSubmit={onSubmit}><Harness suggestions={['Axis Saga']} initial={[{ name: '', index: null }]} /></form>)
+
+        const input = screen.getByLabelText('Series name 1')
+        fireEvent.focus(input)
+        fireEvent.change(input, { target: { value: 'axis' } })
+        fireEvent.keyDown(input, { key: 'ArrowDown' })
+        fireEvent.keyDown(input, { key: 'Enter' })
+
+        expect(input).toHaveValue('Axis Saga')
+        expect(onSubmit).not.toHaveBeenCalled()
     })
 
     it('works without suggestions', () => {

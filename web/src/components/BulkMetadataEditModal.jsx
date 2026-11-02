@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react'
 import Modal from './Modal'
+import SeriesNameInput from './SeriesNameInput'
+import useKnownSeries from '../lib/useKnownSeries'
 
 /**
  * The one bulk metadata editor (issue #276).
@@ -61,6 +63,8 @@ export default function BulkMetadataEditModal({
     onClose,
 }) {
     const [fields, setFields] = useState(BLANK)
+    // Series already in the library, suggested as the series name is typed.
+    const knownSeries = useKnownSeries(open)
 
     // A reopen starts clean — both pages used to reset their copy of this
     // state by hand after every successful save.
@@ -98,13 +102,23 @@ export default function BulkMetadataEditModal({
                 {FIELDS.map(({ key, label, type }) => (
                     <div key={key}>
                         <label style={{ display: 'block', marginBottom: '4px', fontSize: '0.9rem', fontWeight: 500 }}>{label}</label>
-                        <input
-                            className="form-input"
-                            type={type}
-                            placeholder="Leave blank to keep unchanged"
-                            value={fields[key]}
-                            onChange={e => setFields(prev => ({ ...prev, [key]: e.target.value }))}
-                        />
+                        {key === 'series' ? (
+                            <SeriesNameInput
+                                className="form-input"
+                                placeholder="Leave blank to keep unchanged"
+                                value={fields.series}
+                                suggestions={knownSeries}
+                                onChange={name => setFields(prev => ({ ...prev, series: name }))}
+                            />
+                        ) : (
+                            <input
+                                className="form-input"
+                                type={type}
+                                placeholder="Leave blank to keep unchanged"
+                                value={fields[key]}
+                                onChange={e => setFields(prev => ({ ...prev, [key]: e.target.value }))}
+                            />
+                        )}
                         {key === 'series_index' && (
                             <div role="radiogroup" aria-label="Series mode" style={{ display: 'flex', gap: '16px', marginTop: '8px', fontSize: '0.9rem' }}>
                                 {SERIES_MODES.map(({ value, label: modeLabel }) => (

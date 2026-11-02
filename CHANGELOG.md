@@ -23,7 +23,9 @@ operator must do by hand rather than read about afterwards.
   the Library filtered to it, with its own book number), and the Series page lists a book under
   every series it is in. The metadata editor's two series fields become a series list: add,
   remove and reorder entries (the first is the primary), with the library's existing series
-  names offered as you type. The Match tab compares and applies a result's whole series list,
+  names suggested in a dropdown as you type (typing "quil" lists "The Quill Files"), so an
+  existing series is picked rather than retyped; bulk edit's series field suggests them too.
+  The Match tab compares and applies a result's whole series list,
   the Unpaired and Transcription filters and searches match any of a book's series, and Home
   "Next up" suggests a book that is in two series once. Bulk edit gains a "Replace series" /
   "Add to series" choice, so a series can be added to many books without touching the ones they

@@ -3,6 +3,9 @@ import { useState } from 'react'
 import { render, screen, fireEvent } from '@testing-library/react'
 import BulkMetadataEditModal from './BulkMetadataEditModal'
 
+const { knownSeriesMock } = vi.hoisted(() => ({ knownSeriesMock: vi.fn(() => []) }))
+vi.mock('../lib/useKnownSeries', () => ({ default: (...args) => knownSeriesMock(...args) }))
+
 // Issue #276: LibraryPage and SeriesPage each carried their own copy of this
 // modal — same state, same five `if (field.trim())` lines, same markup. This
 // is the one copy, and these tests are what stopped the extraction from being
@@ -102,6 +105,38 @@ describe('BulkMetadataEditModal (issue #276)', () => {
         fireEvent.click(screen.getByRole('button', { name: 'Save to 1 Item' }))
 
         expect(onSave).toHaveBeenCalledWith({ series_list: [{ name: 'Liveship', index: null }] })
+    })
+
+    // Issue #907: the series name suggests the library's existing series.
+    describe('series name type-ahead (issue #907)', () => {
+        it('suggests known series as you type and fills the exact name on pick', () => {
+            const onSave = vi.fn()
+            knownSeriesMock.mockReturnValue(['The Quill Files', 'Axis Saga'])
+            render(<BulkMetadataEditModal open selectionCount={2} onSave={onSave} onClose={vi.fn()} />)
+
+            fireEvent.focus(inputs()[SERIES])
+            fireEvent.change(inputs()[SERIES], { target: { value: 'quil' } })
+            expect(screen.getAllByRole('option').map(o => o.textContent)).toEqual(['The Quill Files'])
+            fireEvent.click(screen.getByRole('option', { name: 'The Quill Files' }))
+            fireEvent.click(screen.getByRole('button', { name: 'Save to 2 Items' }))
+
+            expect(onSave).toHaveBeenCalledWith({ series_list: [{ name: 'The Quill Files', index: null }] })
+        })
+
+        it('works without suggestions', () => {
+            knownSeriesMock.mockReturnValue([])
+            render(<BulkMetadataEditModal open selectionCount={2} onSave={vi.fn()} onClose={vi.fn()} />)
+            fireEvent.focus(inputs()[SERIES])
+            expect(screen.queryByRole('listbox')).toBeNull()
+        })
+
+        it('only asks for the known series while it is open', () => {
+            knownSeriesMock.mockClear()
+            const { rerender } = render(<BulkMetadataEditModal open={false} selectionCount={2} onSave={vi.fn()} onClose={vi.fn()} />)
+            expect(knownSeriesMock).toHaveBeenLastCalledWith(false)
+            rerender(<BulkMetadataEditModal open selectionCount={2} onSave={vi.fn()} onClose={vi.fn()} />)
+            expect(knownSeriesMock).toHaveBeenLastCalledWith(true)
+        })
     })
 
     // Issue #907: a book can be in several series, so the series field can

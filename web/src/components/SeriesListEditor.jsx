@@ -1,4 +1,4 @@
-import { useId } from 'react'
+import SeriesNameInput from './SeriesNameInput'
 
 /**
  * The series a book belongs to, as an editable list (issue #907).
@@ -8,11 +8,11 @@ import { useId } from 'react'
  * number is kept as typed (a string, or null when empty) so a half-typed
  * "2." survives a render; `cleanSeriesList` turns it into a number on save.
  *
- * `suggestions` are the series names already in the library, offered as
- * type-ahead on every name input. No HTML sinks: the rows are plain JSX.
+ * `suggestions` are the series names already in the library, offered as a
+ * type-ahead (SeriesNameInput) on every name input, minus the names the other
+ * rows already use. No HTML sinks: the rows are plain JSX.
  */
 export default function SeriesListEditor({ value = [], onChange, suggestions = [] }) {
-    const listId = useId()
 
     const update = (i, patch) => onChange(value.map((e, j) => (j === i ? { ...e, ...patch } : e)))
     const remove = (i) => onChange(value.filter((_, j) => j !== i))
@@ -32,13 +32,16 @@ export default function SeriesListEditor({ value = [], onChange, suggestions = [
                     <span className={`series-editor-primary${i === 0 ? '' : ' placeholder'}`}>
                         {i === 0 ? 'Primary' : ''}
                     </span>
-                    <input
-                        className="form-input series-editor-name"
-                        aria-label={`Series name ${i + 1}`}
-                        list={listId}
-                        value={entry.name}
-                        onChange={e => update(i, { name: e.target.value })}
-                    />
+                    <div className="series-editor-name">
+                        <SeriesNameInput
+                            className="form-input"
+                            aria-label={`Series name ${i + 1}`}
+                            value={entry.name}
+                            suggestions={suggestions}
+                            exclude={value.filter((_, j) => j !== i).map(e => e.name)}
+                            onChange={name => update(i, { name })}
+                        />
+                    </div>
                     <input
                         className="form-input series-editor-number"
                         type="number"
@@ -64,9 +67,6 @@ export default function SeriesListEditor({ value = [], onChange, suggestions = [
                     >&times;</button>
                 </div>
             ))}
-            <datalist id={listId}>
-                {suggestions.map(name => <option key={name} value={name} />)}
-            </datalist>
             <button type="button" className="btn btn-secondary btn-sm series-editor-add" onClick={add}>
                 Add series
             </button>
