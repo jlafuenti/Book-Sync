@@ -9,6 +9,7 @@ from sqlalchemy import (
     String, Text, DateTime, Integer, BigInteger, Boolean, Enum, ForeignKey,
     Float, Index, JSON, inspect,
 )
+from sqlalchemy import event
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -193,6 +194,22 @@ class AudioBook(MediaColumnsMixin, Base):
 
     def __repr__(self) -> str:
         return f"<AudioBook(id={self.id}, title='{self.title}')>"
+
+
+def _start_without_series(target, args, kwargs):
+    """A new row has no series, and says so.
+
+    Without this a freshly inserted row carries an *unloaded* `series_list`, and
+    reading it afterwards (the matcher scoring two rows it has just added, say)
+    is an implicit lazy load, which an async session refuses (`MissingGreenlet`).
+    Rows read back from the database never come through here; `lazy="selectin"`
+    loads theirs with the query.
+    """
+    kwargs.setdefault("series_list", [])
+
+
+event.listen(EBook, "init", _start_without_series)
+event.listen(AudioBook, "init", _start_without_series)
 
 
 class EBookSeries(_SeriesEntryColumns, Base):
