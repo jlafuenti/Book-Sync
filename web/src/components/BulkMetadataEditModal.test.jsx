@@ -75,7 +75,7 @@ describe('BulkMetadataEditModal (issue #276)', () => {
         expect(screen.getByRole('button', { name: 'Saving...' }).querySelector('.spinner')).not.toBeNull()
     })
 
-    it('sends a trimmed patch, series_index as a float and published_year as an int', () => {
+    it('sends a trimmed patch, the series index as a float and published_year as an int', () => {
         const onSave = vi.fn()
         render(<BulkMetadataEditModal open selectionCount={2} onSave={onSave} onClose={vi.fn()} />)
 
@@ -88,8 +88,7 @@ describe('BulkMetadataEditModal (issue #276)', () => {
 
         expect(onSave).toHaveBeenCalledWith({
             author: 'Robin Hobb',
-            series: 'Liveship Traders',
-            series_index: 2.5,
+            series_list: [{ name: 'Liveship Traders', index: 2.5 }],
             publisher: 'Bantam',
             published_year: 1999,
         })
@@ -102,7 +101,56 @@ describe('BulkMetadataEditModal (issue #276)', () => {
         fireEvent.change(inputs()[SERIES], { target: { value: 'Liveship' } })
         fireEvent.click(screen.getByRole('button', { name: 'Save to 1 Item' }))
 
-        expect(onSave).toHaveBeenCalledWith({ series: 'Liveship' })
+        expect(onSave).toHaveBeenCalledWith({ series_list: [{ name: 'Liveship', index: null }] })
+    })
+
+    // Issue #907: a book can be in several series, so the series field can
+    // either replace the list or add to it.
+    describe('series mode (issue #907)', () => {
+        it('defaults to replacing the series list', () => {
+            render(<BulkMetadataEditModal open selectionCount={2} onSave={vi.fn()} onClose={vi.fn()} />)
+            expect(screen.getByRole('radio', { name: 'Replace series' })).toBeChecked()
+            expect(screen.getByRole('radio', { name: 'Add to series' })).not.toBeChecked()
+        })
+
+        it('"Add to series" sends series_add, leaving the existing series alone', () => {
+            const onSave = vi.fn()
+            render(<BulkMetadataEditModal open selectionCount={2} onSave={onSave} onClose={vi.fn()} />)
+
+            fireEvent.click(screen.getByRole('radio', { name: 'Add to series' }))
+            fireEvent.change(inputs()[SERIES], { target: { value: ' Axis Chronological ' } })
+            fireEvent.change(inputs()[SERIES_INDEX], { target: { value: '3' } })
+            fireEvent.click(screen.getByRole('button', { name: 'Save to 2 Items' }))
+
+            expect(onSave).toHaveBeenCalledWith({ series_add: [{ name: 'Axis Chronological', index: 3 }] })
+        })
+
+        it('a series index with no series name sends nothing, and Save stays disabled', () => {
+            render(<BulkMetadataEditModal open selectionCount={2} onSave={vi.fn()} onClose={vi.fn()} />)
+
+            fireEvent.change(inputs()[SERIES_INDEX], { target: { value: '3' } })
+
+            expect(screen.getByRole('button', { name: 'Save to 2 Items' })).toBeDisabled()
+        })
+
+        it('goes back to replacing the next time it opens', () => {
+            function Harness() {
+                const [open, setOpen] = useState(true)
+                return (
+                    <div>
+                        <button onClick={() => setOpen(true)}>Reopen</button>
+                        <BulkMetadataEditModal open={open} selectionCount={1} onSave={vi.fn()} onClose={() => setOpen(false)} />
+                    </div>
+                )
+            }
+            render(<Harness />)
+
+            fireEvent.click(screen.getByRole('radio', { name: 'Add to series' }))
+            fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+            fireEvent.click(screen.getByRole('button', { name: 'Reopen' }))
+
+            expect(screen.getByRole('radio', { name: 'Replace series' })).toBeChecked()
+        })
     })
 
     it('sends null rather than NaN for a number that will not parse', () => {

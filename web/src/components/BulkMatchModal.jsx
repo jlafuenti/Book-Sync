@@ -2,6 +2,7 @@ import React, { useState } from 'react'
 import MatchTab from './MatchTab'
 import Modal from './Modal'
 import { updateEbookMetadata, updateAudiobookMetadata, applyRemoteCover } from '../api'
+import { seriesLabel } from '../lib/series'
 
 export default function BulkMatchModal({ books, bookType, onClose, onUpdate }) {
     const [index, setIndex] = useState(0)
@@ -77,9 +78,9 @@ export default function BulkMatchModal({ books, bookType, onClose, onUpdate }) {
                                 </div>
                                 <h3 id="bulk-match-title" style={{ margin: 0 }}>{current.title || current.filename}</h3>
                                 {current.author && <div style={{ color: 'var(--text-secondary)', marginTop: '2px' }}>by {current.author}</div>}
-                                {current.series && (
+                                {current.series_list?.length > 0 && (
                                     <div style={{ color: 'var(--text-muted)', fontSize: '0.85rem', marginTop: '2px' }}>
-                                        {current.series}{current.series_index != null ? ` #${current.series_index}` : ''}
+                                        {seriesLabel(current.series_list)}
                                     </div>
                                 )}
                             </div>

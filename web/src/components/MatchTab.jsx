@@ -1,10 +1,11 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { searchMetadata, getSettings } from '../api';
+import { cleanSeriesList, formatSeriesList } from '../lib/series';
 
 // Text/number fields shared between MatchResult and the local book form.
 // cover_url and description get dedicated rows in the compare table.
 const MATCH_FIELDS = [
-    'title', 'author', 'series', 'series_index', 'publisher', 'publish_year',
+    'title', 'author', 'series_list', 'publisher', 'publish_year',
     'genres', 'tags', 'language', 'narrators', 'isbn', 'asin',
 ];
 
@@ -13,13 +14,27 @@ const MATCH_FIELDS = [
 // (issue #730, Ruling R1). CURRENT_DATA_ALIASES says which currentData key
 // backs a field's "Current (Local)" column when it isn't the field's own name.
 const CURRENT_DATA_ALIASES = { page_count: 'print_page_count' };
-const currentValueFor = (currentData, field) => currentData[CURRENT_DATA_ALIASES[field] || field];
+
+// `series_list` (issue #907) is the whole list of series, compared and applied
+// as one row. The local form keeps numbers as typed and may hold blank rows,
+// so it is cleaned first; blank rows are not a series.
+const currentValueFor = (currentData, field) => (
+    field === 'series_list'
+        ? cleanSeriesList(currentData.series_list)
+        : currentData[CURRENT_DATA_ALIASES[field] || field]
+);
+
+const FIELD_LABELS = { series_list: 'Series' };
+const fieldLabel = (field) => FIELD_LABELS[field] || field.replace('_', ' ');
+
+// What a value looks like in the compare table.
+const displayValue = (field, value) => (field === 'series_list' ? formatSeriesList(value) : value);
 
 const emptyFieldSelection = () => Object.fromEntries(
     [...MATCH_FIELDS, 'page_count', 'description', 'cover_url'].map(f => [f, false])
 );
 
-const hasValue = (v) => v !== null && v !== undefined && v !== '';
+const hasValue = (v) => v !== null && v !== undefined && v !== '' && !(Array.isArray(v) && v.length === 0);
 
 export default function MatchTab({ currentData, onApply, bookType }) {
     const [provider, setProvider] = useState(bookType === 'audiobook' ? 'audible' : 'google');
@@ -162,10 +177,8 @@ export default function MatchTab({ currentData, onApply, bookType }) {
                                 <div className="match-card-info">
                                     <h4>{res.title}</h4>
                                     <p className="text-muted">{res.author || 'Unknown Author'}</p>
-                                    {res.series && (
-                                        <p className="text-small">
-                                            {res.series}{res.series_index != null ? ` #${res.series_index}` : ''}
-                                        </p>
+                                    {hasValue(res.series_list) && (
+                                        <p className="text-small">{formatSeriesList(res.series_list)}</p>
                                     )}
                                     <p className="text-small">
                                         {res.publish_year || 'Unknown Year'}
@@ -301,9 +314,9 @@ export default function MatchTab({ currentData, onApply, bookType }) {
                                         disabled={!hasValue(selectedResult[field])}
                                     />
                                 </td>
-                                <td style={{ textTransform: 'capitalize' }}><strong>{field.replace('_', ' ')}</strong></td>
-                                <td>{hasValue(currentValueFor(currentData, field)) ? currentValueFor(currentData, field) : <span className="text-muted">Empty</span>}</td>
-                                <td>{hasValue(selectedResult[field]) ? selectedResult[field] : <span className="text-muted">Empty</span>}</td>
+                                <td style={{ textTransform: 'capitalize' }}><strong>{fieldLabel(field)}</strong></td>
+                                <td>{hasValue(currentValueFor(currentData, field)) ? displayValue(field, currentValueFor(currentData, field)) : <span className="text-muted">Empty</span>}</td>
+                                <td>{hasValue(selectedResult[field]) ? displayValue(field, selectedResult[field]) : <span className="text-muted">Empty</span>}</td>
                             </tr>
                         ))}
 

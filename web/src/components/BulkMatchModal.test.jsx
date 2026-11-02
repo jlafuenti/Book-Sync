@@ -37,6 +37,12 @@ describe('BulkMatchModal (issue #279)', () => {
         expect(screen.getByText('Book 1 of 2')).toBeInTheDocument()
     })
 
+    it('shows the primary series and +N in the header (issue #907)', () => {
+        const withSeries = [{ id: 3, title: 'Axis Book', series_list: [{ name: 'Axis Saga', index: 4 }, { name: 'Axis Chronological', index: 2 }] }]
+        render(<BulkMatchModal books={withSeries} bookType="ebook" onClose={vi.fn()} onUpdate={vi.fn()} />)
+        expect(screen.getByText('Axis Saga #4 +1')).toBeInTheDocument()
+    })
+
     it('closes on Escape and on ✕ Cancel', () => {
         const onClose = vi.fn()
         render(<BulkMatchModal books={books} bookType="ebook" onClose={onClose} onUpdate={vi.fn()} />)

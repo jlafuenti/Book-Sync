@@ -636,6 +636,67 @@ select.form-input {
     cursor: pointer;
 }
 
+/* Series list editor (issue #907): one row per series, first row is primary */
+.series-editor {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.series-editor-empty {
+    color: var(--text-muted);
+    font-size: 0.85rem;
+}
+
+.series-editor-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.series-editor-primary {
+    flex: 0 0 58px;
+    font-size: 0.7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--accent-ink);
+}
+
+.series-editor-name {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+.series-editor-number {
+    flex: 0 0 90px;
+    width: 90px;
+}
+
+.series-editor-btn {
+    flex: 0 0 auto;
+    min-width: 32px;
+    justify-content: center;
+}
+
+.series-editor-add {
+    align-self: flex-start;
+}
+
+@media (max-width: 600px) {
+    .series-editor-row {
+        flex-wrap: wrap;
+    }
+
+    .series-editor-primary {
+        flex-basis: 100%;
+    }
+
+    .series-editor-primary.placeholder {
+        display: none;
+    }
+}
+
 /* ============ Tables ============ */
 
 .table-wrapper {

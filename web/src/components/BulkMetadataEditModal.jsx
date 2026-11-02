@@ -23,16 +23,29 @@ const FIELDS = [
     { key: 'published_year', label: 'Published Year', type: 'number' },
 ]
 
-const BLANK = { author: '', series: '', series_index: '', publisher: '', published_year: '' }
+const SERIES_MODES = [
+    { value: 'replace', label: 'Replace series' },
+    { value: 'add', label: 'Add to series' },
+]
+
+const BLANK = { author: '', series: '', series_index: '', series_mode: 'replace', publisher: '', published_year: '' }
 
 // Blank means "leave this alone", so an empty field is absent from the patch
 // rather than present-and-empty. A number that will not parse becomes null,
 // which is how both pages have always cleared a value.
+//
+// Series (issue #907): a book can be in several, so the name and index become
+// one entry and the mode says what to do with it: "replace" sends the whole
+// list (`series_list`), "add" appends the entry to whatever each book already
+// has (`series_add`; a name the book already has is left alone). An index with
+// no name has no series to belong to and is ignored.
 export function buildPatch(fields) {
     const patch = {}
     if (fields.author.trim()) patch.author = fields.author.trim()
-    if (fields.series.trim()) patch.series = fields.series.trim()
-    if (fields.series_index.trim()) patch.series_index = parseFloat(fields.series_index) || null
+    if (fields.series.trim()) {
+        const entry = { name: fields.series.trim(), index: fields.series_index.trim() ? parseFloat(fields.series_index) || null : null }
+        patch[fields.series_mode === 'add' ? 'series_add' : 'series_list'] = [entry]
+    }
     if (fields.publisher.trim()) patch.publisher = fields.publisher.trim()
     if (fields.published_year.trim()) patch.published_year = parseInt(fields.published_year) || null
     return patch
@@ -54,7 +67,7 @@ export default function BulkMetadataEditModal({
     useEffect(() => { if (open) setFields(BLANK) }, [open])
 
     const plural = selectionCount !== 1 ? 's' : ''
-    const nothingToSave = Object.values(fields).every(v => !v.trim())
+    const nothingToSave = Object.keys(buildPatch(fields)).length === 0
 
     const handleSave = () => {
         const patch = buildPatch(fields)
@@ -92,6 +105,22 @@ export default function BulkMetadataEditModal({
                             value={fields[key]}
                             onChange={e => setFields(prev => ({ ...prev, [key]: e.target.value }))}
                         />
+                        {key === 'series_index' && (
+                            <div role="radiogroup" aria-label="Series mode" style={{ display: 'flex', gap: '16px', marginTop: '8px', fontSize: '0.9rem' }}>
+                                {SERIES_MODES.map(({ value, label: modeLabel }) => (
+                                    <label key={value} style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer' }}>
+                                        <input
+                                            type="radio"
+                                            name="bulk-series-mode"
+                                            value={value}
+                                            checked={fields.series_mode === value}
+                                            onChange={() => setFields(prev => ({ ...prev, series_mode: value }))}
+                                        />
+                                        {modeLabel}
+                                    </label>
+                                ))}
+                            </div>
+                        )}
                     </div>
                 ))}
             </div>
