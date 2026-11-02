@@ -252,10 +252,14 @@ def set_series(row: Any, entries: Optional[Iterable[Any]], *, user_edit: bool) -
     (``user_edit=False``) never sets it.
     """
     new = normalize_entries(entries)
+    # The stored list as it is, not normalised: a legacy row holding "Dresden
+    # Files, The" must read as different from its normalised form, or
+    # POST /normalize could never fix it.
+    stored = [{"name": e.name, "index": e.index} for e in row.series_list]
     old = entries_of(row)
     changed = False
 
-    if new != old:
+    if new != stored:
         current = list(row.series_list)
         entry_cls = type(row).series_list.property.mapper.class_
         for position, entry in enumerate(new):
@@ -280,3 +284,17 @@ def set_series(row: Any, entries: Optional[Iterable[Any]], *, user_edit: bool) -
         row.series_cleared = cleared
         changed = True
     return changed
+
+
+def add_missing_series(row: Any, found: Optional[Iterable[Any]]) -> bool:
+    """The rescan rule: add the names in `found` that `row` lacks.
+
+    Keeps the row's order and its edited indexes, never removes anything, and
+    does nothing at all for a row whose series the user cleared
+    (``series_cleared``): a rescan must not undo that. Returns whether the row
+    changed.
+    """
+    if row.series_cleared:
+        return False
+    merged = merge_missing(entries_of(row), found)
+    return set_series(row, merged, user_edit=False)

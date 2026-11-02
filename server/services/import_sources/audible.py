@@ -40,6 +40,7 @@ from services.import_sources.base import (
     _noop_progress,
 )
 from services.library_writer import place_file
+from services.series import normalize_entries
 
 logger = logging.getLogger(__name__)
 
@@ -208,15 +209,14 @@ def _list_library(auth: audible.Authenticator) -> list[dict]:
 
 def _normalize_item(item: dict) -> dict:
     """Squash an Audible library item into the meta shape library_writer wants."""
-    series_name = None
-    series_index = None
+    # Every series Audible lists, in its order (issue #905).
+    series_list = []
     for s in item.get("series") or []:
-        series_name = s.get("title")
         try:
-            series_index = float(s.get("sequence")) if s.get("sequence") else None
+            sequence = float(s.get("sequence")) if s.get("sequence") else None
         except (TypeError, ValueError):
-            series_index = None
-        break
+            sequence = None
+        series_list.append({"name": s.get("title"), "index": sequence})
 
     authors = ", ".join(a.get("name") for a in (item.get("authors") or []) if a.get("name"))
     narrators = ", ".join(
@@ -228,8 +228,7 @@ def _normalize_item(item: dict) -> dict:
         "title": item.get("title"),
         "author": authors or None,
         "narrators": narrators or None,
-        "series": series_name,
-        "series_index": series_index,
+        "series_list": normalize_entries(series_list),
         "publisher": item.get("publisher_name"),
         "language": item.get("language"),
         "publish_year": (

@@ -182,7 +182,7 @@ def library_dirs(monkeypatch, tmp_path):
 
     async def _fake_extract(filepath, file_type, db, library_root=None):
         return {"title": os.path.splitext(os.path.basename(filepath))[0],
-                "author": None, "series": None, "series_index": None}
+                "author": None, "series_list": None}
 
     async def _no_abs(db):
         return {}

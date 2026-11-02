@@ -139,7 +139,7 @@ def stub_extract(monkeypatch):
     """
     def _install(**overrides):
         meta = {"title": "Dune", "author": "Frank Herbert",
-                "series": None, "series_index": None}
+                "series_list": None}
         meta.update(overrides)
 
         async def _fake_extract(filepath, file_type, db, library_root=None):
