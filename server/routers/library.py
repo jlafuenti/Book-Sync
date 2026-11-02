@@ -46,7 +46,7 @@ from schemas import (
     LibraryItem, LibraryItemKind, LibraryTab, LibrarySort, SortDir,
     LibraryFacets, LibraryCounts, FacetCount,
     CalibreStatusResponse, CleanupResponse, MessageResponse, VerifyFilesResponse,
-    ActionResult, PrintPagesProgress,
+    ActionResult, PrintPagesProgress, SeriesEntry,
 )
 from rate_limit import expensive_reads, search_reads
 from routers.auth import get_current_user, get_editor_user, rate_limited
@@ -54,8 +54,15 @@ from services.cache import TTLValue
 from services.metadata_utils import (
     MEDIA_DESCRIPTIVE_FIELDS,
     MEDIA_METADATA_FIELDS,
+    SERIES_LIST_KEY,
     normalize_author,
-    normalize_series,
+)
+from services.series import (
+    add_missing_series,
+    entries_of,
+    merge_missing,
+    normalize_entries,
+    set_series,
 )
 from services.abs_metadata import fetch_abs_index, enrich_from_abs, write_metadata_to_file
 # Metadata extraction lives in services/metadata_extract.py (issue #255). The
@@ -158,12 +165,12 @@ async def normalize_library_metadata(
                 logger.info(f"[normalize] Ebook '{book.title}': author '{book.author}' → '{new_author}'")
                 book.author = new_author
                 changed = True
-        if book.series:
-            new_series = normalize_series(book.series)
-            if new_series != book.series:
-                logger.info(f"[normalize] Ebook '{book.title}': series '{book.series}' → '{new_series}'")
-                book.series = new_series
-                changed = True
+        # Every series entry's name, not just the primary one (issue #905).
+        stored_series = [{"name": e.name, "index": e.index} for e in book.series_list]
+        if stored_series and normalize_entries(stored_series) != stored_series:
+            logger.info(f"[normalize] Ebook '{book.title}': series entries normalised")
+            set_series(book, stored_series, user_edit=False)
+            changed = True
         
         if book.description:
             new_desc = md(book.description).strip()
@@ -186,12 +193,12 @@ async def normalize_library_metadata(
                 logger.info(f"[normalize] Audiobook '{book.title}': author '{book.author}' → '{new_author}'")
                 book.author = new_author
                 changed = True
-        if book.series:
-            new_series = normalize_series(book.series)
-            if new_series != book.series:
-                logger.info(f"[normalize] Audiobook '{book.title}': series '{book.series}' → '{new_series}'")
-                book.series = new_series
-                changed = True
+        # Every series entry's name, not just the primary one (issue #905).
+        stored_series = [{"name": e.name, "index": e.index} for e in book.series_list]
+        if stored_series and normalize_entries(stored_series) != stored_series:
+            logger.info(f"[normalize] Audiobook '{book.title}': series entries normalised")
+            set_series(book, stored_series, user_edit=False)
+            changed = True
                 
         if book.description:
             new_desc = md(book.description).strip()
@@ -303,10 +310,9 @@ async def _rescan_all_impl(db: AsyncSession) -> dict:
             
             book.title = meta.get("title") or book.title
             book.author = meta.get("author") or book.author
-            # Respect user-cleared series: empty string = user cleared it, don't overwrite
-            if book.series is None:
-                book.series = meta.get("series") or book.series
-                book.series_index = meta.get("series_index") or book.series_index
+            # Add the series names the row lacks; never remove or reorder, and
+            # leave a series the user cleared cleared (issue #905).
+            add_missing_series(book, entries_of(meta))
             for f in MEDIA_DESCRIPTIVE_FIELDS:
                 setattr(book, f, meta.get(f) or getattr(book, f))
 
@@ -350,10 +356,9 @@ async def _rescan_all_impl(db: AsyncSession) -> dict:
 
             book.title = meta.get("title") or book.title
             book.author = meta.get("author") or book.author
-            # Respect user-cleared series: empty string = user cleared it, don't overwrite
-            if book.series is None:
-                book.series = meta.get("series") or book.series
-                book.series_index = meta.get("series_index") or book.series_index
+            # Add the series names the row lacks; never remove or reorder, and
+            # leave a series the user cleared cleared (issue #905).
+            add_missing_series(book, entries_of(meta))
             for f in MEDIA_DESCRIPTIVE_FIELDS:
                 setattr(book, f, meta.get(f) or getattr(book, f))
 
@@ -500,10 +505,9 @@ async def rescan_book_file(
     # Overwrite DB with extracted data
     book.title = meta.get("title") or book.title
     book.author = meta.get("author") or book.author
-    # Respect user-cleared series: empty string = user cleared it, don't overwrite
-    if book.series is None:
-        book.series = meta.get("series") or book.series
-        book.series_index = meta.get("series_index") or book.series_index
+    # Add the series names the row lacks; never remove or reorder, and leave a
+    # series the user cleared cleared (issue #905).
+    add_missing_series(book, entries_of(meta))
     for f in MEDIA_DESCRIPTIVE_FIELDS:
         setattr(book, f, meta.get(f) or getattr(book, f))
 
@@ -529,8 +533,11 @@ async def rescan_book_file(
     db.add(book)
     await db.commit()
     await db.refresh(book)
-    
-    return book
+
+    # Validated through the response model by hand: the route is untyped (it
+    # returns either media type), and the bare ORM row would serialise its
+    # series entry rows with their table columns (issue #905).
+    return (EBookResponse if book_type == "ebook" else AudioBookResponse).model_validate(book)
 
 
 # Auto-pairing (the rule helpers, their thresholds and `auto_match_books`)
@@ -963,8 +970,6 @@ async def upload_audiobook(
 class MetadataUpdate(BaseModel):
     title: Optional[str] = None
     author: Optional[str] = None
-    series: Optional[str] = None
-    series_index: Optional[float] = None
     description: Optional[str] = None
     publisher: Optional[str] = None
     publish_year: Optional[int] = None
@@ -978,6 +983,12 @@ class MetadataUpdate(BaseModel):
     is_abridged: Optional[bool] = None
     # Issue #730. Ebook only. 0 clears; None (omitted) leaves it alone.
     print_page_count: Optional[int] = Field(None, ge=0, le=100000)
+    # Issue #905. Series are a list, not columns, so they are not in
+    # MEDIA_METADATA_FIELDS. `series_list` replaces the whole list (`[]` clears
+    # it); `series_add` appends the names the row lacks, for a bulk "add to
+    # series". Omitted (None) leaves the series alone.
+    series_list: Optional[List[SeriesEntry]] = None
+    series_add: Optional[List[SeriesEntry]] = None
 
 
 # The on-disk writers live in services/tag_writer.py (issue #255). The
@@ -1034,6 +1045,19 @@ async def _refresh_write_back_hash(db: AsyncSession, book, *, is_ebook: bool) ->
         sync_map.epub_file_hash = new_hash
 
 
+def _apply_series_update(book, meta: MetadataUpdate) -> None:
+    """Apply a PATCH's `series_list` (replace) and `series_add` (append).
+
+    A user edit: emptying a list that had entries marks the row
+    `series_cleared`, and any non-empty result clears the mark again.
+    """
+    if meta.series_list is not None:
+        set_series(book, [e.model_dump() for e in meta.series_list], user_edit=True)
+    if meta.series_add:
+        merged = merge_missing(entries_of(book), [e.model_dump() for e in meta.series_add])
+        set_series(book, merged, user_edit=True)
+
+
 @router.patch("/ebooks/{book_id}", response_model=EBookResponse)
 async def update_ebook_metadata(
     book_id: int,
@@ -1058,6 +1082,8 @@ async def update_ebook_metadata(
     # Not in MEDIA_METADATA_FIELDS: ebook only, never written into the file.
     if meta.print_page_count is not None:
         book.print_page_count = meta.print_page_count or None
+
+    _apply_series_update(book, meta)
 
     # Write metadata back to the file. Rewrites every entry of the EPUB zip,
     # so it crosses to a thread rather than running on the event loop
@@ -1137,7 +1163,9 @@ async def update_audiobook_metadata(
         value = getattr(meta, field)
         if value is not None:
             setattr(book, field, value)
-    
+
+    _apply_series_update(book, meta)
+
     # Write metadata back to the file. Mutagen opens and saves the container,
     # which for an MP3 whose ID3 padding is too small rewrites the whole
     # file, so it crosses to a thread rather than running on the event loop
@@ -1252,8 +1280,8 @@ async def debug_metadata(
         "current_db_metadata": {
             "title": book.title,
             "author": book.author,
-            "series": getattr(book, 'series', None),
-            "series_index": getattr(book, 'series_index', None),
+            "series_list": entries_of(book),
+            "series_cleared": bool(book.series_cleared),
         },
         "patterns_used": await get_filename_patterns(db, book_type),
         "filename_parse_result": None,
@@ -1294,14 +1322,19 @@ async def debug_metadata(
                     if t: debug_info["embedded_tags"]["DC:title"] = str(t[0][0])
                     c = epub_book.get_metadata('DC', 'creator')
                     if c: debug_info["embedded_tags"]["DC:creator"] = str(c[0][0])
-                    # Calibre series
-                    all_meta = epub_book.get_metadata('OPF', 'meta')
-                    if all_meta:
-                        for m in all_meta:
-                            attrs = m[1] if len(m) > 1 else {}
-                            name = attrs.get('name', '')
-                            if 'series' in name.lower():
-                                debug_info["embedded_tags"][name] = attrs.get('content', '')
+                    # Every OPF meta that mentions a series or a collection:
+                    # Calibre's name/content pairs (repeated for a second
+                    # series, so they are listed in document order) and EPUB3
+                    # belongs-to-collection metas with their refinements.
+                    series_metas = []
+                    for m in epub_book.get_metadata('OPF', 'meta') or []:
+                        attrs = m[1] if len(m) > 1 and isinstance(m[1], dict) else {}
+                        label = attrs.get('name') or attrs.get('property') or ''
+                        if 'series' in label.lower() or 'collection' in label.lower() \
+                                or label == 'group-position':
+                            series_metas.append({**attrs, "text": m[0]})
+                    if series_metas:
+                        debug_info["embedded_tags"]["series_metas"] = series_metas
                 except Exception as e:
                     debug_info["embedded_tags"]["error"] = str(e)
         except Exception as e:
@@ -1737,6 +1770,28 @@ async def enrich_library_from_abs(
         return await _enrich_abs_impl(db)
 
 
+def _merge_enriched_series(ab, enriched: dict) -> None:
+    """Put an ABS enrichment's series onto the row, the rescan way (issue #905).
+
+    `force=True` overwrites the *other* fields; it never replaces the series
+    list. Names the row lacks are added after the ones it has, and a series the
+    user cleared stays cleared. `enriched[SERIES_LIST_KEY]` is rewritten to the
+    merged result, or dropped when there is none, so the tag write that follows
+    carries the same list the row now holds — and "no opinion" rather than an
+    empty list (which would wipe the file's series tags) when ABS had nothing.
+    """
+    found = enriched.get(SERIES_LIST_KEY)
+    if ab.series_cleared:
+        enriched.pop(SERIES_LIST_KEY, None)
+        return
+    add_missing_series(ab, found)
+    merged = entries_of(ab)
+    if merged:
+        enriched[SERIES_LIST_KEY] = merged
+    else:
+        enriched.pop(SERIES_LIST_KEY, None)
+
+
 async def _enrich_abs_impl(db: AsyncSession) -> dict:
     """The body of POST /enrich-abs minus auth and the job guard."""
     abs_enabled, abs_url, abs_token, abs_prefix = await _load_abs_settings(db)
@@ -1761,6 +1816,7 @@ async def _enrich_abs_impl(db: AsyncSession) -> dict:
 
     for ab in audiobooks:
         file_meta = {f: getattr(ab, f) for f in MEDIA_METADATA_FIELDS}
+        file_meta[SERIES_LIST_KEY] = entries_of(ab)
         enriched, changed, _ = enrich_from_abs(
             file_meta, ab.file_path, abs_index, abs_prefix, force=True
         )
@@ -1768,6 +1824,7 @@ async def _enrich_abs_impl(db: AsyncSession) -> dict:
             for field in MEDIA_METADATA_FIELDS:
                 if enriched.get(field) is not None:
                     setattr(ab, field, enriched[field])
+            _merge_enriched_series(ab, enriched)
             db.add(ab)
             tag_write_ok, tag_write_error = await asyncio.to_thread(
                 write_metadata_to_file, ab.file_path, enriched
@@ -1855,6 +1912,7 @@ async def enrich_audiobook_from_abs(
         )
 
     file_meta = {f: getattr(ab, f) for f in MEDIA_METADATA_FIELDS}
+    file_meta[SERIES_LIST_KEY] = entries_of(ab)
     enriched, changed, matched = enrich_from_abs(
         file_meta, ab.file_path, abs_index, abs_prefix, force=True
     )
@@ -1867,6 +1925,7 @@ async def enrich_audiobook_from_abs(
         for field in MEDIA_METADATA_FIELDS:
             if enriched.get(field) is not None:
                 setattr(ab, field, enriched[field])
+        _merge_enriched_series(ab, enriched)
         db.add(ab)
         tag_write_ok, tag_write_error = await asyncio.to_thread(
             write_metadata_to_file, ab.file_path, enriched
@@ -2024,8 +2083,7 @@ async def _register_epub_in_db(epub_path: str, source_eb: EBook, db: AsyncSessio
     epub_eb = EBook(
         title=source_eb.title,
         author=source_eb.author,
-        series=source_eb.series,
-        series_index=source_eb.series_index,
+        series_cleared=source_eb.series_cleared,
         filename=Path(epub_path).name,
         file_path=epub_path,
         file_hash=file_hash,
@@ -2033,6 +2091,7 @@ async def _register_epub_in_db(epub_path: str, source_eb: EBook, db: AsyncSessio
         format="epub",
         metadata_source=source_eb.metadata_source,
     )
+    set_series(epub_eb, entries_of(source_eb), user_edit=False)
     epub_eb, _created = await _insert_or_reread(db, epub_eb, EBook, epub_path)
     return epub_eb
 

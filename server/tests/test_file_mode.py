@@ -25,7 +25,7 @@ def _mode(path):
 
 
 def _book(**fields):
-    base = dict(title="New Title", author=None, series=None, series_index=None, description=None,
+    base = dict(title="New Title", author=None, series_list=None, description=None,
                 publisher=None, language="en", publish_year=None, genres=None)
     base.update(fields)
     return SimpleNamespace(**base)

@@ -141,7 +141,7 @@ async def test_a_user_cleared_series_from_abs_never_writes(db, audio_dir, monkey
     path = write_minimal_m4a(book_dir / "Axis Test.m4b")
     abs_metadata._write_tags(path, {"title": "Axis Test", "author": "Ann Axis"})
     db.add(AudioBook(title="Axis Test", filename="Axis Test.m4b", file_path=path,
-                     metadata_source="manual", series=""))
+                     metadata_source="manual", series_cleared=True))
     await db.commit()
     index = _abs_index(
         book_dir, audio_dir, title="Axis Test", authorName="Ann Axis",
@@ -155,7 +155,9 @@ async def test_a_user_cleared_series_from_abs_never_writes(db, audio_dir, monkey
     await db.commit()
 
     assert writes == []
-    assert (await db.execute(select(AudioBook))).scalar_one().series == ""
+    row = (await db.execute(select(AudioBook))).scalar_one()
+    assert row.series_list == []
+    assert row.series_cleared is True
 
 
 async def test_a_user_cleared_series_the_file_still_carries_never_writes(db, audio_dir, monkeypatch):
@@ -167,9 +169,9 @@ async def test_a_user_cleared_series_the_file_still_carries_never_writes(db, aud
     book_dir.mkdir(parents=True)
     path = write_minimal_m4a(book_dir / "Axis Test.m4b")
     abs_metadata._write_tags(path, {"title": "Axis Test", "author": "Ann Axis",
-                                    "series": "Axis", "series_index": 1.0})
+                                    "series_list": [{"name": "Axis", "index": 1.0}]})
     db.add(AudioBook(title="Axis Test", filename="Axis Test.m4b", file_path=path,
-                     metadata_source="manual", series=""))
+                     metadata_source="manual", series_cleared=True))
     await db.commit()
     index = _abs_index(
         book_dir, audio_dir, title="Axis Test", authorName="Ann Axis",
@@ -198,10 +200,10 @@ async def test_two_scans_of_a_cleared_series_book_write_at_most_once(
     path = write_minimal_m4a(book_dir / "Axis Test.m4b")
     tags = {"title": "Axis Test", "author": "Ann Axis"}
     if file_series:
-        tags.update(series=file_series, series_index=1.0)
+        tags.update(series_list=[{"name": file_series, "index": 1.0}])
     abs_metadata._write_tags(path, tags)
     db.add(AudioBook(title="Axis Test", filename="Axis Test.m4b", file_path=path,
-                     metadata_source="manual", series=""))
+                     metadata_source="manual", series_cleared=True))
     await db.commit()
     index = _abs_index(
         book_dir, audio_dir, title="Axis Test", authorName="Ann Axis",
@@ -223,19 +225,27 @@ async def test_two_scans_of_a_cleared_series_book_write_at_most_once(
     await db.commit()
     assert writes == [path], "the second scan rewrote the file"
     assert os.stat(path).st_mtime_ns == mtime
-    assert (await db.execute(select(AudioBook))).scalar_one().series == ""
+    row = (await db.execute(select(AudioBook))).scalar_one()
+    assert row.series_list == []
+    assert row.series_cleared is True
 
 
 def test_a_field_the_write_back_does_not_carry_is_not_a_change():
-    before = {"title": "Axis Test", "series": "Axis", "series_index": 1.0}
+    before = {"title": "Axis Test", "series_list": [{"name": "Axis", "index": 1.0}]}
     assert not abs_metadata.fills_written_back_field(before, {"title": "Axis Test"})
     assert not abs_metadata.fills_written_back_field(
-        before, {"title": "Axis Test", "series": None})
+        before, {"title": "Axis Test", "series_list": None})
+    # The same list is not a change, however it is spelled.
+    assert not abs_metadata.fills_written_back_field(
+        before, {"title": "Axis Test", "series_list": [{"name": "Axis", "index": 1}]})
     assert abs_metadata.fills_written_back_field(
-        before, {"title": "Axis Test", "series": "Axis", "series_index": 1.0,
+        before, {"title": "Axis Test", "series_list": [{"name": "Axis", "index": 1.0}],
                  "author": "Ann Axis"})
-    # An explicit "" still reaches the file (the writer clears the tag).
-    assert abs_metadata.fills_written_back_field(before, {"title": "Axis Test", "series": ""})
+    # A second series is a change the file can hold.
+    assert abs_metadata.fills_written_back_field(
+        before, {"series_list": [{"name": "Axis", "index": 1.0}, {"name": "Other", "index": None}]})
+    # An explicit [] still reaches the file (the writer clears the tags).
+    assert abs_metadata.fills_written_back_field(before, {"title": "Axis Test", "series_list": []})
 
 
 async def test_a_new_audiobook_with_only_unwritable_fills_is_not_written(db, audio_dir, monkeypatch):
@@ -267,8 +277,7 @@ _SAMPLE = {
     "genres": "Fiction",
     "publisher": "Example Press",
     "narrators": "Bea Reader",
-    "series": "Axis",
-    "series_index": 2.0,
+    "series_list": [{"name": "Axis", "index": 2.0}, {"name": "Axis Chronological", "index": 1.5}],
     "language": "English",
     "isbn": "9780000000002",
     "asin": "B000000000",
@@ -279,7 +288,7 @@ _SAMPLE = {
 
 
 def test_the_sample_covers_every_metadata_field():
-    assert set(MEDIA_METADATA_FIELDS) <= set(_SAMPLE) | {"series_index"}
+    assert set(MEDIA_METADATA_FIELDS) <= set(_SAMPLE)
 
 
 @pytest.mark.parametrize("field", sorted(abs_metadata.WRITTEN_BACK_FIELDS))

@@ -11,7 +11,9 @@ Fixture: `tests/fixtures/auto_match_cases.json`
    "expected_score": number|null }]`
 
 - `ebook` / `audiobook` are column subsets fed straight to the ORM models;
-  anything omitted is `None`.
+  anything omitted is `None`. Series are `series_list: [{name, index}]` (a book
+  can belong to several; entry 0 is the primary), turned into entry rows by
+  `_row`. This fixture is server-only: the Android matcher does not pair.
 - `expected_score` is what `_score_candidate` returns: `null` means "rejected,
   never pair these" and a number is the winning score (title score plus the
   author-agreement boost, capped at 100). Compared numerically, so the int/float
@@ -42,7 +44,7 @@ from sqlalchemy import select
 from models.book import AudioBook, BookPair, EBook, PairStatus
 from routers import library
 from services.auto_match import _score_candidate, auto_match_books
-from tests.factories import make_audiobook, make_ebook
+from tests.factories import make_audiobook, make_ebook, series_rows
 
 _FIXTURE = os.path.join(
     os.path.dirname(__file__), "fixtures", "auto_match_cases.json"
@@ -50,6 +52,16 @@ _FIXTURE = os.path.join(
 
 with open(_FIXTURE, encoding="utf-8") as _f:
     CASES = json.load(_f)
+
+
+def _row(model, columns):
+    """An unsaved row from a fixture's column subset, with its series entries."""
+    columns = dict(columns)
+    entries = columns.pop("series_list", None)
+    row = model(**columns)
+    if entries:
+        row.series_list = series_rows(model, entries)
+    return row
 
 
 # ---------------------------------------------------------------------------
@@ -65,8 +77,8 @@ def test_the_fixture_covers_both_verdicts():
 
 @pytest.mark.parametrize("case", CASES, ids=[c["name"] for c in CASES])
 def test_score_candidate_golden_vectors(case):
-    ebook = EBook(**case["ebook"])
-    audiobook = AudioBook(**case["audiobook"])
+    ebook = _row(EBook, case["ebook"])
+    audiobook = _row(AudioBook, case["audiobook"])
 
     score = _score_candidate(ebook, audiobook)
 
@@ -198,6 +210,31 @@ async def test_unpairing_still_records_the_file_hashes_as_well(
     # …and the id key went in alongside it, not instead of it.
     assert eb.auto_pair_excluded_ids == [ab_id]
     assert ab.auto_pair_excluded_ids == [eb_id]
+
+
+async def test_a_secondary_series_in_common_pairs_books_the_primary_would_reject(db):
+    """The ebook's primary series (Axis Saga #1) differs from the audiobook's
+    (Axis Chronological #2); the audiobook's series is the ebook's second one.
+    Comparing primaries only would have refused the pair (issue #905)."""
+    eb = await make_ebook(db, title="Two Series", author="Ann Axis", series_list=[
+        {"name": "Axis Saga", "index": 1}, {"name": "Axis Chronological", "index": 2}])
+    ab = await make_audiobook(db, title="Two Series", author="Ann Axis", series_list=[
+        {"name": "Axis Chronological", "index": 2}])
+
+    assert await auto_match_books(db) == 1
+    await db.commit()
+
+    pair = (await db.execute(select(BookPair))).scalar_one()
+    assert (pair.ebook_id, pair.audiobook_id) == (eb.id, ab.id)
+
+
+async def test_series_that_share_a_name_but_not_an_index_do_not_pair(db):
+    await make_ebook(db, title="Two Series", author="Ann Axis", series_list=[
+        {"name": "Axis Saga", "index": 1}, {"name": "Axis Chronological", "index": 2}])
+    await make_audiobook(db, title="Two Series", author="Ann Axis", series_list=[
+        {"name": "Axis Saga", "index": 5}])
+
+    assert await auto_match_books(db) == 0
 
 
 async def test_the_matcher_never_unpairs_an_existing_pair(db):

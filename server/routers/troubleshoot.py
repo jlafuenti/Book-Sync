@@ -31,6 +31,7 @@ from models.progress import UserProgress
 from models.sync_map import SyncMap
 from models.transcript import AudioTranscript
 from services.file_hash import hash_file
+from services.series import entries_of, set_series
 from services.uploads import stream_upload_to_path
 from utils import safe_join
 from models.transcription_queue import TranscriptionQueueItem
@@ -1041,10 +1042,15 @@ async def replace_file(
     # hash_file matches hash_bytes exactly (composite scheme) — see test_file_hash.py.
     item.file_hash = hash_file(dest_path)
     item.format = new_ext.lstrip(".")
-    for field in ("title", "author", "series", "series_index"):
+    for field in ("title", "author"):
         val = new_meta.get(field)
         if val:
             setattr(item, field, val)
+    # The new file's series win wholesale when it names any; otherwise the row
+    # keeps its own (a series is a list, so it cannot ride the loop above).
+    new_series = entries_of(new_meta)
+    if new_series:
+        set_series(item, new_series, user_edit=False)
     if not item.title:
         item.title = base
     # The file is the authority on its own length (issue #127) — carrying the

@@ -23,9 +23,18 @@ from typing import Optional
 # concatenate to `MEDIA_METADATA_FIELDS` in exactly the order the old literals
 # used, so the ABS enrichment payloads keep their key order.
 
-#: Identity metadata. Every ingest/rescan path handles these specially (a
-#: user-cleared series must not be refilled), so they are rarely copied in bulk.
-MEDIA_CORE_FIELDS: tuple[str, ...] = ("title", "author", "series", "series_index")
+#: Identity metadata. Every ingest/rescan path handles these specially, so
+#: they are rarely copied in bulk.
+#:
+#: Series is *not* in this group (issue #905): a book can belong to several, so
+#: series is a relationship (`series_list`), not a column, and the parity test
+#: requires every name in these lists to be a column. Every loop over these
+#: lists has to handle the series list beside it, through `services.series`;
+#: `SERIES_LIST_KEY` is the key it travels under in a metadata dict.
+MEDIA_CORE_FIELDS: tuple[str, ...] = ("title", "author")
+
+#: The metadata-dict key for a book's series entries (`[{name, index}]`).
+SERIES_LIST_KEY = "series_list"
 
 #: Free-text/descriptive metadata. Copied wholesale by every scan and rescan.
 MEDIA_DESCRIPTIVE_FIELDS: tuple[str, ...] = (

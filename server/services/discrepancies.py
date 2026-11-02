@@ -32,6 +32,7 @@ from services.metadata_utils import (
     MEDIA_DESCRIPTIVE_FIELDS,
     MEDIA_FLAG_FIELDS,
 )
+from services.series import entries_of, format_series, parse_series, set_series
 
 
 # The fields a pair's two halves are compared on. Deliberately *not*
@@ -39,9 +40,28 @@ from services.metadata_utils import (
 # audiobook legitimately carry different ISBNs/ASINs, and the narrator is
 # audiobook-only), and `cover_path` is added. Derived from the shared groups
 # rather than retyped, so a new metadata field lands here too (issue #257).
+#
+# `series` is a virtual field (issue #905): a book can belong to several series,
+# so the two halves are compared as whole lists, through their canonical string
+# (`Name #4; Other #2.5`), and a resolution writes the chosen string back as a
+# list. Order counts — entry 0 is the primary series. There is no separate
+# `series_index` any more; an index is part of its entry.
 FIELDS_TO_COMPARE = list(
-    MEDIA_CORE_FIELDS + MEDIA_DESCRIPTIVE_FIELDS + MEDIA_FLAG_FIELDS + ("cover_path",)
+    MEDIA_CORE_FIELDS + ("series",) + MEDIA_DESCRIPTIVE_FIELDS + MEDIA_FLAG_FIELDS
+    + ("cover_path",)
 )
+
+
+def _compared_value(media, field: str):
+    """One half's value for `field`, normalised for comparison.
+
+    The empty string reads as None. `series` is the canonical string of the
+    half's list, `""` (no series) again None.
+    """
+    if field == "series":
+        return format_series(entries_of(media)) or None
+    value = getattr(media, field)
+    return None if value == "" else value
 
 
 def _pair_has_discrepancies(pair: BookPair) -> bool:
@@ -52,18 +72,7 @@ def _pair_has_discrepancies(pair: BookPair) -> bool:
     for field in FIELDS_TO_COMPARE:
         if field in ignored:
             continue
-        ev = getattr(pair.ebook, field)
-        av = getattr(pair.audiobook, field)
-        if ev == "":
-            ev = None
-        if av == "":
-            av = None
-        if field == "series_index":
-            if ev is not None:
-                ev = float(ev)
-            if av is not None:
-                av = float(av)
-        if ev != av:
+        if _compared_value(pair.ebook, field) != _compared_value(pair.audiobook, field):
             return True
     return False
 
@@ -90,18 +99,10 @@ async def find_discrepancies_impl(db: AsyncSession) -> List[MetadataDiscrepancy]
         for field in FIELDS_TO_COMPARE:
             if field in ignored:
                 continue
-            ebook_val = getattr(pair.ebook, field)
-            audio_val = getattr(pair.audiobook, field)
-            
-            # Normalize empty strings to None for comparison
-            if ebook_val == "": ebook_val = None
-            if audio_val == "": audio_val = None
-            
-            # Format numbers to avoid float vs int mismatches
-            if field == "series_index":
-                if ebook_val is not None: ebook_val = float(ebook_val)
-                if audio_val is not None: audio_val = float(audio_val)
-                
+            # Empty strings read as None; series compare as canonical strings.
+            ebook_val = _compared_value(pair.ebook, field)
+            audio_val = _compared_value(pair.audiobook, field)
+
             if ebook_val != audio_val:
                 diffs.append(DiscrepantField(
                     field=field,
@@ -121,13 +122,26 @@ async def find_discrepancies_impl(db: AsyncSession) -> List[MetadataDiscrepancy]
     return discrepancies
 
 
+def _assign(media, field: str, value) -> None:
+    """Set one compared `field` on a half from the request's loosely-typed value."""
+    if field == "series":
+        set_series(media, parse_series(value) if value else [], user_edit=True)
+        return
+    if field == "publish_year" and value is not None:
+        value = int(value)
+    elif field in ["is_explicit", "is_abridged"] and value is not None:
+        value = str(value).lower() in ("true", "1")
+    setattr(media, field, value)
+
+
 def apply_resolution(pair: BookPair, req: ResolveDiscrepancyRequest) -> tuple[bool, bool]:
     """Apply `req` to the pair's two halves in memory; returns (ebook_changed, audio_changed).
 
-    Coerces `series_index`, `publish_year` and the flag fields from the
-    request's strings, ignores fields outside `FIELDS_TO_COMPARE`, and
-    auto-acknowledges the pair once nothing is left to resolve. The caller
-    commits and writes the files back.
+    Coerces `publish_year` and the flag fields from the request's strings,
+    turns a `series` string back into entries (`None` clears them, as a user
+    edit), ignores fields outside `FIELDS_TO_COMPARE`, and auto-acknowledges the
+    pair once nothing is left to resolve. The caller commits and writes the
+    files back.
     """
     ebook = pair.ebook
     audiobook = pair.audiobook
@@ -136,30 +150,14 @@ def apply_resolution(pair: BookPair, req: ResolveDiscrepancyRequest) -> tuple[bo
     ebook_changed = False
     for field, value in req.ebook_updates.items():
         if field in FIELDS_TO_COMPARE:
-            # Handle type conversions
-            if field == "series_index" and value is not None:
-                value = float(value)
-            elif field == "publish_year" and value is not None:
-                value = int(value)
-            elif field in ["is_explicit", "is_abridged"] and value is not None:
-                value = str(value).lower() in ("true", "1")
-                
-            setattr(ebook, field, value)
+            _assign(ebook, field, value)
             ebook_changed = True
             
     # Process AudioBook updates
     audio_changed = False
     for field, value in req.audiobook_updates.items():
         if field in FIELDS_TO_COMPARE:
-            # Handle type conversions
-            if field == "series_index" and value is not None:
-                value = float(value)
-            elif field == "publish_year" and value is not None:
-                value = int(value)
-            elif field in ["is_explicit", "is_abridged"] and value is not None:
-                value = str(value).lower() in ("true", "1")
-                
-            setattr(audiobook, field, value)
+            _assign(audiobook, field, value)
             audio_changed = True
             
     if ebook_changed or audio_changed:

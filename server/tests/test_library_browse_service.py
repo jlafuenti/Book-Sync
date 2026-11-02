@@ -13,6 +13,7 @@ import pytest
 from sqlalchemy import select
 
 from models.book import AudioBook, BookPair, EBook, PairStatus
+from tests.factories import series_rows
 from schemas import LibraryItemKind, LibrarySort, LibraryTab, SortDir
 from services import library_browse as browse
 
@@ -38,19 +39,19 @@ async def _seed_library(db):
     ebook  E4: "Delta"   (Author C)         unpaired
     audio  A5: "Epsilon" (Author B, S2 #1)  unpaired, unacknowledged
     """
-    e1 = EBook(title="Alpha", author="Author A", series="S1", series_index=1,
+    e1 = EBook(title="Alpha", author="Author A", series_list=series_rows(EBook, [{"name": "S1", "index": 1}]),
                filename="e1.epub", file_path="/x/e1.epub", file_size=100, acknowledged=True)
-    a1 = AudioBook(title="Alpha (audio)", author="Author A", series="S1", series_index=1,
+    a1 = AudioBook(title="Alpha (audio)", author="Author A", series_list=series_rows(AudioBook, [{"name": "S1", "index": 1}]),
                    filename="a1.m4b", file_path="/x/a1.m4b", file_size=1000, acknowledged=True)
     e2 = EBook(title="Beta", author="Author B",
                filename="e2.epub", file_path="/x/e2.epub", file_size=200, acknowledged=True)
     a2 = AudioBook(title="Beta (audio)", author="Author B",
                    filename="a2.m4b", file_path="/x/a2.m4b", file_size=2000, acknowledged=True)
-    e3 = EBook(title="Gamma", author="Author A", series="S1", series_index=2,
+    e3 = EBook(title="Gamma", author="Author A", series_list=series_rows(EBook, [{"name": "S1", "index": 2}]),
                filename="e3.epub", file_path="/x/e3.epub", file_size=300, acknowledged=False)
     e4 = EBook(title="Delta", author="Author C",
                filename="e4.epub", file_path="/x/e4.epub", file_size=50, acknowledged=True)
-    a5 = AudioBook(title="Epsilon", author="Author B", series="S2", series_index=1,
+    a5 = AudioBook(title="Epsilon", author="Author B", series_list=series_rows(AudioBook, [{"name": "S2", "index": 1}]),
                    filename="a5.m4b", file_path="/x/a5.m4b", file_size=5000, acknowledged=False)
     db.add_all([e1, a1, e2, a2, e3, e4, a5])
     await db.flush()
@@ -78,7 +79,7 @@ async def test_search_clause_matches_title_author_or_series_case_insensitively(d
     db.add_all([
         EBook(title="Alpha", author="X", filename="1.epub", file_path="/x/1.epub"),
         EBook(title="Other", author="alpha smith", filename="2.epub", file_path="/x/2.epub"),
-        EBook(title="Other", author="Y", series="The ALPHA saga", filename="3.epub", file_path="/x/3.epub"),
+        EBook(title="Other", author="Y", series_list=series_rows(EBook, [{"name": "The ALPHA saga", "index": None}]), filename="3.epub", file_path="/x/3.epub"),
         EBook(title="Beta", author="Z", filename="4.epub", file_path="/x/4.epub"),
     ])
     await db.commit()
@@ -302,3 +303,156 @@ async def test_facets_impl_reports_pills_for_the_tab_and_library_wide_counts(db)
     narrowed = await browse.facets_impl(db, LibraryTab.UNPAIRED, LibraryItemKind.AUDIOBOOK)
     assert [(a.name, a.count) for a in narrowed.authors] == [("Author B", 1)]
     assert narrowed.counts == c   # the counts are library-wide, not per tab
+
+
+# ------------------------------------------------- several series (issue #905)
+
+
+@pytest.fixture
+async def library_client(make_client, make_user, auth_header):
+    from routers import library
+    user = await make_user()
+    async with make_client(library.router) as c:
+        yield c, auth_header(user)
+
+
+def _call(db, **kw):
+    args = dict(tab=LibraryTab.ALL, kind=None, q=None, author=None, series=None,
+                sort=LibrarySort.TITLE, direction=SortDir.ASC, page=1, limit=50)
+    args.update(kw)
+    return browse.list_items_impl(db, **args)
+
+
+async def _multi_series_library(db):
+    """
+    pair P: ebook "Pair Book" in Axis Saga #4 + Axis Chronological #2.5,
+            audiobook "Pair Book (audio)" in Axis Saga #4 only
+    pair Q: ebook "Plain Pair" with no series, audiobook "Plain Pair (audio)"
+            in Axis Audio #1 (a series present only on the audiobook half)
+    ebook  E: "Solo Ebook"   in Axis Chronological #1 + Axis Saga #9
+    audio  A: "Solo Audio"   in Axis Audio #2
+    """
+    two = [{"name": "Axis Saga", "index": 4}, {"name": "Axis Chronological", "index": 2.5}]
+    pe = EBook(title="Pair Book", author="X", series_list=series_rows(EBook, two),
+               filename="pe.epub", file_path="/x/pe.epub")
+    pa = AudioBook(title="Pair Book (audio)", author="X",
+                   series_list=series_rows(AudioBook, [{"name": "Axis Saga", "index": 4}]),
+                   filename="pa.m4b", file_path="/x/pa.m4b")
+    qe = EBook(title="Plain Pair", author="X", filename="qe.epub", file_path="/x/qe.epub")
+    qa = AudioBook(title="Plain Pair (audio)", author="X",
+                   series_list=series_rows(AudioBook, [{"name": "Axis Audio", "index": 1}]),
+                   filename="qa.m4b", file_path="/x/qa.m4b")
+    se = EBook(title="Solo Ebook", author="X", filename="se.epub", file_path="/x/se.epub",
+               series_list=series_rows(EBook, [{"name": "Axis Chronological", "index": 1},
+                                               {"name": "Axis Saga", "index": 9}]))
+    sa = AudioBook(title="Solo Audio", author="X", filename="sa.m4b", file_path="/x/sa.m4b",
+                   series_list=series_rows(AudioBook, [{"name": "Axis Audio", "index": 2}]))
+    db.add_all([pe, pa, qe, qa, se, sa])
+    await db.flush()
+    p = BookPair(ebook_id=pe.id, audiobook_id=pa.id, status=PairStatus.SYNCED, acknowledged=True)
+    q = BookPair(ebook_id=qe.id, audiobook_id=qa.id, status=PairStatus.SYNCED, acknowledged=True)
+    db.add_all([p, q])
+    await db.commit()
+    return dict(pe=pe, pa=pa, qe=qe, qa=qa, se=se, sa=sa, p=p, q=q)
+
+
+def _titles(page):
+    return [(i.pair.ebook.title if i.pair and i.kind == LibraryItemKind.PAIR else
+             (i.ebook or i.audiobook).title) for i in page.items]
+
+
+async def test_the_series_filter_matches_a_secondary_series(db):
+    await _multi_series_library(db)
+
+    chronological = await _call(db, series="Axis Chronological")
+
+    # The pair has it as entry 1, the solo ebook as entry 0.
+    assert sorted(_titles(chronological)) == ["Pair Book", "Solo Ebook"]
+
+
+async def test_the_series_filter_matches_either_half_of_a_pair(db):
+    await _multi_series_library(db)
+
+    audio = await _call(db, series="Axis Audio")
+
+    # "Plain Pair" has the series only on its audiobook half.
+    assert sorted(_titles(audio)) == ["Plain Pair", "Solo Audio"]
+
+
+async def test_the_series_filter_counts_a_pair_tagged_on_both_halves_once(db):
+    await _multi_series_library(db)
+
+    saga = await _call(db, series="Axis Saga")
+
+    assert saga.total == 2
+    assert sorted(_titles(saga)) == ["Pair Book", "Solo Ebook"]
+
+
+async def test_q_matches_a_secondary_series_on_either_half(db):
+    await _multi_series_library(db)
+
+    assert sorted(_titles(await _call(db, q="chronological"))) == ["Pair Book", "Solo Ebook"]
+    assert sorted(_titles(await _call(db, q="axis audio"))) == ["Plain Pair", "Solo Audio"]
+
+
+async def test_the_series_facet_counts_every_series_and_a_pair_once(db):
+    await _multi_series_library(db)
+
+    f = await browse.facets_impl(db, LibraryTab.ALL, None)
+
+    assert [(x.name, x.count) for x in f.series] == [
+        ("Axis Audio", 2), ("Axis Chronological", 2), ("Axis Saga", 2)]
+
+
+async def test_the_series_facet_respects_the_tab(db):
+    await _multi_series_library(db)
+
+    f = await browse.facets_impl(db, LibraryTab.UNPAIRED, None)
+
+    assert [(x.name, x.count) for x in f.series] == [
+        ("Axis Audio", 1), ("Axis Chronological", 1), ("Axis Saga", 1)]
+
+
+async def test_sorting_by_series_uses_the_primary_series_and_its_index(db):
+    await _multi_series_library(db)
+
+    page = await _call(db, sort=LibrarySort.SERIES)
+
+    # Primary names: Axis Audio (Plain Pair via its audiobook half #1, Solo Audio #2),
+    # Axis Chronological (Solo Ebook #1), Axis Saga (Pair Book #4).
+    assert _titles(page) == ["Plain Pair", "Solo Audio", "Solo Ebook", "Pair Book"]
+
+
+async def test_a_pairs_primary_is_the_ebooks_first_entry_else_the_audiobooks(db):
+    await _multi_series_library(db)
+    u = browse._browse_subquery(LibraryTab.PAIRED, None)
+
+    rows = (await db.execute(select(u.c.title, u.c.series, u.c.series_index, u.c.alt_series)
+                             .order_by(u.c.title))).all()
+
+    assert [tuple(r) for r in rows] == [
+        ("Pair Book", "Axis Saga", 4.0, "Axis Saga"),
+        ("Plain Pair", "Axis Audio", 1.0, "Axis Audio"),
+    ]
+
+
+async def test_the_ebook_list_search_matches_a_secondary_series(db, library_client):
+    await _multi_series_library(db)
+    c, headers = library_client
+
+    body = (await c.get("/api/library/ebooks?q=chronological", headers=headers)).json()
+
+    assert sorted(i["title"] for i in body["items"]) == ["Pair Book", "Solo Ebook"]
+    assert [e["name"] for e in next(i for i in body["items"] if i["title"] == "Pair Book")["series_list"]] == [
+        "Axis Saga", "Axis Chronological"]
+
+
+async def test_the_ebook_list_orders_by_the_primary_series(db, library_client):
+    await _multi_series_library(db)
+    c, headers = library_client
+
+    body = (await c.get("/api/library/ebooks", headers=headers)).json()
+
+    # Author X for all, so: primary series name (Axis Chronological, Axis Saga,
+    # then the series-less book last), then index, then title.
+    assert [i["title"] for i in body["items"]] == ["Solo Ebook", "Pair Book", "Plain Pair"]

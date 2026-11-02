@@ -42,7 +42,7 @@ def _epub(tmp_path, metadata):
 
 
 def _write(path, **fields):
-    base = dict(title=None, author=None, series=None, series_index=None, description=None,
+    base = dict(title=None, author=None, series_list=None, description=None,
                 publisher=None, language="en", publish_year=None, genres=None)
     base.update(fields)
     tag_writer.write_ebook_metadata(path, SimpleNamespace(**base))

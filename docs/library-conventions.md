@@ -56,6 +56,11 @@ For each file, in this order, later steps overriding earlier ones field by field
 3. **Audiobookshelf** — if `ABS_URL`/`ABS_API_TOKEN` are configured, audiobook rows are enriched
    from the matching ABS item (and the enriched values can be written back into the file's tags).
 
+Series are the one exception to "field by field": a book can belong to several, so its series are
+a list, not a field. A file that names any series replaces the pattern's guess wholesale, and an
+Audiobookshelf match fills the list only when the file named none (an explicit enrich *adds* to
+it; see *Series* below).
+
 Nothing else runs automatically. **External metadata providers are a manual step**: a book's
 detail page lets you search Google Books, Open Library, Audible or Hardcover and apply a result
 (including its cover) to that book. `GOOGLE_BOOKS_API_KEY` is optional even for that — it only
@@ -64,6 +69,48 @@ raises the rate limit on the Google provider.
 Each row records which of these it ended up using in `metadata_source` (`filename`, `pattern`,
 `embedded`, `embedded+pattern`), shown as **Metadata Source** on a book's detail page — so when
 something lands with the wrong title you can see which step produced it.
+
+## Series
+
+A book can belong to several series (a Discworld novel that is also in its Witches sub-series;
+Pern in publication order and in chronological order). Each ebook and audiobook keeps an ordered
+list of `{name, index}` entries; the first is the **primary** series, which is what a library
+card, the sort order and a filename template (`<Series>`, `<Book Number>`) use. The API field is
+`series_list`. A pair's series are the union of the ebook's and the audiobook's, the ebook's
+first.
+
+**Written form.** Everywhere a list becomes text (file tags, the pair-discrepancy view) it is
+`Name #4; Other #2.5`: the index without a trailing `.0`, a bare name when there is no index,
+entries joined by `; `. A `;` inside a name is written as a comma, as Audiobookshelf does.
+
+| File | Written | Read |
+|---|---|---|
+| EPUB | one `calibre:series` meta per series, each immediately followed by its `calibre:series_index`; any `belongs-to-collection` metas are removed on write | every `calibre:series` meta, each taking the next `calibre:series_index`; EPUB3 `belongs-to-collection` metas (any `collection-type` except `set`) with their `group-position` |
+| M4B / M4A | `©grp` as the canonical string, `SERIES` as the names joined by `; `, `SERIES-PART` as the indexes joined by `; ` | `SERIES` + `SERIES-PART` (paired only when both have the same number of items), else `©grp` |
+| MP3 | `TIT1`, `TXXX:SERIES`, `TXXX:SERIES-PART` | `TXXX:SERIES` + `TXXX:SERIES-PART`, else subtitle / `TIT1` / `GRP1` / grouping, else the album when it is not the title |
+| FLAC / Ogg | `grouping`, `series`, `series-part` | `series` + `series-part`, else `grouping`, else the album when it is not the title |
+
+`SERIES-PART` is written only when **every** series has an index; otherwise it is deleted, and on
+the way back the missing indexes are recovered from the grouping tag by name. Album and `TALB`
+are never used for a series on write (the album is the book's title). The M4B track number still
+follows the primary index.
+
+**Audiobookshelf.** ABS reads and writes the same formats, so a file tagged by either tool reads
+back the same. Its library listing is minified and carries only `seriesName`, ABS's own
+`", "`-join of `Name #sequence` pieces; Tandem splits it back on `", "`. A series name that
+itself contains a comma is therefore read as two series. ABS has the same limitation and Tandem
+does not try to guess around it; fix the name in ABS, or edit the series on the book.
+
+**When Tandem changes a book's series.**
+
+- A normal scan fills only a book that has **no** series, and never one whose series you cleared.
+- A rescan, rescan-all or Audiobookshelf enrich **adds** the series names the book lacks after the
+  ones it has. It keeps the order and your edited indexes and never removes a series; the enrich's
+  force option overwrites other fields but not the series list.
+- Clearing a book's series (saving an empty list) marks it cleared, and it stays that way through
+  every later rescan and enrich until you give it a series again. Saving an unrelated edit on a
+  book that never had a series does not mark it cleared.
+- Tags in the file are rewritten when you edit the book or enrich it, not when Tandem is upgraded.
 
 ## Filename and path patterns
 
@@ -115,11 +162,14 @@ After every scan, unpaired ebooks are compared against unpaired audiobooks
   hash (`auto_pair_excluded_hashes`). Either key blocks the pair, so the scanner won't re-suggest
   that combination even for a row that has no hash. Re-pairing the two by hand still works; the
   exclusion only tells the *scanner* to keep out.
-- **Series compatible.** If both sides carry a series name they must match at ≥85 (fuzzy, articles
-  stripped); if both also carry an index, the indexes must be the same **number** — book 1 and the
-  #1.5 novella are different books. `1`, `1.0` and `01` all mean book one; an index that is not a
-  number at all is treated as missing. A series on only one side is treated as missing metadata,
-  not as a conflict.
+- **Series compatible.** If both sides carry series they must share one: some pair of their
+  series names must match at ≥85 (fuzzy, articles stripped), and if both of those entries also
+  carry an index, the indexes must be the same **number** — book 1 and the #1.5 novella are
+  different books. A name that matches but disagrees on the index does not count as shared, and
+  an unshared extra series on either side is not a conflict. `1`, `1.0` and `01` all mean book
+  one; an index that is not a number at all is treated as missing. A side with no series is
+  treated as missing metadata, not as a conflict, and a series that is just the book's own title
+  (a folder named after the book) is ignored.
 - **Author gate.** If both sides have an author they must match at ≥70. Initials and suffixes are
   normalized first, so `L.E. Modesitt Jr.` and `L. E. Modesitt, Jr.` compare equal.
 - **Title score ≥75, or ≥90 when either side has no author.** Fuzzy token-sort comparison with

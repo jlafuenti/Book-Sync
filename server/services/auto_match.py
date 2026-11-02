@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from models.book import AudioBook, BookPair, EBook, PairStatus
 from models.settings import SystemSetting
+from services.series import entries_of
 from services.pair_plausibility import (
     check_pair_plausibility,
     estimate_word_count,
@@ -134,33 +135,44 @@ def _is_own_title(series, index, *titles) -> bool:
     return bool(key) and any(key == _series_key(t) for t in titles if t)
 
 
-def _series_compatible(eb_series, eb_idx, ab_series, ab_idx, eb_title=None, ab_title=None) -> bool:
+def _series_compatible(eb_entries, ab_entries, eb_title=None, ab_title=None) -> bool:
     """Return False if series metadata indicates these are different books.
 
-    A series that is really a book's own title (`_is_own_title`) counts as
-    missing, not as a conflicting series (issue #712).
+    `eb_entries` / `ab_entries` are the two books' series lists (`[{name,
+    index}]`; a book can belong to several, issue #905). A series that is really
+    a book's own title (`_is_own_title`) is dropped before comparing — it counts
+    as missing, not as a conflicting series (issue #712).
+
+    A side with no series left is missing metadata, which is fine. When both
+    sides have some, they are compatible when **any** pair of series agrees:
+    the names match at `AUTO_MATCH_SERIES_THRESHOLD` and the indexes, if both
+    parse, are the same number. A name pair that matches but disagrees on the
+    index does not count — it is a different book in that series — and neither
+    does a series the other side does not share. No agreeing pair means the
+    books are in different series, which is the rule for a single series
+    carried over to lists.
     """
-    if _is_own_title(eb_series, eb_idx, eb_title, ab_title):
-        eb_series = None
-    if _is_own_title(ab_series, ab_idx, eb_title, ab_title):
-        ab_series = None
-    if not eb_series and not ab_series:
-        return True
-    if not eb_series or not ab_series:
-        return True  # Only one has series — missing metadata is fine
-    series_score = fuzz.token_sort_ratio(_series_key(eb_series), _series_key(ab_series))
-    if series_score < AUTO_MATCH_SERIES_THRESHOLD:
-        return False  # Clearly different series
-    # Same series — if both have a readable index they must be the same number.
-    # Compared as floats, not truncated to whole numbers: a #1.5 novella is a
-    # different book from #1, and pairing it with #1's ebook builds a sync map
-    # between two different texts (issue #253).
-    eb_num = _parse_series_index(eb_idx)
-    ab_num = _parse_series_index(ab_idx)
-    if eb_num is not None and ab_num is not None:
-        if abs(eb_num - ab_num) > AUTO_MATCH_SERIES_INDEX_TOLERANCE:
-            return False
-    return True
+    titles = (eb_title, ab_title)
+    eb = [e for e in entries_of(eb_entries) if not _is_own_title(e["name"], e["index"], *titles)]
+    ab = [e for e in entries_of(ab_entries) if not _is_own_title(e["name"], e["index"], *titles)]
+    if not eb or not ab:
+        return True  # Only one side (or neither) has series — missing metadata is fine
+    for e in eb:
+        for a in ab:
+            series_score = fuzz.token_sort_ratio(_series_key(e["name"]), _series_key(a["name"]))
+            if series_score < AUTO_MATCH_SERIES_THRESHOLD:
+                continue  # Clearly different series
+            # Same series — if both have a readable index they must be the same
+            # number. Compared as floats, not truncated to whole numbers: a #1.5
+            # novella is a different book from #1, and pairing it with #1's
+            # ebook builds a sync map between two different texts (issue #253).
+            eb_num = _parse_series_index(e["index"])
+            ab_num = _parse_series_index(a["index"])
+            if eb_num is not None and ab_num is not None:
+                if abs(eb_num - ab_num) > AUTO_MATCH_SERIES_INDEX_TOLERANCE:
+                    continue
+            return True
+    return False
 
 
 def _auto_pair_excluded(ebook, audiobook) -> bool:
@@ -204,8 +216,7 @@ def _score_candidate(ebook, audiobook) -> Optional[float]:
         return None
 
     # Reject if series metadata indicates these are different books
-    if not _series_compatible(ebook.series, ebook.series_index,
-                              audiobook.series, audiobook.series_index,
+    if not _series_compatible(entries_of(ebook), entries_of(audiobook),
                               ebook.title, audiobook.title):
         return None
 

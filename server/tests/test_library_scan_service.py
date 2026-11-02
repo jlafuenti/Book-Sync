@@ -17,7 +17,7 @@ from sqlalchemy import select
 from config import settings
 from models.book import AudioBook, EBook
 from services import abs_metadata, library_scan
-from tests.factories import write_epub
+from tests.factories import series_rows, write_epub
 
 CHAPTER = "<html><body><p>A sentence long enough to survive filtering.</p></body></html>"
 
@@ -47,7 +47,7 @@ def stub_extract(monkeypatch):
 
     async def _fake(filepath, file_type, db, library_root=None):
         base = {"title": os.path.splitext(os.path.basename(filepath))[0],
-                "author": None, "series": None, "series_index": None,
+                "author": None, "series_list": None,
                 "_metadata_source": "stub", "_metadata_pattern": None}
         base.update(metas.get(os.path.basename(filepath), {}))
         return base
@@ -214,8 +214,8 @@ async def test_an_existing_ebook_without_a_source_is_backfilled_but_a_curated_on
 ):
     ebook_dir, _ = library_dirs
     path = write_epub(str(ebook_dir / "Book.epub"), [("ch1.xhtml", CHAPTER)])
-    stub_extract["Book.epub"] = {"title": "From File", "author": "Ann", "series": "S",
-                                 "series_index": 2.0, "publisher": "P"}
+    stub_extract["Book.epub"] = {"title": "From File", "author": "Ann",
+                                 "series_list": [{"name": "S", "index": 2.0}], "publisher": "P"}
     row = EBook(title="Typed By Hand", filename="Book.epub", file_path=path,
                 metadata_source=None, publisher=None)
     db.add(row)
@@ -225,7 +225,8 @@ async def test_an_existing_ebook_without_a_source_is_backfilled_but_a_curated_on
     await db.commit()
     await db.refresh(row)
     assert (row.title, row.author, row.metadata_source) == ("From File", "Ann", "stub")
-    assert (row.series, row.series_index, row.publisher) == ("S", 2.0, "P")
+    assert [(e.name, e.index) for e in row.series_list] == [("S", 2.0)]
+    assert row.publisher == "P"
 
     # A row that already has a source keeps its title; only gaps are filled.
     row.title = "Curated"
@@ -274,9 +275,9 @@ async def test_an_existing_audiobook_takes_the_files_duration_and_fills_gaps(db,
     _, audio_dir = library_dirs
     path = _touch(audio_dir / "book.m4b")
     stub_extract["book.m4b"] = {"title": "T", "duration_seconds": 7200, "narrators": "N",
-                                "series": "S", "series_index": 1.0}
+                                "series_list": [{"name": "S", "index": 1.0}]}
     row = AudioBook(title="T", filename="book.m4b", file_path=path, metadata_source="manual",
-                    duration_seconds=3600, series=None)
+                    duration_seconds=3600)
     db.add(row)
     await db.commit()
 
@@ -285,7 +286,7 @@ async def test_an_existing_audiobook_takes_the_files_duration_and_fills_gaps(db,
     await db.refresh(row)
     assert row.duration_seconds == 7200
     assert row.narrators == "N"
-    assert (row.series, row.series_index) == ("S", 1.0)
+    assert [(e.name, e.index) for e in row.series_list] == [("S", 1.0)]
 
 
 async def test_abs_enrichment_respects_a_user_cleared_series_and_writes_tags_when_changed(
@@ -294,14 +295,15 @@ async def test_abs_enrichment_respects_a_user_cleared_series_and_writes_tags_whe
     _, audio_dir = library_dirs
     path = _touch(audio_dir / "book.m4b")
     row = AudioBook(title="T", filename="book.m4b", file_path=path, metadata_source="manual",
-                    series="")  # "" means the user cleared it
+                    series_cleared=True)  # the user cleared it
     db.add(row)
     await db.commit()
 
     seen = {}
 
     def _enrich(meta, filepath, abs_index, prefix, force=False):
-        return {**meta, "series": "From ABS", "series_index": 3.0, "publisher": "ABS Pub"}, True, True
+        return {**meta, "series_list": [{"name": "From ABS", "index": 3.0}],
+                "publisher": "ABS Pub"}, True, True
 
     def _write(filepath, meta):
         seen["written"] = dict(meta)
@@ -314,8 +316,8 @@ async def test_abs_enrichment_respects_a_user_cleared_series_and_writes_tags_whe
     await db.commit()
     await db.refresh(row)
 
-    assert "series" not in seen["written"] and "series_index" not in seen["written"]
-    assert row.series == ""            # still cleared
+    assert "series_list" not in seen["written"]
+    assert row.series_list == [] and row.series_cleared is True   # still cleared
     assert row.publisher == "ABS Pub"  # the rest of the enrichment landed
 
 
@@ -381,3 +383,107 @@ async def test_load_abs_settings_defaults_to_disabled_and_empty(db, monkeypatch)
     monkeypatch.setattr(abs_metadata, "get_abs_token", _no_token)
 
     assert await abs_metadata.load_abs_settings(db) == (False, "", "", "")
+
+
+# ----------------------------------------------------- several series (#905)
+
+
+async def test_a_new_ebook_is_created_with_every_series_in_order(db, library_dirs, stub_extract):
+    ebook_dir, _ = library_dirs
+    path = write_epub(str(ebook_dir / "Book.epub"), [("ch1.xhtml", CHAPTER)])
+    stub_extract["Book.epub"] = {"series_list": [
+        {"name": "Axis Saga", "index": 4.0}, {"name": "Axis Chronological", "index": 2.5}]}
+
+    assert await library_scan._ingest_one_ebook(db, path, str(ebook_dir)) is True
+    await db.commit()
+
+    row = (await db.execute(select(EBook))).scalar_one()
+    assert [(e.name, e.index, e.position) for e in row.series_list] == [
+        ("Axis Saga", 4.0, 0), ("Axis Chronological", 2.5, 1)]
+    assert row.series_cleared is False
+
+
+async def test_a_new_audiobook_is_created_with_every_series_in_order(db, library_dirs, stub_extract):
+    _, audio_dir = library_dirs
+    path = _touch(audio_dir / "book.m4b")
+    stub_extract["book.m4b"] = {"series_list": [
+        {"name": "Axis Saga", "index": 4.0}, {"name": "Axis Chronological", "index": 2.5}]}
+
+    assert await library_scan._ingest_one_audiobook(db, path, str(audio_dir), {}) is True
+    await db.commit()
+
+    row = (await db.execute(select(AudioBook))).scalar_one()
+    assert [(e.name, e.index) for e in row.series_list] == [("Axis Saga", 4.0), ("Axis Chronological", 2.5)]
+
+
+async def test_a_normal_scan_never_changes_a_row_that_already_has_series(db, library_dirs, stub_extract):
+    ebook_dir, _ = library_dirs
+    path = write_epub(str(ebook_dir / "Book.epub"), [("ch1.xhtml", CHAPTER)])
+    stub_extract["Book.epub"] = {"series_list": [
+        {"name": "Axis Saga", "index": 4.0}, {"name": "Brand New", "index": 1.0}]}
+    row = EBook(title="T", filename="Book.epub", file_path=path, metadata_source="manual",
+                series_list=series_rows(EBook, [{"name": "Edited", "index": 9.0}]))
+    db.add(row)
+    await db.commit()
+
+    await library_scan._ingest_one_ebook(db, path, str(ebook_dir))
+    await db.commit()
+    await db.refresh(row)
+
+    assert [(e.name, e.index) for e in row.series_list] == [("Edited", 9.0)]
+
+
+async def test_a_normal_scan_does_not_refill_a_cleared_ebook(db, library_dirs, stub_extract):
+    ebook_dir, _ = library_dirs
+    path = write_epub(str(ebook_dir / "Book.epub"), [("ch1.xhtml", CHAPTER)])
+    stub_extract["Book.epub"] = {"series_list": [{"name": "Axis Saga", "index": 4.0}]}
+    row = EBook(title="T", filename="Book.epub", file_path=path, metadata_source="manual",
+                series_cleared=True)
+    db.add(row)
+    await db.commit()
+
+    await library_scan._ingest_one_ebook(db, path, str(ebook_dir))
+    await db.commit()
+    await db.refresh(row)
+
+    assert row.series_list == [] and row.series_cleared is True
+
+
+async def test_a_normal_scan_fills_a_row_that_never_had_a_series(db, library_dirs, stub_extract):
+    _, audio_dir = library_dirs
+    path = _touch(audio_dir / "book.m4b")
+    stub_extract["book.m4b"] = {"series_list": [{"name": "Axis Saga", "index": 4.0}]}
+    row = AudioBook(title="T", filename="book.m4b", file_path=path, metadata_source="manual")
+    db.add(row)
+    await db.commit()
+
+    await library_scan._ingest_one_audiobook(db, path, str(audio_dir), {})
+    await db.commit()
+    await db.refresh(row)
+
+    assert [(e.name, e.index) for e in row.series_list] == [("Axis Saga", 4.0)]
+
+
+async def test_a_scan_that_found_no_series_never_strips_the_files_series_tags(
+    db, library_dirs, stub_extract, monkeypatch
+):
+    """The filename parser yields `series_list: None`, and even an empty list
+    from a scan must not reach the file writer as an instruction to clear."""
+    _, audio_dir = library_dirs
+    path = _touch(audio_dir / "book.m4b")
+    row = AudioBook(title="T", filename="book.m4b", file_path=path, metadata_source="manual")
+    db.add(row)
+    await db.commit()
+    seen = {}
+
+    monkeypatch.setattr(
+        library_scan, "enrich_from_abs",
+        lambda meta, fp, idx, prefix, force=False: ({**meta, "series_list": [], "publisher": "P"}, True, True),
+    )
+    monkeypatch.setattr(library_scan, "fills_written_back_field", lambda before, after: True)
+    monkeypatch.setattr(library_scan, "write_metadata_to_file",
+                        lambda fp, meta: seen.setdefault("written", dict(meta)) and (True, None))
+
+    await library_scan._ingest_one_audiobook(db, path, str(audio_dir), {"x": {}})
+
+    assert "series_list" not in seen["written"]

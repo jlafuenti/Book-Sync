@@ -400,27 +400,13 @@
             ],
             "title": "Publisher"
           },
-          "series": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Series"
-          },
-          "series_index": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Series Index"
+          "series_list": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/SeriesEntry"
+            },
+            "title": "Series List",
+            "type": "array"
           },
           "tags": {
             "anyOf": [
@@ -662,27 +648,13 @@
             ],
             "title": "Publisher"
           },
-          "series": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Series"
-          },
-          "series_index": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Series Index"
+          "series_list": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/SeriesEntry"
+            },
+            "title": "Series List",
+            "type": "array"
           },
           "tags": {
             "anyOf": [
@@ -1880,27 +1852,13 @@
             ],
             "title": "Publisher"
           },
-          "series": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Series"
-          },
-          "series_index": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Series Index"
+          "series_list": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/SeriesEntry"
+            },
+            "title": "Series List",
+            "type": "array"
           },
           "tags": {
             "anyOf": [
@@ -2141,27 +2099,13 @@
             ],
             "title": "Publisher"
           },
-          "series": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Series"
-          },
-          "series_index": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Series Index"
+          "series_list": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/SeriesEntry"
+            },
+            "title": "Series List",
+            "type": "array"
           },
           "tags": {
             "anyOf": [
@@ -2874,27 +2818,13 @@
             ],
             "title": "Publisher"
           },
-          "series": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Series"
-          },
-          "series_index": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Series Index"
+          "series_list": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/SeriesEntry"
+            },
+            "title": "Series List",
+            "type": "array"
           },
           "tags": {
             "anyOf": [
@@ -3179,27 +3109,33 @@
             ],
             "title": "Publisher"
           },
-          "series": {
+          "series_add": {
             "anyOf": [
               {
-                "type": "string"
+                "items": {
+                  "$ref": "#/components/schemas/SeriesEntry"
+                },
+                "type": "array"
               },
               {
                 "type": "null"
               }
             ],
-            "title": "Series"
+            "title": "Series Add"
           },
-          "series_index": {
+          "series_list": {
             "anyOf": [
               {
-                "type": "number"
+                "items": {
+                  "$ref": "#/components/schemas/SeriesEntry"
+                },
+                "type": "array"
               },
               {
                 "type": "null"
               }
             ],
-            "title": "Series Index"
+            "title": "Series List"
           },
           "tags": {
             "anyOf": [
@@ -3527,6 +3463,14 @@
           "id": {
             "title": "Id",
             "type": "integer"
+          },
+          "series_list": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/SeriesEntry"
+            },
+            "title": "Series List",
+            "type": "array"
           },
           "title": {
             "title": "Title",
@@ -4680,6 +4624,33 @@
           "book_pairs"
         ],
         "title": "SearchResponse",
+        "type": "object"
+      },
+      "SeriesEntry": {
+        "description": "One series a book belongs to (issue #905): a name and an optional index.\n\nThe same shape in responses, in `MetadataUpdate` and in `MatchResult`. A\nlist of these is ordered; entry 0 is the book's primary series.",
+        "properties": {
+          "index": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Index"
+          },
+          "name": {
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "SeriesEntry",
         "type": "object"
       },
       "SortDir": {

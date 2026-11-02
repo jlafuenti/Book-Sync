@@ -31,7 +31,7 @@ def stub_metadata(monkeypatch):
     """Replace extract_metadata with an async stub returning known values."""
     def _install(**overrides):
         meta = {"title": "Stub Title", "author": "Stub Author",
-                "series": "Stub Series", "series_index": 2.0}
+                "series_list": [{"name": "Stub Series", "index": 2.0}]}
         meta.update(overrides)
 
         async def _fake_extract(filepath, file_type, db, library_root=None):

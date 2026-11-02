@@ -47,6 +47,7 @@ from services.import_sources.base import (
     _noop_progress,
 )
 from services.library_writer import place_file
+from services.series import normalize_entries
 
 logger = logging.getLogger(__name__)
 
@@ -530,14 +531,20 @@ def _read_epub_meta(epub_path: Path) -> dict:
         # calibre:series — written as <meta name="calibre:series" content="…"/>
         # in OPF 2.x, or as <meta property="…" refines="…"> in OPF 3.x. Cover
         # the common case (OPF 2-style) since that's what calibre + Google
-        # Play actually emit.
+        # Play actually emit. Every series meta counts, each taking the next
+        # calibre:series_index (issue #905).
+        series_list: list[dict] = []
         for meta_el in metadata_elem.findall(f"{{{_NS_OPF}}}meta") + metadata_elem.findall("meta"):
             name = meta_el.attrib.get("name", "")
             if name == "calibre:series":
-                series_val = meta_el.attrib.get("content")
+                series_val = (meta_el.attrib.get("content") or "").strip()
                 if series_val:
-                    meta["series"] = series_val.strip()
-                    break
+                    series_list.append({"name": series_val, "index": None})
+            elif name == "calibre:series_index" and series_list and series_list[-1]["index"] is None:
+                series_list[-1]["index"] = meta_el.attrib.get("content")
+        series_list = normalize_entries(series_list)
+        if series_list:
+            meta["series_list"] = series_list
 
     except zipfile.BadZipFile:
         logger.warning(f"[acsm] {epub_path.name} is not a valid zip/EPUB")

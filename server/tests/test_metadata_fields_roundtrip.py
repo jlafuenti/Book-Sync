@@ -25,8 +25,9 @@ from services.metadata_utils import MEDIA_DESCRIPTIVE_FIELDS, MEDIA_METADATA_FIE
 SAMPLE_VALUES = {
     "title": "Round Trip",
     "author": "A. Author",
-    "series": "The Series",
-    "series_index": 3.5,
+    # Series is a list, not a column (issue #905): not in MEDIA_METADATA_FIELDS,
+    # but it round-trips through the same PATCH and detail endpoints.
+    "series_list": [{"name": "The Series", "index": 3.5}, {"name": "Another Series", "index": None}],
     "description": "A description.",
     "publisher": "A Publisher",
     "publish_year": 1998,
@@ -78,11 +79,11 @@ async def _seed(db, media):
 def test_every_field_has_a_sample_value():
     """Keeps this file honest: adding a field to `MEDIA_METADATA_FIELDS` without
     a sample here would otherwise silently shrink the parametrisation."""
-    assert set(SAMPLE_VALUES) == set(MEDIA_METADATA_FIELDS)
+    assert set(SAMPLE_VALUES) == set(MEDIA_METADATA_FIELDS) | {"series_list"}
 
 
 @pytest.mark.parametrize("media", ["ebook", "audiobook"])
-@pytest.mark.parametrize("field", MEDIA_METADATA_FIELDS)
+@pytest.mark.parametrize("field", MEDIA_METADATA_FIELDS + ("series_list",))
 async def test_metadata_field_round_trips(db, editor_client, no_file_writeback, media, field):
     c, headers = editor_client
     row = await _seed(db, media)

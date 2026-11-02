@@ -68,14 +68,22 @@
     "ebook": {
       "title": "The Well of Ascension",
       "author": "Brandon Sanderson",
-      "series": "Mistborn",
-      "series_index": 2
+      "series_list": [
+        {
+          "name": "Mistborn",
+          "index": 2
+        }
+      ]
     },
     "audiobook": {
       "title": "The Well of Ascension",
       "author": "Brandon Sanderson",
-      "series": "Mistborn",
-      "series_index": 2.0
+      "series_list": [
+        {
+          "name": "Mistborn",
+          "index": 2.0
+        }
+      ]
     },
     "expected_score": 100
   },
@@ -85,14 +93,22 @@
     "ebook": {
       "title": "The Final Empire",
       "author": "Brandon Sanderson",
-      "series": "Mistborn",
-      "series_index": "01"
+      "series_list": [
+        {
+          "name": "Mistborn",
+          "index": "01"
+        }
+      ]
     },
     "audiobook": {
       "title": "The Final Empire",
       "author": "Brandon Sanderson",
-      "series": "Mistborn",
-      "series_index": "1.0"
+      "series_list": [
+        {
+          "name": "Mistborn",
+          "index": "1.0"
+        }
+      ]
     },
     "expected_score": 100
   },
@@ -102,14 +118,22 @@
     "ebook": {
       "title": "The Well of Ascension",
       "author": "Brandon Sanderson",
-      "series": "Mistborn",
-      "series_index": "II"
+      "series_list": [
+        {
+          "name": "Mistborn",
+          "index": "II"
+        }
+      ]
     },
     "audiobook": {
       "title": "The Well of Ascension",
       "author": "Brandon Sanderson",
-      "series": "Mistborn",
-      "series_index": 2
+      "series_list": [
+        {
+          "name": "Mistborn",
+          "index": 2
+        }
+      ]
     },
     "expected_score": 100
   },
@@ -119,13 +143,22 @@
     "ebook": {
       "title": "The Well of Ascension",
       "author": "Brandon Sanderson",
-      "series": "Mistborn",
-      "series_index": 2
+      "series_list": [
+        {
+          "name": "Mistborn",
+          "index": 2
+        }
+      ]
     },
     "audiobook": {
       "title": "The Well of Ascension",
       "author": "Brandon Sanderson",
-      "series": "Mistborn"
+      "series_list": [
+        {
+          "name": "Mistborn",
+          "index": null
+        }
+      ]
     },
     "expected_score": 100
   },
@@ -135,14 +168,22 @@
     "ebook": {
       "title": "Fool Moon",
       "author": "Jim Butcher",
-      "series": "The Dresden Files",
-      "series_index": 2
+      "series_list": [
+        {
+          "name": "The Dresden Files",
+          "index": 2
+        }
+      ]
     },
     "audiobook": {
       "title": "Fool Moon",
       "author": "Jim Butcher",
-      "series": "Dresden Files",
-      "series_index": 2
+      "series_list": [
+        {
+          "name": "Dresden Files",
+          "index": 2
+        }
+      ]
     },
     "expected_score": 100
   },
@@ -152,8 +193,12 @@
     "ebook": {
       "title": "Elantris",
       "author": "Brandon Sanderson",
-      "series": "Cosmere",
-      "series_index": 1
+      "series_list": [
+        {
+          "name": "Cosmere",
+          "index": 1
+        }
+      ]
     },
     "audiobook": {
       "title": "Elantris",
@@ -167,14 +212,22 @@
     "ebook": {
       "title": "The Emperor's Soul",
       "author": "Brandon Sanderson",
-      "series": "Elantris",
-      "series_index": 1
+      "series_list": [
+        {
+          "name": "Elantris",
+          "index": 1
+        }
+      ]
     },
     "audiobook": {
       "title": "The Emperor's Soul",
       "author": "Brandon Sanderson",
-      "series": "Elantris",
-      "series_index": 1.5
+      "series_list": [
+        {
+          "name": "Elantris",
+          "index": 1.5
+        }
+      ]
     },
     "expected_score": null
   },
@@ -316,14 +369,22 @@
     "ebook": {
       "title": "The Well of Ascension",
       "author": "Brandon Sanderson",
-      "series": "Mistborn",
-      "series_index": 2
+      "series_list": [
+        {
+          "name": "Mistborn",
+          "index": 2
+        }
+      ]
     },
     "audiobook": {
       "title": "The Well of Ascension",
       "author": "Brandon Sanderson",
-      "series": "Mistborn",
-      "series_index": 5
+      "series_list": [
+        {
+          "name": "Mistborn",
+          "index": 5
+        }
+      ]
     },
     "expected_score": null
   },
@@ -333,14 +394,22 @@
     "ebook": {
       "title": "Homecoming",
       "author": "Some Author",
-      "series": "Wheel of Time",
-      "series_index": 3
+      "series_list": [
+        {
+          "name": "Wheel of Time",
+          "index": 3
+        }
+      ]
     },
     "audiobook": {
       "title": "Homecoming",
       "author": "Some Author",
-      "series": "Stormlight Archive",
-      "series_index": 3
+      "series_list": [
+        {
+          "name": "Stormlight Archive",
+          "index": 3
+        }
+      ]
     },
     "expected_score": null
   },
@@ -402,13 +471,22 @@
     "ebook": {
       "title": "Book Title",
       "author": "Some Author",
-      "series": "Some Chronicles",
-      "series_index": 4
+      "series_list": [
+        {
+          "name": "Some Chronicles",
+          "index": 4
+        }
+      ]
     },
     "audiobook": {
       "title": "Book Title",
       "author": "Some Author",
-      "series": "Book Title"
+      "series_list": [
+        {
+          "name": "Book Title",
+          "index": null
+        }
+      ]
     },
     "expected_score": 100
   },
@@ -418,14 +496,22 @@
     "ebook": {
       "title": "First Book",
       "author": "Some Author",
-      "series": "Soldier Saga",
-      "series_index": 1
+      "series_list": [
+        {
+          "name": "Soldier Saga",
+          "index": 1
+        }
+      ]
     },
     "audiobook": {
       "title": "First Book",
       "author": "Some Author",
-      "series": "Soldier Saga Trilogy",
-      "series_index": 1
+      "series_list": [
+        {
+          "name": "Soldier Saga Trilogy",
+          "index": 1
+        }
+      ]
     },
     "expected_score": 100
   },
@@ -435,14 +521,22 @@
     "ebook": {
       "title": "First Book",
       "author": "Some Author",
-      "series": "Soldier Saga",
-      "series_index": 1
+      "series_list": [
+        {
+          "name": "Soldier Saga",
+          "index": 1
+        }
+      ]
     },
     "audiobook": {
       "title": "First Book",
       "author": "Some Author",
-      "series": "Soldier Saga Trilogy",
-      "series_index": 2
+      "series_list": [
+        {
+          "name": "Soldier Saga Trilogy",
+          "index": 2
+        }
+      ]
     },
     "expected_score": null
   },
@@ -452,12 +546,22 @@
     "ebook": {
       "title": "First Book",
       "author": "Some Author",
-      "series": "Soldier Saga"
+      "series_list": [
+        {
+          "name": "Soldier Saga",
+          "index": null
+        }
+      ]
     },
     "audiobook": {
       "title": "First Book",
       "author": "Some Author",
-      "series": "Harbour Tales"
+      "series_list": [
+        {
+          "name": "Harbour Tales",
+          "index": null
+        }
+      ]
     },
     "expected_score": null
   },
@@ -467,15 +571,199 @@
     "ebook": {
       "title": "Book Title",
       "author": "Some Author",
-      "series": "Other Saga",
-      "series_index": 1
+      "series_list": [
+        {
+          "name": "Other Saga",
+          "index": 1
+        }
+      ]
     },
     "audiobook": {
       "title": "Book Title",
       "author": "Some Author",
-      "series": "Book Title",
-      "series_index": 1
+      "series_list": [
+        {
+          "name": "Book Title",
+          "index": 1
+        }
+      ]
     },
     "expected_score": null
+  },
+  {
+    "name": "several_series_share_one_with_a_matching_index",
+    "why": "A book in two series pairs with a book that names just one of them, when that one agrees on the index (issue #905). The other series is not a conflict.",
+    "ebook": {
+      "title": "The Well of Ascension",
+      "author": "Brandon Sanderson",
+      "series_list": [
+        {
+          "name": "Axis Saga",
+          "index": 4
+        },
+        {
+          "name": "Axis Chronological",
+          "index": 2
+        }
+      ]
+    },
+    "audiobook": {
+      "title": "The Well of Ascension",
+      "author": "Brandon Sanderson",
+      "series_list": [
+        {
+          "name": "Axis Chronological",
+          "index": 2
+        }
+      ]
+    },
+    "expected_score": 100
+  },
+  {
+    "name": "shared_series_name_with_a_conflicting_index_does_not_count",
+    "why": "A name that matches but disagrees on the index is a different book and does not count as shared; the other, unshared series cannot rescue it (issue #905).",
+    "ebook": {
+      "title": "The Well of Ascension",
+      "author": "Brandon Sanderson",
+      "series_list": [
+        {
+          "name": "Axis Saga",
+          "index": 1
+        },
+        {
+          "name": "Axis Chronological",
+          "index": 2
+        }
+      ]
+    },
+    "audiobook": {
+      "title": "The Well of Ascension",
+      "author": "Brandon Sanderson",
+      "series_list": [
+        {
+          "name": "Axis Saga",
+          "index": 5
+        }
+      ]
+    },
+    "expected_score": null
+  },
+  {
+    "name": "a_second_shared_series_rescues_a_conflict_on_the_first",
+    "why": "Two series in common: one conflicts on the index, the other agrees. One compatible pair is enough (issue #905).",
+    "ebook": {
+      "title": "The Well of Ascension",
+      "author": "Brandon Sanderson",
+      "series_list": [
+        {
+          "name": "Axis Saga",
+          "index": 1
+        },
+        {
+          "name": "Axis Chronological",
+          "index": 2
+        }
+      ]
+    },
+    "audiobook": {
+      "title": "The Well of Ascension",
+      "author": "Brandon Sanderson",
+      "series_list": [
+        {
+          "name": "Axis Saga",
+          "index": 5
+        },
+        {
+          "name": "Axis Chronological",
+          "index": 2
+        }
+      ]
+    },
+    "expected_score": 100
+  },
+  {
+    "name": "several_series_and_none_in_common_are_rejected",
+    "why": "Both sides name series, none of them the same: different books (the single-series rule, applied to lists; issue #905).",
+    "ebook": {
+      "title": "The Well of Ascension",
+      "author": "Brandon Sanderson",
+      "series_list": [
+        {
+          "name": "Axis Saga",
+          "index": 1
+        },
+        {
+          "name": "Axis Chronological",
+          "index": 1
+        }
+      ]
+    },
+    "audiobook": {
+      "title": "The Well of Ascension",
+      "author": "Brandon Sanderson",
+      "series_list": [
+        {
+          "name": "Harbour Tales",
+          "index": 1
+        },
+        {
+          "name": "Lantern Cycle",
+          "index": 1
+        }
+      ]
+    },
+    "expected_score": null
+  },
+  {
+    "name": "several_series_on_one_side_and_none_on_the_other",
+    "why": "A side with no series is missing metadata, however many the other side lists (issue #905).",
+    "ebook": {
+      "title": "The Well of Ascension",
+      "author": "Brandon Sanderson",
+      "series_list": [
+        {
+          "name": "Axis Saga",
+          "index": 1
+        },
+        {
+          "name": "Axis Chronological",
+          "index": 2
+        }
+      ]
+    },
+    "audiobook": {
+      "title": "The Well of Ascension",
+      "author": "Brandon Sanderson"
+    },
+    "expected_score": 100
+  },
+  {
+    "name": "an_own_title_entry_among_several_is_ignored",
+    "why": "A series that is really the book's own folder name is dropped from the list before comparing, so the real series still decides (issue #905, #712).",
+    "ebook": {
+      "title": "The Well of Ascension",
+      "author": "Brandon Sanderson",
+      "series_list": [
+        {
+          "name": "The Well of Ascension",
+          "index": null
+        },
+        {
+          "name": "Axis Saga",
+          "index": 2
+        }
+      ]
+    },
+    "audiobook": {
+      "title": "The Well of Ascension",
+      "author": "Brandon Sanderson",
+      "series_list": [
+        {
+          "name": "Axis Saga",
+          "index": 2
+        }
+      ]
+    },
+    "expected_score": 100
   }
 ]

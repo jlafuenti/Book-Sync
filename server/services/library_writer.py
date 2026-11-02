@@ -24,6 +24,7 @@ from config import settings
 from models.settings import SystemSetting
 from routers.settings import DEFAULT_SETTINGS
 from services.file_mode import apply_default_mode
+from services.series import entries_of, primary
 
 logger = logging.getLogger(__name__)
 
@@ -63,7 +64,9 @@ def render_template(template: str, meta: dict) -> str:
     bracketed group `[...]` becomes empty as a result, the brackets are
     removed too. Repeated whitespace is collapsed.
     """
-    series_idx = meta.get("series_index")
+    # Only the primary series can name a file: a path has room for one series
+    # folder (issue #905).
+    series_name, series_idx = primary(entries_of(meta))
     if isinstance(series_idx, float) and series_idx.is_integer():
         series_idx = str(int(series_idx))
     elif series_idx is not None:
@@ -71,7 +74,7 @@ def render_template(template: str, meta: dict) -> str:
 
     token_values = {
         "<Author>": meta.get("author"),
-        "<Series>": meta.get("series"),
+        "<Series>": series_name,
         "<Book Number>": series_idx,
         "<Series Index>": series_idx,
         "<Title>": meta.get("title"),
@@ -126,7 +129,7 @@ async def place_file(
         book_type: 'ebook' or 'audiobook'
         source_path: absolute path to the source file (e.g. a temp file from a sync)
         extension: target extension including the dot (e.g. '.epub', '.m4b')
-        meta: dict with keys: title, author, series, series_index
+        meta: dict with keys: title, author, series_list
         move: if True, move; if False, copy.
 
     Returns the absolute destination path.

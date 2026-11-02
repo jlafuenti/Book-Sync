@@ -18,6 +18,23 @@ operator must do by hand rather than read about afterwards.
 
 ### Changed
 
+- A book can now belong to several series (#905), such as a Discworld book that is also in its
+  Witches sub-series. Each ebook and audiobook keeps an ordered list of `{name, index}` entries,
+  and the first is its primary series. The API field is `series_list` on the ebook, audiobook and
+  match-result objects and on the metadata PATCH body, which also takes `series_add` to append
+  names a book lacks. The old single `series` and `series_index` fields are gone. A normal scan
+  still fills only a book with no series; a rescan or an Audiobookshelf enrich now adds the names
+  a book is missing, keeps its order and edits, and never removes one. A series you cleared stays
+  cleared. The library list, search, the `?series=` filter and the series facet look at every
+  series on either half of a pair, and auto-pairing accepts two books when any one of their
+  series agrees. The pair-discrepancy view compares the whole list as one `series` field.
+- Series are written to and read from files in the formats Audiobookshelf uses (#905). EPUBs get
+  one `calibre:series` meta per series, each followed by its `calibre:series_index`, and EPUB3
+  `belongs-to-collection` series are read too. Audio files get the grouping tag as `Name #1;
+  Other #2.5`, `SERIES` as the names joined by `; `, and `SERIES-PART` as the indexes joined the
+  same way, written only when every series has an index. A `;` inside a series name is written as
+  a comma. Audiobookshelf's library listing carries the series only as one comma-joined string,
+  so a series name that contains a comma is read as two (the same limit Audiobookshelf has).
 - The web app shows, edits and browses several series per book (#907). Library cards and rows
   show the primary series with a `+N` for the rest, the book page links every series (each to
   the Library filtered to it, with its own book number), and the Series page lists a book under
@@ -66,6 +83,15 @@ operator must do by hand rather than read about afterwards.
 
 ### Upgrade notes
 
+- Migration `0034_series_entries` runs when the server starts: it moves each book's series into
+  the new `ebook_series` and `audiobook_series` tables and turns the old "cleared" marker into a
+  `series_cleared` flag. No manual step. It drops the old `series` and `series_index` columns, so
+  rolling back means running the downgrade, which keeps only each book's primary series.
+- Android builds older than the release that carries #908 do not know `series_list`, so they show
+  no series (and no series grouping) until updated. Nothing else about them changes.
+- Files are not rewritten on upgrade: a book's file tags change to the new multi-series format
+  only the next time it is edited or enriched. Files that already carry one series read back
+  exactly as before.
 - Files already at `0600` from the #885 bug stay that way, because a rewrite now keeps the mode it
   finds. If another user needs to read them, run this over the library folders once:
   `find <library> -type f -perm 600 -exec chmod 644 {} +`. A library that every program reads as
