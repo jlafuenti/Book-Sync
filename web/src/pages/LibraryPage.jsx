@@ -444,7 +444,7 @@ function LibraryPage({ tab }) {
     const refreshAll = useCallback(async () => {
         setFacetsTick(t => t + 1)
         await Promise.all([browse.reload(), loadProgress()])
-    }, [browse.reload, loadProgress])
+    }, [browse.reload, loadProgress]) // eslint-disable-line react-hooks/exhaustive-deps
 
     const counts = (facets || EMPTY_FACETS).counts
     const allAuthors = useMemo(() => (facets || EMPTY_FACETS).authors.map(a => a.name), [facets])
@@ -838,7 +838,7 @@ function LibraryPage({ tab }) {
             books: filteredBooks.filter(b => b.mediaType === type && ids.has(b.id)),
             bookType: type,
         }
-    }, [selectedIds, filteredBooks])
+    }, [selectedIds, filteredBooks]) // eslint-disable-line react-hooks/exhaustive-deps
 
     // ---- Render ----
 
