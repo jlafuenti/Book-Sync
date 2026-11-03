@@ -28,7 +28,10 @@ import com.booksync.data.util.NetworkMonitor
 import com.booksync.worker.DownloadWorker
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -62,6 +65,9 @@ data class HomeItem(
     val ebookDownloaded: Boolean = false,
     val audiobookDownloaded: Boolean = false,
     val seriesList: List<SeriesEntry> = emptyList(),
+    // Set only on cards of the Next up carousel: the series the card is there for,
+    // which "Remove from Next up" removes (issue #923).
+    val nextUpSeries: String? = null,
 ) {
     enum class MediaType { PAIR, EBOOK, AUDIOBOOK }
 }
@@ -80,6 +86,11 @@ data class HomeItem(
  * truly are zero books".
  */
 enum class HomeLibraryState { LOADING, EMPTY, HAS_BOOKS }
+
+/** What Home's snackbar announces after a Next up action (issue #923). */
+sealed interface NextUpEvent {
+    data class Removed(val series: String) : NextUpEvent
+}
 
 /** One row in the "In Queue" section. */
 data class HomeQueueItem(
@@ -354,9 +365,29 @@ class HomeViewModel @Inject constructor(
             repository.getAllProgressFlow(),
             repository.getAllBookmarksFlow(),
         ) { pairs, ebooks, audiobooks, progress, bookmarks ->
-            val (books, activity) = libraryToNextUpInput(pairs, ebooks, audiobooks, progress, bookmarks)
-            computeNextUp(books, activity, System.currentTimeMillis()).map { it.toHomeItem() }
+            libraryToNextUpInput(pairs, ebooks, audiobooks, progress, bookmarks)
+        }.combine(repository.getNextUpDismissalsFlow()) { (books, activity), dismissals ->
+            computeNextUp(
+                books, activity, System.currentTimeMillis(),
+                dismissals.map { NextUpDismissal(it.series, it.dismissedAtMs) },
+            ).map { it.toHomeItem() }
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), emptyList())
+
+    /** One-shot events from Next up actions, shown as a snackbar by the screen. */
+    private val _nextUpEvents = Channel<NextUpEvent>(Channel.BUFFERED)
+    val nextUpEvents: Flow<NextUpEvent> = _nextUpEvents.receiveAsFlow()
+
+    /** Drop [series] from Next up now; the screen offers Undo (issue #923). */
+    fun removeFromNextUp(series: String) {
+        viewModelScope.launch {
+            try {
+                repository.dismissNextUp(series)
+            } catch (_: Exception) { /* local-first; the next refresh settles it */ }
+            _nextUpEvents.send(NextUpEvent.Removed(series))
+        }
+    }
+
+    fun undoRemoveFromNextUp(series: String) = runSafely { repository.undoDismissNextUp(series) }
 
     // --- New Pairs ----------------------------------------------------------
     val newPairs: StateFlow<List<BookPairEntity>> =

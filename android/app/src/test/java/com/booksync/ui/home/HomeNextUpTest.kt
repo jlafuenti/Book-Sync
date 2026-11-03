@@ -58,6 +58,7 @@ class HomeNextUpTest {
         every { repository.getRecentlyPlayedStandaloneAudiobooksFlow() } returns flowOf(emptyList())
         every { repository.getRecentlyReadEbooksFlow() } returns flowOf(emptyList())
         every { repository.getAllBookmarksFlow() } returns flowOf(emptyList())
+        every { repository.getNextUpDismissalsFlow() } returns flowOf(emptyList())
     }
 
     @After

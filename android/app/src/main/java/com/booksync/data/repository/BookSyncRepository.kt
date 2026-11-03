@@ -522,6 +522,20 @@ class BookSyncRepository @Inject constructor(
     /** See [LibraryRepository.acknowledgeItems]. */
     suspend fun acknowledgeItems(ids: List<Int>, type: String) = library.acknowledgeItems(ids, type)
 
+    // ============ Next up dismissals (issue #923) ============
+
+    /** See [LibraryRepository.getNextUpDismissalsFlow]. */
+    fun getNextUpDismissalsFlow(): Flow<List<NextUpDismissalEntity>> = library.getNextUpDismissalsFlow()
+
+    /** See [LibraryRepository.refreshNextUpDismissals]. */
+    suspend fun refreshNextUpDismissals() = library.refreshNextUpDismissals()
+
+    /** See [LibraryRepository.dismissNextUp]. */
+    suspend fun dismissNextUp(series: String) = library.dismissNextUp(series)
+
+    /** See [LibraryRepository.undoDismissNextUp]. */
+    suspend fun undoDismissNextUp(series: String) = library.undoDismissNextUp(series)
+
     // ============ Transcription — delegated to TranscriptionRepository (issue #536) ============
 
     /** See [TranscriptionRepository.readiness]. */

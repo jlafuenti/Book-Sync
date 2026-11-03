@@ -191,6 +191,19 @@ interface BookSyncApi {
     @POST("api/library/new-pairs/acknowledge")
     suspend fun acknowledgeNewPairs(@Body request: AcknowledgePairsRequest): AcknowledgeResponse
 
+    // ---- Next up dismissals (issue #923) ----
+    // Per account on the server; the phone replaces its local table from the
+    // GET on every library refresh.
+
+    @GET("api/next-up/dismissals")
+    suspend fun getNextUpDismissals(): List<NextUpDismissalDto>
+
+    @POST("api/next-up/dismissals")
+    suspend fun dismissNextUp(@Body request: NextUpDismissalRequest): NextUpDismissalDto
+
+    @DELETE("api/next-up/dismissals")
+    suspend fun undoDismissNextUp(@Query("series") series: String): Response<Unit>
+
     // ============ Search ============
 
     @GET("api/library/search")

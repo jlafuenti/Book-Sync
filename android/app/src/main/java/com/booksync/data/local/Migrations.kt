@@ -300,3 +300,16 @@ val MIGRATION_24_25 = object : Migration(24, 25) {
         db.execSQL("ALTER TABLE book_pairs_new RENAME TO book_pairs")
     }
 }
+
+/**
+ * v25 -> v26: `next_up_dismissals`, the series removed from Home's "Next up" row
+ * (issue #923). Purely additive. The CREATE statement is Room's own for schema 26
+ * (see `schemas/.../26.json`).
+ */
+val MIGRATION_25_26 = object : Migration(25, 26) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `next_up_dismissals` (`seriesKey` TEXT NOT NULL, `series` TEXT NOT NULL, `dismissedAtMs` INTEGER NOT NULL, PRIMARY KEY(`seriesKey`))"
+        )
+    }
+}
