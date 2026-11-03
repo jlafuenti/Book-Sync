@@ -381,6 +381,26 @@ def test_mp4_cleared_series_and_description_delete_the_tags(audio, monkeypatch):
 
     assert tags.saved
     assert set(tags) == {"\xa9nam", "\xa9alb"}
+    assert tags["\xa9alb"] == ["T"]
+
+
+def test_mp4_title_write_sets_the_album_to_the_title(audio, monkeypatch):
+    """#929: the album is the book's title, so a series name left there by a
+    ripper is replaced, as the MP3 and FLAC writers do (#886)."""
+    tags = _opened(monkeypatch, MP4({"\xa9alb": ["Saga"]}))
+
+    tag_writer.write_audiobook_metadata(audio, _book(title="Book Two", series="Saga", series_index=2.0))
+
+    assert tags["\xa9alb"] == ["Book Two"]
+    assert tags["\xa9grp"] == ["Saga #2"]
+
+
+def test_mp4_write_without_a_title_leaves_the_album_alone(audio, monkeypatch):
+    tags = _opened(monkeypatch, MP4({"\xa9alb": ["Saga"]}))
+
+    tag_writer.write_audiobook_metadata(audio, _book(title=None, author="A"))
+
+    assert tags["\xa9alb"] == ["Saga"]
 
 
 def test_mp3_id3_frames_are_written_and_tags_created_when_absent(audio, monkeypatch):

@@ -337,6 +337,11 @@ def _write_tags(filepath: str, file_meta: dict) -> tuple[bool, Optional[str]]:
             del audio[tag]
 
     _set("\xa9nam", file_meta.get("title"))
+    # The album is the title too: Readarr-style managers identify the book by
+    # it, and a series name left there re-files the book (#929). With no title
+    # the album is left alone.
+    if file_meta.get("title"):
+        audio["\xa9alb"] = [str(file_meta["title"])]
     _set("\xa9ART", file_meta.get("author"))
     _set("\xa9des", file_meta.get("description"))
     _set(

@@ -71,6 +71,9 @@ operator must do by hand rather than read about afterwards.
 
 ### Fixed
 
+- M4B write-back now writes the album as the book's title, as MP3 and FLAC have since #886, so
+  Readarr-style managers keep the file on the right book instead of re-filing it under a series
+  name left in the album (#929).
 - Library files Tandem rewrites keep their mode instead of ending up `0600` (#885). An EPUB
   metadata write-back or a chapter remux replaced the file with a temp file created as `0600`, so
   any program reading the library as a different user lost access to it. A rewritten file now
