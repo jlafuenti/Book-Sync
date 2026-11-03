@@ -32,6 +32,13 @@ import com.booksync.data.repository.lastPlayedAtMs
  *   It is suggested once: after the stable sort by last activity, a row whose
  *   next book already appeared in an earlier row is dropped. So the more
  *   recently active series keeps it, and on a tie the series listed first.
+ * - A series can be **removed** from Next up (#920). `dismissals` holds one
+ *   [NextUpDismissal] per removal; a row is dropped when a dismissal for its series
+ *   (matched like series names: trimmed, case-insensitive) is at or after the row's
+ *   last activity. Activity strictly after the removal brings the row back. The
+ *   drop happens before the cross-series dedupe, so a book kept under a removed
+ *   series falls through to its other series. A dismissal names a series, never a
+ *   book, so it never changes which book is next.
  */
 const val NEXT_UP_WINDOW_DAYS = 90L
 
@@ -52,6 +59,9 @@ data class NextUpBook(
 
 data class NextUpActivity(val key: String, val completed: Boolean, val atMs: Long)
 
+/** A series the reader removed from Next up, and when (epoch ms). */
+data class NextUpDismissal(val series: String, val atMs: Long)
+
 data class NextUpRow(val series: String, val book: NextUpBook, val lastActivityMs: Long)
 
 private fun normalizeSeries(name: String?) = name?.trim()?.lowercase().orEmpty()
@@ -63,23 +73,36 @@ private fun tieRank(key: String): Pair<Int, Int> {
     return rank to id
 }
 
-fun computeNextUp(books: List<NextUpBook>, activity: List<NextUpActivity>, nowMs: Long): List<NextUpRow> {
+fun computeNextUp(
+    books: List<NextUpBook>,
+    activity: List<NextUpActivity>,
+    nowMs: Long,
+    dismissals: List<NextUpDismissal> = emptyList(),
+): List<NextUpRow> {
     val lastByKey = HashMap<String, Long>()
     for (a in activity) {
         if (a.atMs <= 0L) continue
         lastByKey[a.key] = maxOf(lastByKey[a.key] ?: Long.MIN_VALUE, a.atMs)
     }
 
+    val dismissedAt = HashMap<String, Long>()
+    for (d in dismissals) {
+        val s = normalizeSeries(d.series)
+        if (s.isEmpty()) continue
+        dismissedAt[s] = maxOf(dismissedAt[s] ?: Long.MIN_VALUE, d.atMs)
+    }
+
     val cutoff = nowMs - NEXT_UP_WINDOW_DAYS * DAY_MS
     val rows = mutableListOf<NextUpRow>()
-    for (members in books.filter { normalizeSeries(it.series).isNotEmpty() }
-        .groupBy { normalizeSeries(it.series) }.values
+    for ((seriesKey, members) in books.filter { normalizeSeries(it.series).isNotEmpty() }
+        .groupBy { normalizeSeries(it.series) }
     ) {
         val touched = members.filter { it.key in lastByKey }
         if (touched.isEmpty()) continue
 
         val lastActivity = touched.maxOf { lastByKey.getValue(it.key) }
         if (lastActivity < cutoff) continue
+        if ((dismissedAt[seriesKey] ?: Long.MIN_VALUE) >= lastActivity) continue
 
         val frontier = touched.mapNotNull { it.index }.maxOrNull() ?: continue
 
