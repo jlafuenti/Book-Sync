@@ -16,6 +16,10 @@ operator must do by hand rather than read about afterwards.
 
 ## [Unreleased]
 
+### Added
+
+- Next up removals are remembered per account: `GET`/`POST`/`DELETE /api/next-up/dismissals` (#921).
+
 ### Changed
 
 - With the Library filtered to a series (`?series=`), each card and row now shows that series and
@@ -99,6 +103,7 @@ operator must do by hand rather than read about afterwards.
 
 ### Upgrade notes
 
+- Migration 0035 adds `next_up_dismissals`; it runs on start.
 - Migration `0034_series_entries` runs when the server starts: it moves each book's series into
   the new `ebook_series` and `audiobook_series` tables and turns the old "cleared" marker into a
   `series_cleared` flag. No manual step. It drops the old `series` and `series_index` columns, so

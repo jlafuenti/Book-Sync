@@ -3217,6 +3217,38 @@
         "title": "NewItemsResponse",
         "type": "object"
       },
+      "NextUpDismissalCreate": {
+        "properties": {
+          "series": {
+            "title": "Series",
+            "type": "string"
+          }
+        },
+        "required": [
+          "series"
+        ],
+        "title": "NextUpDismissalCreate",
+        "type": "object"
+      },
+      "NextUpDismissalResponse": {
+        "properties": {
+          "dismissed_at": {
+            "format": "date-time",
+            "title": "Dismissed At",
+            "type": "string"
+          },
+          "series": {
+            "title": "Series",
+            "type": "string"
+          }
+        },
+        "required": [
+          "series",
+          "dismissed_at"
+        ],
+        "title": "NextUpDismissalResponse",
+        "type": "object"
+      },
       "OffHoursStatusResponse": {
         "description": "Current state of the off-hours transcription window.",
         "properties": {
@@ -10702,6 +10734,119 @@
           }
         },
         "summary": "Livez"
+      }
+    },
+    "/api/next-up/dismissals": {
+      "delete": {
+        "operationId": "remove_dismissal_api_next_up_dismissals_delete",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "series",
+            "required": true,
+            "schema": {
+              "maxLength": 500,
+              "title": "Series",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Remove Dismissal",
+        "tags": [
+          "next-up"
+        ]
+      },
+      "get": {
+        "operationId": "list_dismissals_api_next_up_dismissals_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/NextUpDismissalResponse"
+                  },
+                  "title": "Response List Dismissals Api Next Up Dismissals Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "List Dismissals",
+        "tags": [
+          "next-up"
+        ]
+      },
+      "post": {
+        "operationId": "add_dismissal_api_next_up_dismissals_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NextUpDismissalCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NextUpDismissalResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Add Dismissal",
+        "tags": [
+          "next-up"
+        ]
       }
     },
     "/api/settings/": {
