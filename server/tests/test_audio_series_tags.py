@@ -112,7 +112,7 @@ def _read_all(path):
     return _read_embedded_metadata(path, "audiobook").get("series_list")
 
 
-@pytest.mark.parametrize("ext", ["mp3", "flac"])
+@pytest.mark.parametrize("ext", ["mp3", "flac", "m4b"])
 def test_series_goes_to_grouping_and_the_album_is_the_title(tmp_path, ext):
     path = _file(tmp_path, ext, album="Ripper Album")
 
@@ -164,12 +164,25 @@ def test_clearing_the_series_survives_a_rescan_and_keeps_the_album(tmp_path, ext
     assert _read(path)[0] is None
 
 
-def test_m4b_clearing_the_series_leaves_an_unrelated_album_alone(tmp_path):
+def test_m4b_clearing_the_series_rewrites_the_album_to_the_title(tmp_path):
+    """#929: an M4B whose album carries a series name (or anything else) gets
+    the title there on every title write, as MP3 and FLAC do since #886 --
+    otherwise a Readarr-style manager re-files the book under the series."""
     path = _file(tmp_path, "m4b", album="Collected Edition")
 
     tag_writer.write_audiobook_metadata(path, _book(title="Book Two", series=""))
 
+    assert _album(path) == "Book Two"
+
+
+def test_m4b_write_without_a_title_leaves_the_album_alone(tmp_path):
+    """No title written, no opinion on the album: it is never deleted (#929)."""
+    path = _file(tmp_path, "m4b", album="Collected Edition")
+
+    tag_writer.write_audiobook_metadata(path, _book(title=None, series="Saga", series_index=2.0))
+
     assert _album(path) == "Collected Edition"
+    assert _read(path) == ("Saga", 2.0)
 
 
 @pytest.mark.parametrize("ext", ["mp3", "flac"])
@@ -195,7 +208,7 @@ def test_a_file_already_hand_fixed_reads_its_series_from_grouping(tmp_path, ext)
     assert _read(path) == ("Saga", 2.0)
 
 
-@pytest.mark.parametrize("ext", ["mp3", "flac"])
+@pytest.mark.parametrize("ext", ["mp3", "flac", "m4b"])
 def test_rewriting_a_file_from_before_the_fix_moves_the_series_off_the_album(tmp_path, ext):
     path = _file(tmp_path, ext, title="Book Two", album="Saga")
 

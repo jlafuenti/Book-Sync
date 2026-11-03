@@ -344,8 +344,9 @@ def apply_mp4_series(audio, entries) -> None:
     ``A #1; B #2``, ``SERIES`` as the names, ``SERIES-PART`` as the indexes
     (deleted unless every entry has one). Empty entries delete all three.
 
-    Never ``©alb``: that is the book's title to Readarr-style tools (#886), and
-    the reader takes no series from it. Shared with the ABS write-back.
+    Does not touch ``©alb``: that is the book's title to Readarr-style tools
+    (#886, #929), so the callers write it as the title whenever they write one,
+    and the reader takes no series from it. Shared with the ABS write-back.
     """
     grouping, names, parts = tag_values(entries)
     if not grouping:
@@ -383,7 +384,12 @@ def write_audiobook_metadata(filepath: str, book) -> None:
         
         if audio_type in ('MP4', 'M4A'):
             # iTunes-style atoms for M4B/M4A
-            if book.title is not None: audio['\xa9nam'] = [book.title]
+            if book.title is not None:
+                audio['\xa9nam'] = [book.title]
+                # Readarr-style managers identify the book by its album, so it
+                # is the title, never a series name a ripper left there (#929).
+                # No title written means the album is left alone.
+                audio['\xa9alb'] = [book.title]
             if book.author is not None: audio['\xa9ART'] = [book.author]
             # Write series to the tags that extract_metadata reads (©grp, SERIES
             # and SERIES-PART atoms) so that clearing series actually takes

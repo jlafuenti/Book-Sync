@@ -412,3 +412,21 @@ def test_write_tags_still_clears_a_series_the_user_cleared(fake_mp4_file):
     assert "©grp" not in audio
     assert "----:com.apple.iTunes:SERIES" not in audio
     assert "----:com.apple.iTunes:SERIES-PART" not in audio
+
+
+def test_write_tags_sets_the_album_to_the_title(fake_mp4_file):
+    """#929: a series name left in the album by a ripper is replaced by the
+    title, so a Readarr-style manager keeps the file on the right book."""
+    path, audio = fake_mp4_file({"\xa9alb": ["Millennium's Rule"]})
+
+    abs_metadata.write_metadata_to_file(str(path), {"title": "Successor's Promise"})
+
+    assert audio["\xa9alb"] == ["Successor's Promise"]
+
+
+def test_write_tags_leaves_the_album_alone_without_a_title(fake_mp4_file):
+    path, audio = fake_mp4_file({"\xa9alb": ["Millennium's Rule"]})
+
+    abs_metadata.write_metadata_to_file(str(path), {"author": "Ann Axis"})
+
+    assert audio["\xa9alb"] == ["Millennium's Rule"]
