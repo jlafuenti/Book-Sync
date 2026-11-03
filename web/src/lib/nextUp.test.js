@@ -15,7 +15,9 @@ const CASES = JSON.parse(fs.readFileSync(FIXTURE, 'utf-8'))
 
 describe('computeNextUp parity vectors', () => {
     it.each(CASES.map(c => [c.name, c]))('%s', (_name, testCase) => {
-        const result = computeNextUp(testCase.books, testCase.activity, new Date(testCase.now))
+        const result = computeNextUp(
+            testCase.books, testCase.activity, new Date(testCase.now), testCase.dismissals ?? [],
+        )
 
         expect(result.map(r => ({ series: r.series, key: r.key }))).toEqual(testCase.expected)
     })
@@ -24,6 +26,22 @@ describe('computeNextUp parity vectors', () => {
 describe('computeNextUp', () => {
     it('uses a 90-day window, the owner-chosen value', () => {
         expect(NEXT_UP_WINDOW_DAYS).toBe(90)
+    })
+
+    it('drops a series whose dismissal is at or after its last activity, and restores it after later activity', () => {
+        const books = [
+            { key: 'ebook_1', series: 'Axis Saga', index: 1 },
+            { key: 'ebook_2', series: 'Axis Saga', index: 2 },
+        ]
+        const now = new Date('2026-09-26T00:00:00Z')
+        const activity = [{ key: 'ebook_1', completed: true, at: '2026-09-20T00:00:00Z' }]
+        const dismissals = [{ series: ' axis SAGA ', at: '2026-09-21T00:00:00Z' }]
+
+        expect(computeNextUp(books, activity, now, dismissals)).toEqual([])
+        expect(computeNextUp(books, activity, now)).toHaveLength(1)
+        expect(computeNextUp(
+            books, [{ key: 'ebook_1', completed: true, at: '2026-09-22T00:00:00Z' }], now, dismissals,
+        )).toHaveLength(1)
     })
 
     it('hands back the whole book object, so the caller can draw and open it', () => {

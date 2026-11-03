@@ -37,20 +37,37 @@ function tieRank(key) {
  *   It is suggested once: after the stable sort by last activity, a row whose
  *   next book already appeared in an earlier row is dropped. So the more
  *   recently active series keeps it, and on a tie the series listed first.
+ * - A series can be **removed** from Next up (#920). `dismissals` holds one
+ *   `{series, at}` per removal; a row is dropped when a dismissal for its series
+ *   (matched like series names: trimmed, case-insensitive) has `at` at or after
+ *   the row's last activity. Activity strictly after the removal brings the row
+ *   back. The drop happens before the cross-series dedupe, so a book kept under
+ *   a removed series falls through to its other series. A dismissal names a
+ *   series, never a book, so it never changes which book is next.
  *
  * @param {Array<{key: string, series: ?string, index: ?number}>} books
  *   every book in the library; extra fields ride along to `row.book`.
  * @param {Array<{key: string, completed: boolean, at: string}>} activity
  *   one entry per progress record, keyed like `books`; `at` may be naive UTC.
  * @param {Date} now
+ * @param {Array<{series: string, at: string|Date}>} [dismissals]
+ *   series removed from Next up; `at` is parsed like activity `at`.
  * @returns {Array<{series: string, key: string, book: object, lastActivity: number}>}
  */
-export function computeNextUp(books, activity, now) {
+export function computeNextUp(books, activity, now, dismissals = []) {
     const lastByKey = new Map()
     for (const a of activity) {
         const at = parseServerDate(a.at)?.getTime()
         if (at == null || Number.isNaN(at)) continue
         lastByKey.set(a.key, Math.max(lastByKey.get(a.key) ?? -Infinity, at))
+    }
+
+    const dismissedAt = new Map()
+    for (const d of dismissals) {
+        const at = parseServerDate(d.at)?.getTime()
+        const s = normalizeSeries(d.series)
+        if (!s || at == null || Number.isNaN(at)) continue
+        dismissedAt.set(s, Math.max(dismissedAt.get(s) ?? -Infinity, at))
     }
 
     const groups = new Map()
@@ -63,12 +80,13 @@ export function computeNextUp(books, activity, now) {
 
     const cutoff = now.getTime() - NEXT_UP_WINDOW_DAYS * DAY_MS
     const rows = []
-    for (const members of groups.values()) {
+    for (const [seriesKey, members] of groups) {
         const touched = members.filter(b => lastByKey.has(b.key))
         if (touched.length === 0) continue
 
         const lastActivity = Math.max(...touched.map(b => lastByKey.get(b.key)))
         if (lastActivity < cutoff) continue
+        if ((dismissedAt.get(seriesKey) ?? -Infinity) >= lastActivity) continue
 
         const placed = touched.filter(b => b.index != null)
         if (placed.length === 0) continue

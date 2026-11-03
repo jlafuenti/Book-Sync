@@ -60,12 +60,19 @@ class NextUpParityTest {
                     atMs = Instant.parse(o["at"]!!.jsonPrimitive.content).toEpochMilli(),
                 )
             }
+            val dismissals = case["dismissals"]?.jsonArray.orEmpty().map { d ->
+                val o = d.jsonObject
+                NextUpDismissal(
+                    series = o["series"]!!.jsonPrimitive.content,
+                    atMs = Instant.parse(o["at"]!!.jsonPrimitive.content).toEpochMilli(),
+                )
+            }
             val now = Instant.parse(case["now"]!!.jsonPrimitive.content).toEpochMilli()
             val expected = case["expected"]!!.jsonArray.map { e ->
                 e.jsonObject["series"]!!.jsonPrimitive.content to e.jsonObject["key"]!!.jsonPrimitive.content
             }
 
-            val actual = computeNextUp(books, activity, now).map { it.series to it.book.key }
+            val actual = computeNextUp(books, activity, now, dismissals).map { it.series to it.book.key }
 
             assertEquals(name, expected, actual)
         }
@@ -91,6 +98,19 @@ class NextUpParityTest {
         val flipped = computeNextUp(listOf(books[1], books[0], books[3], books[2]), activity, now)
             .map { it.series to it.book.key }
         assertEquals(listOf("Axis Chronological" to "pair_2"), flipped)
+    }
+
+    @Test
+    fun `a dismissal at or after the last activity hides the series until it is read again`() {
+        val books = listOf(NextUpBook("ebook_1", "Axis Saga", 1.0), NextUpBook("ebook_2", "Axis Saga", 2.0))
+        val read = listOf(NextUpActivity("ebook_1", completed = true, atMs = 1_000_000_000L))
+        val now = 1_000_000_000L + 24L * 60 * 60 * 1000
+        val removed = listOf(NextUpDismissal(" axis SAGA ", atMs = 1_000_000_001L))
+
+        assertTrue(computeNextUp(books, read, now, removed).isEmpty())
+        assertEquals(1, computeNextUp(books, read, now).size)
+        val later = listOf(NextUpActivity("ebook_1", completed = true, atMs = 1_000_000_002L))
+        assertEquals(1, computeNextUp(books, later, now, removed).size)
     }
 
     @Test

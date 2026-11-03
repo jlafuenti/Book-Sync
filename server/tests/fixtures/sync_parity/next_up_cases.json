@@ -223,5 +223,92 @@
       {"series": "Axis Saga", "key": "pair_2"},
       {"series": "Axis Chronological", "key": "pair_4"}
     ]
+  },
+  {
+    "name": "a removed series stays out of Next up",
+    "why": "Issue #920: removing a series' row hides it until the reader touches the series again. A removal at or after the last activity drops the row.",
+    "now": "2026-09-26T00:00:00Z",
+    "books": [
+      {"key": "ebook_1", "series": "Axis Saga", "index": 1},
+      {"key": "ebook_2", "series": "Axis Saga", "index": 2}
+    ],
+    "activity": [{"key": "ebook_1", "completed": true, "at": "2026-09-20T00:00:00Z"}],
+    "dismissals": [{"series": "Axis Saga", "at": "2026-09-21T00:00:00Z"}],
+    "expected": []
+  },
+  {
+    "name": "a removal at the same instant as the last activity still hides the row",
+    "why": "Pins the boundary: the dismissal time is 'at or after' the last activity, so equal times hide.",
+    "now": "2026-09-26T00:00:00Z",
+    "books": [
+      {"key": "ebook_1", "series": "Axis Saga", "index": 1},
+      {"key": "ebook_2", "series": "Axis Saga", "index": 2}
+    ],
+    "activity": [{"key": "ebook_1", "completed": true, "at": "2026-09-20T00:00:00Z"}],
+    "dismissals": [{"series": "Axis Saga", "at": "2026-09-20T00:00:00Z"}],
+    "expected": []
+  },
+  {
+    "name": "reading the series again after removing it brings the next book back",
+    "why": "Issue #920: activity strictly later than the removal returns the row, now pointing past the book just read. A dismissal never changes which book is next.",
+    "now": "2026-09-26T00:00:00Z",
+    "books": [
+      {"key": "ebook_1", "series": "Axis Saga", "index": 1},
+      {"key": "ebook_2", "series": "Axis Saga", "index": 2},
+      {"key": "ebook_3", "series": "Axis Saga", "index": 3}
+    ],
+    "activity": [
+      {"key": "ebook_1", "completed": true, "at": "2026-09-20T00:00:00Z"},
+      {"key": "ebook_2", "completed": false, "at": "2026-09-23T00:00:00Z"}
+    ],
+    "dismissals": [{"series": "Axis Saga", "at": "2026-09-21T00:00:00Z"}],
+    "expected": [{"series": "Axis Saga", "key": "ebook_3"}]
+  },
+  {
+    "name": "a removal only hides its own series",
+    "why": "A dismissal names a series; another series being read stays in Next up.",
+    "now": "2026-09-26T00:00:00Z",
+    "books": [
+      {"key": "ebook_1", "series": "Axis Saga", "index": 1},
+      {"key": "ebook_2", "series": "Axis Saga", "index": 2},
+      {"key": "ebook_3", "series": "Axis Tales", "index": 1},
+      {"key": "ebook_4", "series": "Axis Tales", "index": 2}
+    ],
+    "activity": [
+      {"key": "ebook_1", "completed": true, "at": "2026-09-20T00:00:00Z"},
+      {"key": "ebook_3", "completed": true, "at": "2026-09-22T00:00:00Z"}
+    ],
+    "dismissals": [{"series": "Axis Tales", "at": "2026-09-23T00:00:00Z"}],
+    "expected": [{"series": "Axis Saga", "key": "ebook_2"}]
+  },
+  {
+    "name": "a removal matches the series name regardless of case and outer spaces",
+    "why": "Series names match everywhere ignoring case and outer spaces; the dismissal does too.",
+    "now": "2026-09-26T00:00:00Z",
+    "books": [
+      {"key": "ebook_1", "series": "Axis Saga", "index": 1},
+      {"key": "ebook_2", "series": "Axis Saga", "index": 2}
+    ],
+    "activity": [{"key": "ebook_1", "completed": true, "at": "2026-09-20T00:00:00Z"}],
+    "dismissals": [{"series": "  AXIS saga ", "at": "2026-09-21T00:00:00Z"}],
+    "expected": []
+  },
+  {
+    "name": "when the keeping series is removed, a book in two series falls through to the other one",
+    "why": "The drop happens before the cross-series dedupe: without the removal the more recently active Axis Chronological keeps pair_2; removing it leaves Axis Saga's row.",
+    "now": "2026-09-26T00:00:00Z",
+    "books": [
+      {"key": "pair_1", "series": "Axis Saga", "index": 1},
+      {"key": "pair_1", "series": "Axis Chronological", "index": 1},
+      {"key": "pair_2", "series": "Axis Saga", "index": 2},
+      {"key": "pair_2", "series": "Axis Chronological", "index": 2},
+      {"key": "pair_9", "series": "Axis Chronological", "index": 0.5}
+    ],
+    "activity": [
+      {"key": "pair_1", "completed": true, "at": "2026-09-25T00:00:00Z"},
+      {"key": "pair_9", "completed": true, "at": "2026-09-25T12:00:00Z"}
+    ],
+    "dismissals": [{"series": "Axis Chronological", "at": "2026-09-26T00:00:00Z"}],
+    "expected": [{"series": "Axis Saga", "key": "pair_2"}]
   }
 ]

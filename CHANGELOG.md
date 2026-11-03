@@ -18,6 +18,7 @@ operator must do by hand rather than read about afterwards.
 
 ### Changed
 
+- Next up honours a per-series removal until the series is read again (#920).
 - With the Library filtered to a series (`?series=`), each card and row now shows that series and
   the book's number in it, such as "Axis Chronological #6", instead of the book's primary series
   with a `+N` (#917). The unfiltered label is unchanged.
