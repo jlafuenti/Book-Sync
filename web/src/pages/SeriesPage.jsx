@@ -103,6 +103,8 @@ export default function SeriesPage() {
                 type: 'pair',
                 title: p.ebook.title,
                 author: p.ebook.author || p.audiobook.author,
+                publisher: p.ebook.publisher || p.audiobook.publisher,
+                published_year: p.ebook.published_year ?? p.audiobook.published_year,
                 seriesList: seriesOf({ ebook: p.ebook, audiobook: p.audiobook }),
                 cover_path: p.ebook.cover_path || p.audiobook.cover_path,
                 hasEbook: true,
@@ -120,6 +122,8 @@ export default function SeriesPage() {
                 type: 'ebook',
                 title: e.title,
                 author: e.author,
+                publisher: e.publisher,
+                published_year: e.published_year,
                 seriesList: seriesOf(e),
                 cover_path: e.cover_path,
                 hasEbook: true,
@@ -135,6 +139,8 @@ export default function SeriesPage() {
                 type: 'audiobook',
                 title: a.title,
                 author: a.author,
+                publisher: a.publisher,
+                published_year: a.published_year,
                 seriesList: seriesOf(a),
                 cover_path: a.cover_path,
                 hasEbook: false,
@@ -276,11 +282,24 @@ export default function SeriesPage() {
         return [...byKey.values()]
     }, [filteredSeries])
 
-    async function handleBulkEdit(patch) {
+    // What the bulk editor shows and prefills from (issues #913, #914), in the
+    // order the page lists the books.
+    const bulkEditItems = useMemo(() => allVisibleItems
+        .filter(i => selectedKeys.has(i.key))
+        .map(i => ({
+            key: i.key, title: i.title, author: i.author, series_list: i.seriesList,
+            publisher: i.publisher, published_year: i.published_year,
+        })), [allVisibleItems, selectedKeys])
+
+    // One patch per book (issue #913): the shared fields are the same in each,
+    // only the series number differs.
+    async function handleBulkEdit(patches) {
         setBulkSaving(true)
         try {
-            const selected = allVisibleItems.filter(i => selectedKeys.has(i.key))
-            await Promise.all(selected.flatMap(item => {
+            const byKey = new Map(allVisibleItems.map(i => [i.key, i]))
+            await Promise.all(patches.flatMap(({ key, patch }) => {
+                const item = byKey.get(key)
+                if (!item || Object.keys(patch).length === 0) return []
                 const calls = []
                 if (item.ebookId) calls.push(updateEbookMetadata(item.ebookId, patch))
                 if (item.audiobookId) calls.push(updateAudiobookMetadata(item.audiobookId, patch))
@@ -680,7 +699,7 @@ export default function SeriesPage() {
             {canEdit && (
                 <BulkMetadataEditModal
                     open={bulkEditOpen}
-                    selectionCount={selectedKeys.size}
+                    items={bulkEditItems}
                     saving={bulkSaving}
                     description="Leave fields blank to keep existing values."
                     savingLabel={<><div className="spinner"></div> Saving...</>}

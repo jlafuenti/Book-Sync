@@ -256,9 +256,10 @@ describe('SeriesPage — series-level progress actions (issue #270)', () => {
         const dialog = screen.getByRole('dialog')
         expect(dialog).toHaveAccessibleName('Edit 2 Items')
 
-        fireEvent.change(screen.getAllByPlaceholderText('Leave blank to keep unchanged')[0], {
-            target: { value: 'Robin Hobb' },
-        })
+        // The two books share an author and a series, so both open prefilled (#914).
+        expect(screen.getByLabelText('Author')).toHaveValue('An Author')
+        expect(screen.getByLabelText('Series')).toHaveValue('A Series')
+        fireEvent.change(screen.getByLabelText('Author'), { target: { value: 'Robin Hobb' } })
         fireEvent.click(screen.getByRole('button', { name: 'Save to 2 Items' }))
 
         const patch = { author: 'Robin Hobb' }
@@ -269,6 +270,24 @@ describe('SeriesPage — series-level progress actions (issue #270)', () => {
         expect(updateAudiobookMetadataMock).toHaveBeenCalledTimes(1)
 
         await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    })
+
+    // Issue #913: each selected book gets its own number in the series.
+    it('bulk edit gives each selected book its own number in the series', async () => {
+        await renderSeriesPage()
+        await selectTheSeries()
+        fireEvent.click(screen.getByRole('button', { name: 'Edit Metadata' }))
+
+        // Opens with each book's current number; renumber the second only.
+        expect(screen.getByLabelText('Number for Book One')).toHaveValue(1)
+        expect(screen.getByLabelText('Number for Book Two')).toHaveValue(2)
+        fireEvent.change(screen.getByLabelText('Number for Book Two'), { target: { value: '5' } })
+        fireEvent.click(screen.getByRole('button', { name: 'Save to 2 Items' }))
+
+        await waitFor(() => expect(updateEbookMetadataMock).toHaveBeenCalledTimes(1))
+        expect(updateEbookMetadataMock).toHaveBeenCalledWith(3, { series_add: [{ name: 'A Series', index: 5 }] })
+        // Book One's number did not change, so the pair is not written at all.
+        expect(updateAudiobookMetadataMock).not.toHaveBeenCalled()
     })
 
     it('closes bulk edit on Escape without writing anything', async () => {
@@ -344,7 +363,7 @@ describe('SeriesPage — several series per book (issue #907)', () => {
         await screen.findByText(/3 selected/)
 
         fireEvent.click(screen.getByRole('button', { name: 'Edit Metadata' }))
-        fireEvent.change(screen.getAllByPlaceholderText('Leave blank to keep unchanged')[0], { target: { value: 'New Author' } })
+        fireEvent.change(screen.getByLabelText('Author'), { target: { value: 'New Author' } })
         fireEvent.click(screen.getByRole('button', { name: 'Save to 3 Items' }))
 
         await waitFor(() => expect(updateEbookMetadataMock).toHaveBeenCalled())

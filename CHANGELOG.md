@@ -47,6 +47,19 @@ operator must do by hand rather than read about afterwards.
   "Next up" suggests a book that is in two series once. Bulk edit gains a "Replace series" /
   "Add to series" choice, so a series can be added to many books without touching the ones they
   already have. Needs the server release that returns `series_list`.
+- Bulk edit numbers each book in a series on its own (#913). Once a series name is entered, the
+  single "Series Index" box becomes a list with one row per selected book (title, author and a
+  number box), each starting at the book's current number in that series, with a "Number 1 to N
+  in this order" button to fill them in sequence; the editor saves one patch per book. The
+  choice is now "Replace all series" / "Add or update this series", because the metadata PATCH's
+  `series_add` now changes the number of a series the book already has (keeping its place) when
+  the entry carries one, instead of ignoring it. A rescan or enrich still never changes an
+  edited number.
+- Bulk edit opens with the values the selected books share (#914). Author, publisher, published
+  year and the series name are filled in when every selected book has the same value and show
+  "Varies — leave blank to keep each" when they differ. A shared series opens in "Add or update
+  this series" mode so an unchanged list is never replaced. A prefilled field left as it was is
+  not sent, so saving does not rewrite every file for nothing; a blank field still means keep.
 
 ### Fixed
 
