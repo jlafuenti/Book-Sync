@@ -4,9 +4,10 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
-import android.net.ConnectivityManager
 import android.net.Uri
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import androidx.annotation.OptIn
 import androidx.media3.cast.CastPlayer
@@ -70,6 +71,8 @@ import com.booksync.data.remote.TokenManager
 import com.booksync.data.repository.BookSyncRepository
 import com.booksync.data.repository.PositionSyncTimeouts.SERVER_POSITION_TIMEOUT_MS
 import com.booksync.data.repository.SyncMapInUse
+import com.booksync.cast.CastPortManager
+import com.booksync.cast.CastSessionMonitor
 import com.google.android.gms.cast.framework.CastContext
 import com.google.android.gms.cast.framework.CastSession
 import com.google.android.gms.cast.framework.SessionManagerListener
@@ -97,7 +100,6 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import java.io.File
-import java.net.Inet4Address
 import java.util.concurrent.ConcurrentHashMap
 import javax.inject.Inject
 import kotlinx.coroutines.withTimeoutOrNull
@@ -199,6 +201,8 @@ class AudioPlayerService : MediaLibraryService() {
     @Inject lateinit var tokenManager: TokenManager
     @Inject lateinit var libraryCacheOwner: LibraryCacheOwner
     @Inject lateinit var serverUrlManager: com.booksync.data.remote.ServerUrlManager
+    @Inject lateinit var castPortManager: CastPortManager
+    @Inject lateinit var castSessionMonitor: CastSessionMonitor
     @Inject lateinit var diagnosticLogger: com.booksync.diagnostics.DiagnosticLogger
 
     /**
@@ -268,12 +272,96 @@ class AudioPlayerService : MediaLibraryService() {
     // depending on public DNS for a LAN-only hostname — Google Home devices hardcode 8.8.8.8.
     // The lifecycle rules live in [LocalCastServerController] (issue #225); this service
     // only supplies the Android pieces: the Wi-Fi address walk and the NanoHTTPD subclass.
+    //
+    // The port is the Account-screen cast port (issue #931), read at each start. The server
+    // also tells us when the receiver actually comes to fetch (issue #932): that arrives on
+    // the server's thread, so it hops to the main one before touching [castWatchdog].
     private val castServer by lazy {
         LocalCastServerController(
             readTimeoutMs = NanoHTTPDSocketReadTimeoutMs,
-            detectIp = ::detectWifiIpv4,
-            newServer = { token -> LocalCastHttpServer(File(filesDir, "audiobooks"), token) },
+            detectIp = { WifiAddress.detectIpv4(this) },
+            preferredPort = { castPortManager.currentPort },
+            newServer = { token, port, onRequest ->
+                LocalCastHttpServer(
+                    File(filesDir, "audiobooks"),
+                    token,
+                    port = port,
+                    onTokenMatchedRequest = onRequest,
+                )
+            },
+        ).also { controller ->
+            controller.onReceiverRequest = { nowMs ->
+                mainHandler.post { onCastReceiverRequest(nowMs) }
+            }
+        }
+    }
+
+    private val mainHandler = Handler(Looper.getMainLooper())
+
+    // Fail-fast for a speaker that cannot reach the phone (issue #932). The decision is
+    // [CastFetchWatchdog]'s; this service supplies the clock, schedules the one check, and
+    // ends the Cast session on a bad verdict.
+    private val castWatchdog = CastFetchWatchdog()
+    private val castFetchCheck = Runnable { evaluateCastFetch() }
+
+    private fun startCastServer() {
+        castSessionMonitor.setServerAddress(castServer.start())
+    }
+
+    private fun stopCastServer() {
+        castServer.stop()
+        castSessionMonitor.setServerAddress(null)
+    }
+
+    private fun resetCastWatchdog() {
+        mainHandler.removeCallbacks(castFetchCheck)
+        castWatchdog.reset()
+    }
+
+    /** A LOAD was acknowledged: the receiver now has [CastFetchWatchdog.windowMs] to come and fetch. */
+    private fun onCastLoadAcked() {
+        castWatchdog.onLoadAcked(castClockMs())
+        mainHandler.removeCallbacks(castFetchCheck)
+        mainHandler.postDelayed(castFetchCheck, castWatchdog.windowMs)
+    }
+
+    /** A request carrying the session token reached the LAN server: the speaker can reach the phone. */
+    private fun onCastReceiverRequest(nowMs: Long) {
+        castWatchdog.onReceiverRequest(nowMs)
+        mainHandler.removeCallbacks(castFetchCheck)
+    }
+
+    /** The receiver said it failed (`IDLE`/`IDLE_REASON_ERROR` or `onMediaError`): no point waiting out the window. */
+    private fun onCastReceiverError() {
+        castWatchdog.onReceiverError()
+        evaluateCastFetch()
+    }
+
+    /**
+     * Acts on the watchdog's verdict, once: publish why, then end the Cast session. The existing
+     * `onSessionEnded` path switches playback back to the phone at the last known position, so
+     * nothing here duplicates that.
+     */
+    private fun evaluateCastFetch() {
+        val reason = when (castWatchdog.verdict(castClockMs())) {
+            CastFetchVerdict.TIMED_OUT -> CastFailure.Reason.RECEIVER_NEVER_FETCHED
+            CastFetchVerdict.RECEIVER_ERROR -> CastFailure.Reason.RECEIVER_ERROR
+            CastFetchVerdict.WAITING, CastFetchVerdict.FETCHED -> return
+        }
+        resetCastWatchdog()
+        // Host and port only, never the path token (issue #231).
+        val address = castServer.address
+        Log.w(
+            TAG,
+            "Cast failed ($reason): receiver ${if (reason == CastFailure.Reason.RECEIVER_NEVER_FETCHED) "never fetched from" else "errored after"} " +
+                "http://${address?.ip}:${address?.port}/ — ending the Cast session",
         )
+        castSessionMonitor.report(CastFailure(reason, address))
+        try {
+            CastContext.getSharedInstance()?.sessionManager?.endCurrentSession(true)
+        } catch (e: Exception) {
+            Log.w(TAG, "evaluateCastFetch: endCurrentSession failed", e)
+        }
     }
     // Serialises player switches (see [requestPlayerSwitch]).
     private val playerSwitchMutex = Mutex()
@@ -294,6 +382,7 @@ class AudioPlayerService : MediaLibraryService() {
             val pos = status.streamPosition
             lastKnownCastPositionMs = castReportedPosition(lastKnownCastPositionMs, pos)
             Log.d(TAG, "Cast status: ${castStatusLabel(status.playerState, status.idleReason)} pos=$pos")
+            if (isCastReceiverError(status.playerState, status.idleReason)) onCastReceiverError()
         }
 
         override fun onMediaError(error: com.google.android.gms.cast.MediaError) {
@@ -301,6 +390,7 @@ class AudioPlayerService : MediaLibraryService() {
                 TAG,
                 "Cast onMediaError: type=${error.type} reason=${error.reason} detailedCode=${error.detailedErrorCode}"
             )
+            onCastReceiverError()
         }
     }
 
@@ -324,24 +414,28 @@ class AudioPlayerService : MediaLibraryService() {
 
     private val castSessionListener = object : SessionManagerListener<CastSession> {
         override fun onSessionStarted(session: CastSession, sessionId: String) {
+            resetCastWatchdog()
             attachRemoteMediaClientCallback()
-            castServer.start()
+            startCastServer()
             castPlayer?.let { requestPlayerSwitch(it, savePosition = true) }
         }
         override fun onSessionResumed(session: CastSession, wasSuspended: Boolean) {
+            resetCastWatchdog()
             attachRemoteMediaClientCallback()
-            castServer.start()
+            startCastServer()
             castPlayer?.let { requestPlayerSwitch(it, savePosition = false) }
         }
         override fun onSessionEnded(session: CastSession, error: Int) {
+            resetCastWatchdog()
             detachRemoteMediaClientCallback()
             exoPlayer?.let { requestPlayerSwitch(it, savePosition = true) }
-            castServer.stop()
+            stopCastServer()
         }
         override fun onSessionSuspended(session: CastSession, reason: Int) {
+            resetCastWatchdog()
             detachRemoteMediaClientCallback()
             exoPlayer?.let { requestPlayerSwitch(it, savePosition = true) }
-            castServer.stop()
+            stopCastServer()
         }
         override fun onSessionStartFailed(session: CastSession, error: Int) {}
         override fun onSessionEnding(session: CastSession) {}
@@ -836,7 +930,8 @@ class AudioPlayerService : MediaLibraryService() {
         continueListeningNotifyJob?.cancel()
         libraryNotifyJob?.cancel()
         stopAutoPositionSave()
-        castServer.stop()
+        mainHandler.removeCallbacks(castFetchCheck)
+        stopCastServer()
         // Final flush BEFORE the scope dies (issue #164): detached, so
         // cancelling serviceScope on the next line can't abort it. The
         // saveLastPosition below writes only the SharedPreferences hint for
@@ -868,28 +963,7 @@ class AudioPlayerService : MediaLibraryService() {
     // Start/stop and the per-session token live in [LocalCastServerController]
     // (issue #225); [castServer] is the instance. Only the Android part stays here:
 
-    /**
-     * Finds the phone's Wi-Fi IPv4 by walking the active network's LinkProperties.
-     * Returns null if there's no Wi-Fi network (e.g. cellular-only).
-     */
-    private fun detectWifiIpv4(): String? {
-        val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
-            ?: return null
-        // Walk every network — cast typically requires Wi-Fi, but a multi-homed phone on
-        // Wi-Fi + cellular might have a non-default Wi-Fi network we still want to use.
-        for (network in cm.allNetworks) {
-            val caps = cm.getNetworkCapabilities(network) ?: continue
-            if (!caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI)) continue
-            val props = cm.getLinkProperties(network) ?: continue
-            for (linkAddress in props.linkAddresses) {
-                val addr = linkAddress.address
-                if (addr is Inet4Address && !addr.isLoopbackAddress && !addr.isAnyLocalAddress) {
-                    return addr.hostAddress
-                }
-            }
-        }
-        return null
-    }
+    // The Wi-Fi address walk lives in [WifiAddress], shared with the Account screen.
 
 
     // =========================================================
@@ -1160,6 +1234,9 @@ class AudioPlayerService : MediaLibraryService() {
                 val status = result.status
                 if (status.isSuccess) {
                     Log.d(TAG, "sendDirectCastLoad: receiver acked LOAD")
+                    // Result callbacks arrive on the main looper; post anyway so the watchdog
+                    // only ever runs where the check does.
+                    mainHandler.post { onCastLoadAcked() }
                 } else {
                     Log.w(
                         TAG,

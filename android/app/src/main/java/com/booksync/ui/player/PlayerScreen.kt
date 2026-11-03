@@ -64,6 +64,7 @@ import com.booksync.player.PairMediaItems
 import com.booksync.player.PlaybackFailure
 import com.booksync.player.PlaybackOffsets
 import com.booksync.player.PlaybackRecovery
+import com.booksync.player.castFailureMessage
 import com.booksync.player.playbackFailureFor
 import com.booksync.player.toUri
 import com.booksync.ui.theme.Tandem
@@ -125,7 +126,7 @@ class PlayerViewModel @Inject constructor(
     serverUrlManager: com.booksync.data.remote.ServerUrlManager,
     private val coverArtHelper: com.booksync.auto.CoverArtHelper,
     networkMonitor: com.booksync.data.util.NetworkMonitor,
-    castSessionMonitor: com.booksync.cast.CastSessionMonitor,
+    private val castSessionMonitor: com.booksync.cast.CastSessionMonitor,
     savedStateHandle: SavedStateHandle,
 ) : ViewModel() {
 
@@ -236,6 +237,10 @@ class PlayerViewModel @Inject constructor(
     fun onPlaybackError(errorCode: Int) {
         val downloaded = _pair.value?.audiobookDownloaded == true ||
             _standaloneAudio.value?.isDownloaded == true
+        castFailureShown = false
+        // A real player error supersedes a cast failure still parked in the monitor,
+        // which would otherwise come back the next time the screen opens.
+        castSessionMonitor.clear()
         _playbackError.value = playbackFailureFor(errorCode, isDownloaded = downloaded)
     }
 
@@ -249,10 +254,44 @@ class PlayerViewModel @Inject constructor(
      */
     fun onPlayingChanged(isPlaying: Boolean) {
         _isPlaying.value = isPlaying
-        if (isPlaying) _playbackError.value = null
+        // Not for a cast failure: that ends the Cast session, and the phone's own
+        // player then resumes where the speaker left off -- sound arriving *here*
+        // would take the explanation down the moment it appeared. A cast failure
+        // goes when the listener dismisses it, retries, or starts a new session.
+        if (isPlaying && !castFailureShown) _playbackError.value = null
     }
 
-    fun clearPlaybackError() { _playbackError.value = null }
+    fun clearPlaybackError() {
+        _playbackError.value = null
+        // The monitor holds the cast failure until someone dismisses it; the
+        // collector below would otherwise put the message back on the next
+        // emission.
+        castSessionMonitor.clear()
+    }
+
+    /**
+     * A Cast session the app ended because the speaker could not play from the
+     * phone (issue #932) surfaces through the same banner as every other
+     * playback failure. Collected for the life of the view model, so a failure
+     * reported while the screen was closed is still shown when it opens.
+     */
+    private fun observeCastFailure() {
+        viewModelScope.launch {
+            castSessionMonitor.castFailure.collect { failure ->
+                if (failure != null) {
+                    castFailureShown = true
+                    _playbackError.value = castFailureMessage(failure.reason)
+                } else if (castFailureShown) {
+                    // Dismissed, or a new Cast session started: the explanation is over.
+                    castFailureShown = false
+                    _playbackError.value = null
+                }
+            }
+        }
+    }
+
+    /** True while [_playbackError] holds a cast failure rather than a player error. */
+    private var castFailureShown = false
 
     /**
      * Replace a local copy the player could not read.
@@ -265,7 +304,7 @@ class PlayerViewModel @Inject constructor(
      * better than the silence this whole change replaces.
      */
     fun redownloadAudiobook() {
-        _playbackError.value = null
+        clearPlaybackError()
         viewModelScope.launch {
             val standalone = _standaloneAudio.value
             if (standalone != null) {
@@ -291,7 +330,7 @@ class PlayerViewModel @Inject constructor(
      * until its media source is re-prepared.
      */
     fun retryPlayback() {
-        _playbackError.value = null
+        clearPlaybackError()
         val ctrl = controller ?: return
         ensureMediaLoaded()
         ctrl.prepare()
@@ -379,6 +418,7 @@ class PlayerViewModel @Inject constructor(
     }
 
     init {
+        observeCastFailure()
         // Check for process-local sentence sync position (bypasses server race condition)
         val pendingSeek = SyncState.pendingAudioSeekMs
         if (pendingSeek > 0) {

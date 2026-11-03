@@ -6,7 +6,9 @@ import io.mockk.mockk
 import java.io.File
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
@@ -123,5 +125,81 @@ class LocalCastHttpServerTest {
         val response = LocalCastHttpServer(tmp.root, token).serve(request("/$token/book.xyz"))
         assertEquals("application/octet-stream", response.mimeType)
         assertNull(response.getHeader("Content-Range"))
+    }
+
+    // --- Receiver fetch notification (issue #932) ---
+
+    private fun serverReporting(seen: MutableList<Long>): LocalCastHttpServer {
+        File(tmp.root, "book.mp3").writeBytes(body)
+        return LocalCastHttpServer(
+            audiobooksDir = tmp.root,
+            pathToken = token,
+            onTokenMatchedRequest = { seen += it },
+        )
+    }
+
+    @Test
+    fun `a request carrying the session token reports that the receiver reached the phone`() {
+        val seen = mutableListOf<Long>()
+        val response = serverReporting(seen).serve(request("/$token/book.mp3", range = "bytes=0-"))
+        assertEquals(NanoHTTPD.Response.Status.PARTIAL_CONTENT, response.status)
+        assertEquals(1, seen.size)
+    }
+
+    @Test
+    fun `a token-matched request for a missing file still counts as reaching the phone`() {
+        // Reachability is the question, not whether the file is there.
+        val seen = mutableListOf<Long>()
+        val response = serverReporting(seen).serve(request("/$token/missing.mp3"))
+        assertEquals(NanoHTTPD.Response.Status.NOT_FOUND, response.status)
+        assertEquals(1, seen.size)
+    }
+
+    @Test
+    fun `a request without the token reports nothing`() {
+        val seen = mutableListOf<Long>()
+        val s = serverReporting(seen)
+        s.serve(request("/wrongtoken/book.mp3"))
+        s.serve(request("/book.mp3"))
+        s.serve(request("/"))
+        assertTrue("a port scan must not satisfy the watchdog: $seen", seen.isEmpty())
+    }
+
+    @Test
+    fun `the reported timestamp is monotonic time`() {
+        val seen = mutableListOf<Long>()
+        val s = serverReporting(seen)
+        s.serve(request("/$token/book.mp3"))
+        s.serve(request("/$token/book.mp3"))
+        assertFalse(seen.isEmpty())
+        assertTrue(seen[1] >= seen[0])
+    }
+
+    // --- Fixed port (issue #931) ---
+
+    @Test
+    fun `the server binds the port it was given`() {
+        val port = java.net.ServerSocket(0).use { it.localPort }
+        val s = LocalCastHttpServer(tmp.root, token, hostname = "127.0.0.1", port = port)
+        s.open(1_000)
+        try {
+            assertEquals(port, s.boundPort())
+        } finally {
+            s.close()
+        }
+    }
+
+    @Test
+    fun `binding a port that is taken fails, which is what the controller falls back on`() {
+        java.net.ServerSocket(0).use { taken ->
+            val s = LocalCastHttpServer(tmp.root, token, hostname = "127.0.0.1", port = taken.localPort)
+            try {
+                s.open(1_000)
+                s.close()
+                org.junit.Assert.fail("expected the bind to fail")
+            } catch (expected: java.io.IOException) {
+                // fine
+            }
+        }
     }
 }

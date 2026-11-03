@@ -38,7 +38,18 @@ class LocalCastHttpServer(
     private val pathToken: String,
     /** Host to bind to; null lets NanoHTTPD bind to 0.0.0.0. */
     hostname: String? = null,
-) : NanoHTTPD(hostname, /* port = */ 0), CastFileServer {
+    /**
+     * The port to bind (issue #931); 0 lets the OS pick. The controller passes the
+     * Account-screen cast port so one firewall rule covers it, and falls back to 0.
+     */
+    port: Int = 0,
+    /**
+     * Called, with [castClockMs], when a request carrying the session's path token
+     * arrives (issue #932). Runs on the server's own thread, so the receiver of the
+     * call must hop to where it works.
+     */
+    private val onTokenMatchedRequest: (nowMs: Long) -> Unit = {},
+) : NanoHTTPD(hostname, port), CastFileServer {
 
     // The controller-facing lifecycle (issue #225). Non-daemon on purpose: the
     // receiver streams for as long as the session lives, and a daemon thread
@@ -80,6 +91,10 @@ class LocalCastHttpServer(
             Log.w(TAG, "serve: rejected $rawUri (token mismatch or malformed)")
             return notFound("not found")
         }
+        // The receiver reached the phone. Say so before anything below can
+        // refuse the request: the watchdog asks whether the speaker can get
+        // here at all, not whether the file was right.
+        onTokenMatchedRequest(castClockMs())
         val filename = parts[1]
         if (filename.isEmpty() || filename.contains("..") || filename.contains('/')) {
             Log.w(TAG, "serve: rejected suspicious filename '$filename'")

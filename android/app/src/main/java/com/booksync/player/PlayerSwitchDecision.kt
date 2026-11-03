@@ -44,6 +44,13 @@ fun decidePlayerSwitch(
 fun castReportedPosition(previousMs: Long, reportedMs: Long): Long =
     if (reportedMs > 0L) reportedMs else previousMs
 
+/**
+ * The receiver stopped because something went wrong: idle *with* the error reason.
+ * `IDLE` with `FINISHED` or `CANCELED` is a normal end and must not fail a cast.
+ */
+fun isCastReceiverError(playerState: Int, idleReason: Int): Boolean =
+    playerState == MediaStatus.PLAYER_STATE_IDLE && idleReason == MediaStatus.IDLE_REASON_ERROR
+
 /** A readable `MediaStatus` for the log line, falling back to the raw codes. */
 fun castStatusLabel(playerState: Int, idleReason: Int): String {
     val stateName = when (playerState) {

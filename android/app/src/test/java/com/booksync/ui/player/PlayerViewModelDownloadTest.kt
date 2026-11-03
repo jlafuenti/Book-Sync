@@ -94,7 +94,7 @@ class PlayerViewModelDownloadTest {
         serverUrlManager = mockk(relaxed = true),
         coverArtHelper = mockk(relaxed = true),
         networkMonitor = mockk(relaxed = true),
-        castSessionMonitor = mockk(relaxed = true),
+        castSessionMonitor = relaxedCastMonitor(),
         savedStateHandle = SavedStateHandle(mapOf("pairId" to 42)),
     )
 
@@ -104,7 +104,7 @@ class PlayerViewModelDownloadTest {
         serverUrlManager = mockk(relaxed = true),
         coverArtHelper = mockk(relaxed = true),
         networkMonitor = mockk(relaxed = true),
-        castSessionMonitor = mockk(relaxed = true),
+        castSessionMonitor = relaxedCastMonitor(),
         savedStateHandle = SavedStateHandle(mapOf("audiobookId" to 17)),
     )
 
