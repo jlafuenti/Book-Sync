@@ -141,6 +141,21 @@ def test_merge_missing_appends_only_new_names_and_keeps_existing():
     assert merged == [E("A", 1.0), E("B"), E("C", 3.0)]
 
 
+def test_merge_missing_leaves_an_existing_index_alone_by_default():
+    # The rescan rule: a number someone edited is never overwritten.
+    assert merge_missing([E("A", 1)], [E("a", 9)]) == [E("A", 1.0)]
+
+
+def test_merge_missing_update_index_changes_a_number_in_place():
+    merged = merge_missing([E("B", 2), E("A", 1)], [E("a", 9), E("C", 3)], update_index=True)
+    assert merged == [E("B", 2.0), E("A", 9.0), E("C", 3.0)]
+
+
+def test_merge_missing_update_index_keeps_the_index_when_none_is_given():
+    assert merge_missing([E("A", 1)], [E("a")], update_index=True) == [E("A", 1.0)]
+    assert merge_missing([E("A")], [E("a", 4)], update_index=True) == [E("A", 4.0)]
+
+
 def test_merge_missing_into_empty():
     assert merge_missing([], [E("A", 1)]) == [E("A", 1.0)]
 
