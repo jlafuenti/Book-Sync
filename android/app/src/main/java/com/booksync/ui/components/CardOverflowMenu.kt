@@ -476,6 +476,8 @@ fun CardOverflowMenu(
                 ActionRow(
                     Icons.Default.RemoveCircleOutline, "Remove from Next up",
                     onClick = { remove(); onDismiss() },
+                    // Red like the other rows that take something away (owner's call).
+                    destructive = true,
                 )
             }
         }
