@@ -32,7 +32,7 @@ from middleware import MultipartBodyLimitMiddleware
 from services import backup_service
 from services.cache import TTLValue
 from services.credentials import validate_startup as validate_credential_keys
-from routers import auth, library, sync, files, transcription, stats, chapters, match, users, troubleshoot
+from routers import auth, library, sync, files, transcription, stats, chapters, match, users, troubleshoot, next_up
 from routers import settings as settings_router
 from routers import import_sources as import_sources_router
 
@@ -226,6 +226,7 @@ app.include_router(auth.router)
 app.include_router(users.router)
 app.include_router(library.router)
 app.include_router(sync.router)
+app.include_router(next_up.router)
 app.include_router(files.router)
 app.include_router(transcription.router)
 app.include_router(stats.router)

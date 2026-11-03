@@ -8,3 +8,4 @@ from .refresh_token import RefreshToken
 from .bookmark import Bookmark
 from .progress import UserProgress, ProgressType
 from .library_issue import LibraryCheckResult, MultiFileAudiobookFolder
+from .next_up_dismissal import NextUpDismissal

@@ -161,6 +161,7 @@ Two role-scoped responses are worth knowing about because they are not simply al
 | `/api/users` | Account listing, approval, roles, password reset, audit log | `admin` |
 | `/api/library` | Ebooks, audiobooks, pairs, uploads, scanning, metadata, chapters, metadata matching | `user` to read, `editor` to write |
 | `/api/sync` | Reading position, progress, bookmarks, text matching | `user` (own data) |
+| `/api/next-up` | Per-account "Next up" removals (list, add, undo) | `user` (own data) |
 | `/api/files` | Cover images, ebook and audiobook bytes, sync maps | media token or `user` |
 | `/api/transcription` | Queue, status, transcript text, realignment | `user` to read, `editor` to queue/cancel, `admin` for the rest |
 | `/api/settings` | System settings, connection tests | `admin` to write; trimmed read for everyone else |
