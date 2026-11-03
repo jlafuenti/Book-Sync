@@ -1,5 +1,7 @@
 package com.booksync.ui.downloaded
 
+import com.booksync.data.local.SeriesEntry
+import com.booksync.data.local.encodeSeries
 import com.booksync.data.local.entity.EBookEntity
 import com.booksync.ui.library.LibrarySort
 import org.junit.Assert.assertEquals
@@ -23,7 +25,7 @@ class DownloadedSortTest {
     private fun ebook(id: Int, title: String, lastOpenedAt: Long? = null) = DownloadedItem(
         ebook = EBookEntity(
             id = id, title = title, author = null, filename = "$id.epub",
-            fileSize = null, format = "epub", series = null, seriesIndex = null,
+            fileSize = null, format = "epub",
             uploadedAt = "2026-01-01T00:00:00Z", isDownloaded = true,
         ),
         lastOpenedAt = lastOpenedAt,
@@ -61,5 +63,36 @@ class DownloadedSortTest {
         val sorted = items.sortedWith(downloadedComparatorFor(LibrarySort.TitleAsc, articleRegex))
 
         assertEquals(listOf("The Hobbit", "Ithaca", "A Wizard of Earthsea"), sorted.map { it.title })
+    }
+
+    // --- several series (issue #908) ---------------------------------------
+
+    private fun seriesEbook(id: Int, vararg series: SeriesEntry) = DownloadedItem(
+        ebook = EBookEntity(
+            id = id, title = "Book $id", author = null, filename = "$id.epub",
+            fileSize = null, format = "epub", seriesJson = encodeSeries(series.toList()),
+            uploadedAt = "2026-01-01T00:00:00Z", isDownloaded = true,
+        ),
+    )
+
+    @Test
+    fun `Series order uses the primary series' number`() {
+        val items = listOf(
+            seriesEbook(1, SeriesEntry("Axis Saga", 3.0), SeriesEntry("Axis Chronological", 1.0)),
+            seriesEbook(2, SeriesEntry("Axis Saga", 2.0)),
+            seriesEbook(3),
+        )
+
+        val sorted = items.sortedWith(downloadedComparatorFor(LibrarySort.SeriesOrder, articleRegex))
+
+        assertEquals(listOf(2, 1, 3), sorted.map { it.ebook!!.id })
+    }
+
+    @Test
+    fun `a download carries every series of its entity`() {
+        val item = seriesEbook(1, SeriesEntry("Axis Saga", 3.0), SeriesEntry("Axis Chronological", 1.0))
+
+        assertEquals(listOf("Axis Saga", "Axis Chronological"), item.seriesList.map { it.name })
+        assertEquals(emptyList<SeriesEntry>(), seriesEbook(2).seriesList)
     }
 }

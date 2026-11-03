@@ -1,5 +1,6 @@
 package com.booksync.data.repository
 
+import com.booksync.data.remote.SeriesEntryDto
 import com.booksync.data.remote.BookSyncApi
 import com.booksync.data.remote.EBookResponse
 import io.mockk.coEvery
@@ -29,7 +30,7 @@ class FetchPrintPageCountTest {
 
     private fun ebookResponse(id: Int, printPageCount: Int?) = EBookResponse(
         id = id, title = "Remote", author = "A", filename = "remote.epub",
-        file_size = 100, format = "epub", series = "S", series_index = 1f,
+        file_size = 100, format = "epub", series_list = listOf(SeriesEntryDto("S", 1.0)),
         uploaded_at = "2026-01-01T00:00:00", print_page_count = printPageCount,
     )
 

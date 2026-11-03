@@ -1,5 +1,6 @@
 package com.booksync.data.repository
 
+import com.booksync.data.remote.SeriesEntryDto
 import com.booksync.data.local.dao.AudioBookDao
 import com.booksync.data.local.dao.BookPairDao
 import com.booksync.data.local.dao.EBookDao
@@ -61,20 +62,20 @@ class ResolveDownloadTargetTest {
 
     private val cachedAudiobook = AudioBookEntity(
         id = 1516, title = "Cached", author = null, filename = "cached.m4b",
-        durationSeconds = 60, format = "m4b", series = null, seriesIndex = null,
+        durationSeconds = 60, format = "m4b",
         uploadedAt = "2026-01-01T00:00:00",
     )
 
     private fun audiobookResponse(id: Int = 1516) = AudioBookResponse(
         id = id, title = "Remote", author = "A", filename = "remote.m4b",
         file_size = 100, duration_seconds = 90, format = "m4b",
-        series = "S", series_index = 1f, uploaded_at = "2026-01-01T00:00:00",
+        series_list = listOf(SeriesEntryDto("S", 1.0)), uploaded_at = "2026-01-01T00:00:00",
         cover_path = "cover.jpg",
     )
 
     private fun ebookResponse(id: Int = 42) = EBookResponse(
         id = id, title = "Remote", author = "A", filename = "remote.epub",
-        file_size = 100, format = "epub", series = "S", series_index = 1f,
+        file_size = 100, format = "epub", series_list = listOf(SeriesEntryDto("S", 1.0)),
         uploaded_at = "2026-01-01T00:00:00",
     )
 

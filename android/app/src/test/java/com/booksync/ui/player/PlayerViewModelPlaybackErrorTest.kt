@@ -76,7 +76,7 @@ class PlayerViewModelPlaybackErrorTest {
 
     private fun audio(downloaded: Boolean) = AudioBookEntity(
         id = 17, title = "A Standalone Audiobook", author = null, filename = "book.m4b",
-        durationSeconds = 7200, format = "m4b", series = null, seriesIndex = null,
+        durationSeconds = 7200, format = "m4b",
         uploadedAt = "2026-01-01T00:00:00", isDownloaded = downloaded,
     )
 

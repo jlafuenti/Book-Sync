@@ -74,6 +74,12 @@ import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkInfo
 import androidx.work.WorkManager
 import androidx.work.workDataOf
+import com.booksync.data.local.SeriesEntry
+import com.booksync.data.local.primary
+import com.booksync.data.local.seriesLabel
+import com.booksync.data.local.seriesList
+import com.booksync.data.local.toSeriesEntries
+import com.booksync.data.local.unionSeries
 import com.booksync.data.local.entity.AudioBookEntity
 import com.booksync.data.local.entity.EBookEntity
 import com.booksync.data.repository.BookSyncRepository
@@ -98,12 +104,27 @@ import javax.inject.Inject
 // Search result model
 // ============================================================================
 
+private val ARTICLE_REGEX = "^(the|a|an)\\s+".toRegex(RegexOption.IGNORE_CASE)
+
+/**
+ * Series-aware sort: the primary series (leading "The/A/An" stripped), then its
+ * number, then the title. A book in several series sorts by its primary one
+ * (issue #908); results with no series sort last.
+ */
+internal fun sortSearchResults(items: List<SearchResultItem>): List<SearchResultItem> =
+    items.sortedWith(
+        compareBy<SearchResultItem, String?>(nullsLast()) {
+            it.seriesList.primary()?.name?.replace(ARTICLE_REGEX, "")?.lowercase()
+        }
+            .thenBy(nullsLast()) { it.seriesList.primary()?.index }
+            .thenBy { it.title.replace(ARTICLE_REGEX, "").lowercase() },
+    )
+
 data class SearchResultItem(
     val id: String,
     val title: String,
     val author: String?,
-    val series: String?,
-    val seriesIndex: Float?,
+    val seriesList: List<SeriesEntry> = emptyList(),
     val isEbook: Boolean,
     val isAudiobook: Boolean,
     val pairId: Int? = null,
@@ -199,8 +220,10 @@ class SearchViewModel @Inject constructor(
                     id = "pair_${pair.id}",
                     title = pair.ebook.title,
                     author = pair.ebook.author ?: pair.audiobook.author,
-                    series = pair.ebook.series ?: pair.audiobook.series,
-                    seriesIndex = pair.ebook.series_index ?: pair.audiobook.series_index,
+                    seriesList = unionSeries(
+                        pair.ebook.series_list.toSeriesEntries(),
+                        pair.audiobook.series_list.toSeriesEntries(),
+                    ),
                     isEbook = true,
                     isAudiobook = true,
                     pairId = pair.id,
@@ -212,8 +235,7 @@ class SearchViewModel @Inject constructor(
                         id = "ebook_${ebook.id}",
                         title = ebook.title,
                         author = ebook.author,
-                        series = ebook.series,
-                        seriesIndex = ebook.series_index,
+                        seriesList = ebook.series_list.toSeriesEntries(),
                         isEbook = true,
                         isAudiobook = false,
                     )
@@ -225,18 +247,17 @@ class SearchViewModel @Inject constructor(
                         id = "audio_${audio.id}",
                         title = audio.title,
                         author = audio.author,
-                        series = audio.series,
-                        seriesIndex = audio.series_index,
+                        seriesList = audio.series_list.toSeriesEntries(),
                         isEbook = false,
                         isAudiobook = true,
                     )
                 }
             }
-            _searchResults.value = sortResults(items)
+            _searchResults.value = sortSearchResults(items)
             _usingOfflineFallback.value = false
         } catch (_: Exception) {
             // Network down / server error — fall back to local DB.
-            _searchResults.value = sortResults(searchLocalCache(q))
+            _searchResults.value = sortSearchResults(searchLocalCache(q))
             _usingOfflineFallback.value = true
         } finally {
             _isLoading.value = false
@@ -255,19 +276,20 @@ class SearchViewModel @Inject constructor(
 
         val items = mutableListOf<SearchResultItem>()
         pairs.forEach { pair ->
-            val haystack = listOfNotNull(
-                pair.ebookTitle,
-                pair.audiobookTitle,
-                pair.ebookAuthor,
-                pair.audiobookAuthor,
+            val haystack = (
+                listOfNotNull(
+                    pair.ebookTitle,
+                    pair.audiobookTitle,
+                    pair.ebookAuthor,
+                    pair.audiobookAuthor,
+                ) + pair.seriesList.map { it.name }
             ).joinToString(" ").lowercase()
             if (needle in haystack) {
                 items += SearchResultItem(
                     id = "pair_${pair.id}",
                     title = pair.ebookTitle,
                     author = pair.ebookAuthor ?: pair.audiobookAuthor,
-                    series = null,
-                    seriesIndex = null,
+                    seriesList = pair.seriesList,
                     isEbook = true,
                     isAudiobook = true,
                     pairId = pair.id,
@@ -276,15 +298,14 @@ class SearchViewModel @Inject constructor(
         }
         ebooks.forEach { ebook ->
             if (ebook.id in pairedEbookIds) return@forEach
-            val haystack = listOfNotNull(ebook.title, ebook.author, ebook.series)
+            val haystack = (listOfNotNull(ebook.title, ebook.author) + ebook.seriesList.map { it.name })
                 .joinToString(" ").lowercase()
             if (needle in haystack) {
                 items += SearchResultItem(
                     id = "ebook_${ebook.id}",
                     title = ebook.title,
                     author = ebook.author,
-                    series = ebook.series,
-                    seriesIndex = ebook.seriesIndex,
+                    seriesList = ebook.seriesList,
                     isEbook = true,
                     isAudiobook = false,
                 )
@@ -292,33 +313,20 @@ class SearchViewModel @Inject constructor(
         }
         audios.forEach { audio ->
             if (audio.id in pairedAudioIds) return@forEach
-            val haystack = listOfNotNull(audio.title, audio.author, audio.series)
+            val haystack = (listOfNotNull(audio.title, audio.author) + audio.seriesList.map { it.name })
                 .joinToString(" ").lowercase()
             if (needle in haystack) {
                 items += SearchResultItem(
                     id = "audio_${audio.id}",
                     title = audio.title,
                     author = audio.author,
-                    series = audio.series,
-                    seriesIndex = audio.seriesIndex,
+                    seriesList = audio.seriesList,
                     isEbook = false,
                     isAudiobook = true,
                 )
             }
         }
         return items
-    }
-
-    /** Series-aware sort — strips "The/A/An" articles, then series, then title. */
-    private fun sortResults(items: List<SearchResultItem>): List<SearchResultItem> {
-        val articleRegex = "^(the|a|an)\\s+".toRegex(RegexOption.IGNORE_CASE)
-        return items.sortedWith(
-            compareBy<SearchResultItem, String?>(nullsLast()) {
-                it.series?.replace(articleRegex, "")?.lowercase()
-            }
-                .thenBy(nullsLast()) { it.seriesIndex }
-                .thenBy { it.title.replace(articleRegex, "").lowercase() },
-        )
     }
 
     // --- Pairing ------------------------------------------------------------
@@ -761,17 +769,9 @@ private fun ResultRow(
 
         // Title + author + series
         Column(modifier = Modifier.weight(1f)) {
-            if (!item.series.isNullOrBlank()) {
+            seriesLabel(item.seriesList)?.let { label ->
                 Text(
-                    text = buildString {
-                        append(item.series)
-                        if (item.seriesIndex != null && item.seriesIndex > 0f) {
-                            val idx = if (item.seriesIndex % 1 == 0f)
-                                item.seriesIndex.toInt().toString()
-                            else item.seriesIndex.toString()
-                            append(" #$idx")
-                        }
-                    },
+                    text = label,
                     color = colors.accent,
                     fontSize = 11.sp,
                     fontWeight = FontWeight.SemiBold,
@@ -919,9 +919,9 @@ private fun PairingSheet(
         val needle = pairSearchQuery.lowercase()
         counterparts.filter {
             when (it) {
-                is AudioBookEntity -> listOfNotNull(it.title, it.author, it.series)
+                is AudioBookEntity -> (listOfNotNull(it.title, it.author) + it.seriesList.map { e -> e.name })
                     .any { s -> needle in s.lowercase() }
-                is EBookEntity     -> listOfNotNull(it.title, it.author, it.series)
+                is EBookEntity     -> (listOfNotNull(it.title, it.author) + it.seriesList.map { e -> e.name })
                     .any { s -> needle in s.lowercase() }
                 else -> false
             }
@@ -1018,8 +1018,7 @@ private fun PairingSheet(
                             CounterpartRow(
                                 title = ab.title,
                                 author = ab.author,
-                                series = ab.series,
-                                seriesIndex = ab.seriesIndex,
+                                seriesList = ab.seriesList,
                                 formatTag = ab.format,
                                 onClick = { onPair(ab.id) },
                             )
@@ -1029,8 +1028,7 @@ private fun PairingSheet(
                             CounterpartRow(
                                 title = eb.title,
                                 author = eb.author,
-                                series = eb.series,
-                                seriesIndex = eb.seriesIndex,
+                                seriesList = eb.seriesList,
                                 formatTag = eb.format,
                                 onClick = { onPair(eb.id) },
                             )
@@ -1050,21 +1048,16 @@ private fun PairingSheet(
 private fun CounterpartRow(
     title: String,
     author: String?,
-    series: String?,
-    seriesIndex: Float?,
+    seriesList: List<SeriesEntry>,
     formatTag: String?,
     onClick: () -> Unit,
 ) {
     val colors = Tandem.colors
     val subtitle = buildString {
         author?.let { append(it) }
-        if (!series.isNullOrBlank()) {
+        seriesLabel(seriesList)?.let { label ->
             if (isNotEmpty()) append(" · ")
-            append(series)
-            if (seriesIndex != null && seriesIndex > 0f) {
-                val idx = if (seriesIndex % 1 == 0f) seriesIndex.toInt().toString() else seriesIndex.toString()
-                append(" #$idx")
-            }
+            append(label)
         }
     }
     ListItem(

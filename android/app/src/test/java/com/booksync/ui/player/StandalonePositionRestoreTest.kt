@@ -50,8 +50,6 @@ class StandalonePositionRestoreTest {
         filename = "book.m4b",
         durationSeconds = 7200,
         format = "m4b",
-        series = null,
-        seriesIndex = null,
         uploadedAt = "2026-01-01T00:00:00",
         isDownloaded = true,
     )

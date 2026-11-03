@@ -11,7 +11,12 @@ import com.booksync.data.local.entity.BookmarkEntity
 import com.booksync.data.local.entity.EBookEntity
 import com.booksync.data.local.entity.UserProgressEntity
 import com.booksync.data.remote.BookSyncApi
+import com.booksync.data.local.SeriesEntry
+import com.booksync.data.local.decodeSeries
+import com.booksync.data.remote.AudioBookResponse
+import com.booksync.data.remote.BookPairResponse
 import com.booksync.data.remote.EBookResponse
+import com.booksync.data.remote.SeriesEntryDto
 import com.booksync.data.remote.PageResponse
 import io.mockk.coEvery
 import io.mockk.every
@@ -57,12 +62,12 @@ class LibraryRepositoryTest {
 
     private fun ebook(id: Int) = EBookEntity(
         id = id, title = "E$id", author = null, filename = "e$id.epub", fileSize = null,
-        format = "epub", series = null, seriesIndex = null, uploadedAt = "2026-01-01T00:00:00",
+        format = "epub", uploadedAt = "2026-01-01T00:00:00",
     )
 
     private fun audiobook(id: Int) = AudioBookEntity(
         id = id, title = "A$id", author = null, filename = "a$id.m4b", durationSeconds = null,
-        format = "m4b", series = null, seriesIndex = null, uploadedAt = "2026-01-01T00:00:00",
+        format = "m4b", uploadedAt = "2026-01-01T00:00:00",
     )
 
     private fun progress(mediaType: String, mediaId: Int, completed: Boolean, updatedAt: Long = 0L) =
@@ -237,4 +242,116 @@ class LibraryRepositoryTest {
 
         assertEquals("/api/files/covers/ebook_3.jpg", entity?.coverFilename)
     }
+
+    // --- several series per book (issue #908) ------------------------------
+
+    private val saga = SeriesEntryDto("Axis Saga", 4.0)
+    private val chrono = SeriesEntryDto("Axis Chronological", 2.5)
+
+    @Test
+    fun `refreshing ebooks stores every series, primary first`() = runTest {
+        coEvery { api.getEbooks(any(), any()) } returns PageResponse(
+            items = listOf(remoteEbook(1, null).copy(series_list = listOf(saga, chrono))),
+            total = 1, page = 1, limit = 100,
+        )
+        coEvery { eBookDao.getEBookById(1) } returns null
+        val saved = slot<List<EBookEntity>>()
+        coEvery { eBookDao.upsertEBooks(capture(saved)) } returns Unit
+
+        library().refreshEbooks()
+
+        assertEquals(
+            listOf(SeriesEntry("Axis Saga", 4.0), SeriesEntry("Axis Chronological", 2.5)),
+            decodeSeries(saved.captured.single().seriesJson),
+        )
+    }
+
+    @Test
+    fun `a book with no series is stored with a null series column`() = runTest {
+        coEvery { api.getEbooks(any(), any()) } returns PageResponse(
+            items = listOf(remoteEbook(1, null)), total = 1, page = 1, limit = 100,
+        )
+        coEvery { eBookDao.getEBookById(1) } returns null
+        val saved = slot<List<EBookEntity>>()
+        coEvery { eBookDao.upsertEBooks(capture(saved)) } returns Unit
+
+        library().refreshEbooks()
+
+        assertEquals(null, saved.captured.single().seriesJson)
+    }
+
+    @Test
+    fun `refreshing audiobooks stores every series`() = runTest {
+        coEvery { api.getAudiobooks(any(), any()) } returns PageResponse(
+            items = listOf(remoteAudiobook(2).copy(series_list = listOf(chrono))),
+            total = 1, page = 1, limit = 100,
+        )
+        coEvery { audioBookDao.getAudioBookById(2) } returns null
+        val saved = slot<List<AudioBookEntity>>()
+        coEvery { audioBookDao.upsertAudioBooks(capture(saved)) } returns Unit
+
+        library().refreshAudiobooks()
+
+        assertEquals(listOf(SeriesEntry("Axis Chronological", 2.5)), decodeSeries(saved.captured.single().seriesJson))
+    }
+
+    @Test
+    fun `a pair stores the union of its halves, ebook first and ebook index winning`() = runTest {
+        val remote = BookPairResponse(
+            id = 9,
+            ebook = remoteEbook(1, null).copy(series_list = listOf(saga)),
+            audiobook = remoteAudiobook(2).copy(
+                series_list = listOf(SeriesEntryDto("axis saga", 9.0), chrono),
+            ),
+            status = "synced",
+        )
+        coEvery { api.getPairs(any(), any()) } returns PageResponse(
+            items = listOf(remote), total = 1, page = 1, limit = 100,
+        )
+        coEvery { bookPairDao.getPairById(9) } returns null
+        val saved = slot<List<BookPairEntity>>()
+        coEvery { bookPairDao.upsertPairs(capture(saved)) } returns Unit
+
+        library().refreshPairs()
+
+        assertEquals(
+            listOf(SeriesEntry("Axis Saga", 4.0), SeriesEntry("Axis Chronological", 2.5)),
+            decodeSeries(saved.captured.single().seriesJson),
+        )
+    }
+
+    @Test
+    fun `a series that exists only on the audiobook half still reaches the pair`() = runTest {
+        val remote = BookPairResponse(
+            id = 9,
+            ebook = remoteEbook(1, null),
+            audiobook = remoteAudiobook(2).copy(series_list = listOf(chrono)),
+            status = "synced",
+        )
+        coEvery { api.getPairs(any(), any()) } returns PageResponse(
+            items = listOf(remote), total = 1, page = 1, limit = 100,
+        )
+        coEvery { bookPairDao.getPairById(9) } returns null
+        val saved = slot<List<BookPairEntity>>()
+        coEvery { bookPairDao.upsertPairs(capture(saved)) } returns Unit
+
+        library().refreshPairs()
+
+        assertEquals(listOf(SeriesEntry("Axis Chronological", 2.5)), decodeSeries(saved.captured.single().seriesJson))
+    }
+
+    @Test
+    fun `an ebook fetched on demand keeps its series`() = runTest {
+        coEvery { eBookDao.getEBookById(3) } returns null
+        coEvery { api.getEbook(3) } returns remoteEbook(3, null).copy(series_list = listOf(saga, chrono))
+
+        val entity = library().resolveEbookById(3)
+
+        assertEquals(2, decodeSeries(entity?.seriesJson).size)
+    }
+
+    private fun remoteAudiobook(id: Int) = AudioBookResponse(
+        id = id, title = "A$id", filename = "a$id.m4b", format = "m4b",
+        uploaded_at = "2026-01-01T00:00:00",
+    )
 }

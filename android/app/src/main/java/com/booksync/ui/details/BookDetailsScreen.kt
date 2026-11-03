@@ -66,6 +66,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
+import com.booksync.data.local.seriesIndexSuffix
 import com.booksync.BuildConfig
 import com.booksync.data.remote.coverImageUrl
 import com.booksync.data.repository.SyncMapAutoFetch
@@ -497,10 +498,12 @@ private fun Hero(ui: BookDetailsUi, serverUrl: String, onOpenSeries: (String) ->
             Spacer(Modifier.height(4.dp))
             Text(author, color = colors.textSecondary, fontSize = 14.sp)
         }
-        // The series name opens that series in the Library (issue #717); the
-        // " #3" suffix stays plain text. Underlined secondary text rather than
+        // Each series name opens that series in the Library (issue #717); the
+        // " #3" suffix stays plain text. A book in several series (issue #908) gets
+        // one line each, primary first. Underlined secondary text rather than
         // the accent, which is too dim as text on the darkest themes (web #705).
-        ui.seriesName?.let { name ->
+        ui.seriesList.forEach { entry ->
+            val name = entry.name
             Spacer(Modifier.height(4.dp))
             Row {
                 Text(
@@ -510,7 +513,7 @@ private fun Hero(ui: BookDetailsUi, serverUrl: String, onOpenSeries: (String) ->
                     textDecoration = TextDecoration.Underline,
                     modifier = Modifier.clickable(onClickLabel = "Open series") { onOpenSeries(name) },
                 )
-                val suffix = ui.seriesLabel?.removePrefix(name).orEmpty()
+                val suffix = seriesIndexSuffix(entry)
                 if (suffix.isNotEmpty()) Text(suffix, color = colors.textMuted, fontSize = 12.sp)
             }
         }

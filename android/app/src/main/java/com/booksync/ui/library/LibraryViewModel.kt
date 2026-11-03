@@ -10,6 +10,11 @@ import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkInfo
 import androidx.work.WorkManager
 import androidx.work.workDataOf
+import com.booksync.data.local.SeriesEntry
+import com.booksync.data.local.indexIn
+import com.booksync.data.local.primary
+import com.booksync.data.local.seriesList
+import com.booksync.data.local.seriesNameMatches
 import com.booksync.data.local.entity.AudioBookEntity
 import com.booksync.data.local.entity.BookPairEntity
 import com.booksync.data.local.entity.EBookEntity
@@ -114,10 +119,18 @@ data class LibraryItem(
         get() = pair?.ebookTitle ?: ebook?.title ?: audiobook?.title ?: "Untitled"
     val author: String?
         get() = pair?.ebookAuthor ?: pair?.audiobookAuthor ?: ebook?.author ?: audiobook?.author
-    val series: String?
-        get() = pair?.ebookSeries ?: ebook?.series ?: audiobook?.series
-    val seriesIndex: Float?
-        get() = pair?.ebookSeriesIndex ?: ebook?.seriesIndex ?: audiobook?.seriesIndex
+    /**
+     * Every series this book is in, primary first (issue #908). A pair's list is
+     * already the union of its halves (`LibraryRepository.refreshPairs`), so it
+     * is read on its own rather than falling through to the ebook.
+     */
+    val seriesList: List<SeriesEntry>
+        get() = when {
+            pair != null      -> pair.seriesList
+            ebook != null     -> ebook.seriesList
+            audiobook != null -> audiobook.seriesList
+            else              -> emptyList()
+        }
     /** Server cover path for this card; the grid and series stacks both read it. */
     val coverPath: String?
         get() = pair?.audiobookCoverPath ?: audiobook?.coverFilename ?: ebook?.coverFilename
@@ -312,26 +325,20 @@ class LibraryViewModel @Inject constructor(
         } else filtered
 
         // Step 3 — series drill-in
-        val seriesFiltered = ui.seriesFilter?.let { name ->
-            transcribedFiltered.filter { it.series.equals(name, ignoreCase = true) }
-        } ?: transcribedFiltered
+        val seriesFiltered = ui.seriesFilter?.let { name -> filterBySeries(transcribedFiltered, name) }
+            ?: transcribedFiltered
 
         // Step 4 — sort. lastOpenedAt is stamped on here rather than at each
         // construction site above: it comes from a different pair of tables than
         // the entity does, and only this one comparator reads it.
         val sorted = seriesFiltered
             .map { it.copy(lastOpenedAt = lastOpenedFor(it, opened)) }
-            .sortedWith(comparatorFor(ui.sort))
+            .sortedWith(comparatorFor(ui.sort, ui.seriesFilter))
 
         // Step 5 — text search filter (title / author / series)
         if (ui.searchQuery.isBlank()) sorted
         else {
-            val q = ui.searchQuery.trim().lowercase()
-            sorted.filter { item ->
-                item.title.lowercase().contains(q) ||
-                item.author?.lowercase()?.contains(q) == true ||
-                item.series?.lowercase()?.contains(q) == true
-            }
+            sorted.filter { item -> matchesSearch(item, ui.searchQuery) }
         }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), emptyList())
 
@@ -339,13 +346,7 @@ class LibraryViewModel @Inject constructor(
     val seriesStacks: StateFlow<List<SeriesStack>> =
         combine(items, _uiState) { list, ui ->
             if (!ui.groupBySeries) return@combine emptyList()
-            val groups = list.groupBy { it.series?.trim().takeIf { s -> !s.isNullOrEmpty() } ?: "No Series" }
-            val sorted = when (ui.sort) {
-                LibrarySort.TitleAsc    -> groups.entries.sortedBy { it.key.lowercase() }
-                LibrarySort.SeriesCount -> groups.entries.sortedByDescending { it.value.size }
-                else                    -> groups.entries.sortedBy { it.key.lowercase() }
-            }
-            sorted.map { (name, items) -> SeriesStack(name, items) }
+            buildSeriesStacks(list, ui.sort)
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), emptyList())
 
     // --- Derived counts ----------------------------------------------------
@@ -692,6 +693,48 @@ class LibraryViewModel @Inject constructor(
 }
 
 // ============================================================================
+// Series (grouping, drill-in filter, search)
+// ============================================================================
+
+/** The drill-in filter: items in a series called [name], ignoring case. Any of its series counts. */
+internal fun filterBySeries(items: List<LibraryItem>, name: String): List<LibraryItem> =
+    items.filter { item -> item.seriesList.any { seriesNameMatches(it.name, name) } }
+
+/** The search box: title, author or any series name contains [query], ignoring case. */
+internal fun matchesSearch(item: LibraryItem, query: String): Boolean {
+    val q = query.trim().lowercase()
+    return item.title.lowercase().contains(q) ||
+        item.author?.lowercase()?.contains(q) == true ||
+        item.seriesList.any { it.name.lowercase().contains(q) }
+}
+
+private const val NO_SERIES = "No Series"
+
+/**
+ * Series mode: one [SeriesStack] per series. A book in several series is in
+ * every one of those stacks (issue #908); a book in none goes under "No Series".
+ * Names group ignoring case and outer spaces, the stack taking the first spelling seen.
+ */
+internal fun buildSeriesStacks(list: List<LibraryItem>, sort: LibrarySort): List<SeriesStack> {
+    val names = LinkedHashMap<String, String>()             // key -> display name
+    val groups = LinkedHashMap<String, MutableList<LibraryItem>>()
+    for (item in list) {
+        val memberships = item.seriesList.map { it.name.trim() }.filter { it.isNotEmpty() }
+            .ifEmpty { listOf(NO_SERIES) }
+        for (name in memberships.distinctBy { it.lowercase() }) {
+            val key = name.lowercase()
+            names.getOrPut(key) { name }
+            groups.getOrPut(key) { mutableListOf() } += item
+        }
+    }
+    val sorted = when (sort) {
+        LibrarySort.SeriesCount -> groups.entries.sortedByDescending { it.value.size }
+        else                    -> groups.entries.sortedBy { it.key }
+    }
+    return sorted.map { (key, items) -> SeriesStack(names.getValue(key), items) }
+}
+
+// ============================================================================
 // Sorting (issue #223)
 // ============================================================================
 
@@ -702,7 +745,7 @@ class LibraryViewModel @Inject constructor(
  * (`LibrarySortTest`) — the reason "Recently opened" shipped as a copy of
  * "Recently added" for as long as it did is that nothing could see it.
  */
-internal fun comparatorFor(sort: LibrarySort): Comparator<LibraryItem> = when (sort) {
+internal fun comparatorFor(sort: LibrarySort, seriesName: String? = null): Comparator<LibraryItem> = when (sort) {
     LibrarySort.RecentlyAdded  -> compareByDescending { it.pair?.id ?: it.ebook?.id ?: it.audiobook?.id ?: 0 }
     // Never-opened books sink to the bottom rather than sorting as "opened at the
     // epoch", and tie-break by title so an untouched library is not in arbitrary
@@ -714,7 +757,12 @@ internal fun comparatorFor(sort: LibrarySort): Comparator<LibraryItem> = when (s
     // (server/routers/library.py) — otherwise "Zebra" sorts ahead of "aardvark".
     LibrarySort.TitleAsc       -> compareBy { it.title.lowercase() }
     LibrarySort.AuthorAsc      -> compareBy(nullsLast()) { it.author?.lowercase() }
-    LibrarySort.SeriesOrder    -> compareBy(nullsLast()) { it.seriesIndex }
+    // The number inside the series being browsed, not the primary's: a book can be
+    // #3 of one series and #1 of another (issue #908). Outside a drill-in there is
+    // no series to ask about, so fall back to the primary.
+    LibrarySort.SeriesOrder    -> compareBy(nullsLast()) { item ->
+        seriesName?.let { item.seriesList.indexIn(it) } ?: item.seriesList.primary()?.index
+    }
     LibrarySort.SeriesCount    -> compareBy { it.title.lowercase() } // only meaningful in series mode
 }
 

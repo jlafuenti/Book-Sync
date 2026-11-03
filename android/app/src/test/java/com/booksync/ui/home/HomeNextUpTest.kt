@@ -1,5 +1,7 @@
 package com.booksync.ui.home
 
+import com.booksync.data.local.SeriesEntry
+import com.booksync.data.local.encodeSeries
 import android.content.Context
 import androidx.work.WorkManager
 import com.booksync.data.local.entity.AudioBookEntity
@@ -66,7 +68,7 @@ class HomeNextUpTest {
 
     private fun ebook(id: Int, index: Float) = EBookEntity(
         id = id, title = "Axis Book $id", author = "An Author", filename = "e$id.epub", fileSize = 1L,
-        format = "epub", series = "Axis", seriesIndex = index,
+        format = "epub", seriesJson = encodeSeries(listOf(SeriesEntry("Axis", index.toDouble()))),
         uploadedAt = "2026-01-01T00:00:00Z", isDownloaded = false,
     )
 
@@ -110,8 +112,7 @@ class HomeNextUpTest {
         assertEquals("ebook_2", item.id)
         assertEquals(HomeItem.MediaType.EBOOK, item.mediaType)
         assertEquals(2, item.ebookId)
-        assertEquals("Axis", item.series)
-        assertEquals(2f, item.seriesIndex)
+        assertEquals(listOf(SeriesEntry("Axis", 2.0)), item.seriesList)
     }
 
     /**

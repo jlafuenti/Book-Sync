@@ -32,8 +32,6 @@ class BookDetailsPrimaryActionTest {
         filename = "skeleton-crew.epub",
         fileSize = 1_024L,
         format = "epub",
-        series = null,
-        seriesIndex = null,
         uploadedAt = "2026-01-01T00:00:00Z",
         isDownloaded = downloaded,
     )
@@ -45,8 +43,6 @@ class BookDetailsPrimaryActionTest {
         filename = "bartleby.mp3",
         durationSeconds = 3_429,
         format = "mp3",
-        series = null,
-        seriesIndex = null,
         uploadedAt = "2026-01-01T00:00:00Z",
         isDownloaded = downloaded,
     )

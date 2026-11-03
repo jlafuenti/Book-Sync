@@ -1,5 +1,6 @@
 package com.booksync.auto
 
+import com.booksync.data.local.seriesList
 import com.booksync.data.local.entity.AudioBookEntity
 import com.booksync.data.local.entity.BookPairEntity
 import com.booksync.data.local.entity.BookmarkEntity
@@ -44,7 +45,7 @@ fun BookPairEntity.toAutoBook(
     mediaId = MediaId.Pair(id).value,
     title = audiobookTitle,
     author = audiobookAuthor,
-    series = ebookSeries,
+    seriesNames = seriesList.map { it.name },
     audiobookId = audiobookId,
     pairId = id,
     resumePositionMs = resumePositionMs,
@@ -58,7 +59,7 @@ fun AudioBookEntity.toAutoBook(progress: UserProgressEntity?): AutoBook = AutoBo
     mediaId = MediaId.Audiobook(id).value,
     title = title,
     author = author,
-    series = series,
+    seriesNames = seriesList.map { it.name },
     audiobookId = id,
     resumePositionMs = progress?.audioPositionMs?.toLong() ?: 0L,
     durationMs = (durationSeconds ?: 0) * 1000L,

@@ -810,8 +810,7 @@ private fun LibraryItem.toVariant(coverModel: Any? = null): BookCardVariant = wh
         coverImageModel = coverModel,
         hasEbookDownloaded = pair.ebookDownloaded,
         hasAudiobookDownloaded = pair.audiobookDownloaded,
-        series = series,
-        seriesIndex = seriesIndex,
+        seriesList = seriesList,
     )
     ebook != null      -> BookCardVariant.SingleMedia(
         id = ebook.id,
@@ -820,8 +819,7 @@ private fun LibraryItem.toVariant(coverModel: Any? = null): BookCardVariant = wh
         author = ebook.author,
         coverImageModel = coverModel,
         isDownloaded = ebook.isDownloaded,
-        series = series,
-        seriesIndex = seriesIndex,
+        seriesList = seriesList,
     )
     audiobook != null  -> BookCardVariant.SingleMedia(
         id = audiobook.id,
@@ -830,8 +828,7 @@ private fun LibraryItem.toVariant(coverModel: Any? = null): BookCardVariant = wh
         author = audiobook.author,
         coverImageModel = coverModel,
         isDownloaded = audiobook.isDownloaded,
-        series = series,
-        seriesIndex = seriesIndex,
+        seriesList = seriesList,
     )
     else -> error("LibraryItem must carry at least one entity")
 }

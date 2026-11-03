@@ -67,8 +67,6 @@ class DownloadPathContainmentTest {
         filename = filename,
         fileSize = 4L,
         format = "epub",
-        series = null,
-        seriesIndex = null,
         uploadedAt = "2026-01-01T00:00:00Z",
         isDownloaded = false,
     )

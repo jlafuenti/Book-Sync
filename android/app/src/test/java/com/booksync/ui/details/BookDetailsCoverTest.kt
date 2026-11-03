@@ -14,7 +14,7 @@ class BookDetailsCoverTest {
 
     private val ebook = EBookEntity(
         id = 7, title = "E", author = null, filename = "e.epub", fileSize = null, format = "epub",
-        series = null, seriesIndex = null, uploadedAt = "2026-01-01T00:00:00",
+        uploadedAt = "2026-01-01T00:00:00",
         coverFilename = "/api/files/covers/ebook_7.jpg",
     )
 
@@ -31,7 +31,7 @@ class BookDetailsCoverTest {
     fun `an audiobook's page still shows the audiobook cover`() {
         val audiobook = AudioBookEntity(
             id = 9, title = "A", author = null, filename = "a.m4b", durationSeconds = null, format = "m4b",
-            series = null, seriesIndex = null, uploadedAt = "2026-01-01T00:00:00",
+            uploadedAt = "2026-01-01T00:00:00",
             coverFilename = "/api/files/covers/audiobook_9.jpg",
         )
 

@@ -33,7 +33,7 @@ class LibrarySortTest {
             key = "ebook_$id",
             ebook = EBookEntity(
                 id = id, title = title, author = null, filename = "$id.epub",
-                fileSize = null, format = "epub", series = null, seriesIndex = null,
+                fileSize = null, format = "epub",
                 uploadedAt = "2026-01-01T00:00:00Z",
             ),
             lastOpenedAt = lastOpenedAt,
@@ -49,7 +49,7 @@ class LibrarySortTest {
 
     private fun audiobook(id: Int) = AudioBookEntity(
         id = id, title = "Audio $id", author = null, filename = "$id.m4b",
-        durationSeconds = null, format = "m4b", series = null, seriesIndex = null,
+        durationSeconds = null, format = "m4b",
         uploadedAt = "2026-01-01T00:00:00Z",
     )
 

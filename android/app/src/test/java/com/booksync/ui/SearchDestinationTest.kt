@@ -38,8 +38,6 @@ class SearchDestinationTest {
         id = id,
         title = "The Infernal Devices",
         author = "Cassandra Clare",
-        series = null,
-        seriesIndex = null,
         isEbook = isEbook,
         isAudiobook = isAudiobook,
         pairId = pairId,

@@ -87,26 +87,26 @@ class SearchDownloadTest {
 
     private val audiobookResult = SearchResultItem(
         id = "audio_1516", title = "Bartleby", author = "H. M.",
-        series = null, seriesIndex = null, isEbook = false, isAudiobook = true,
+        isEbook = false, isAudiobook = true,
     )
     private val ebookResult = SearchResultItem(
         id = "ebook_42", title = "Bartleby", author = "H. M.",
-        series = null, seriesIndex = null, isEbook = true, isAudiobook = false,
+        isEbook = true, isAudiobook = false,
     )
     private val pairResult = SearchResultItem(
         id = "pair_7", title = "Bartleby", author = "H. M.",
-        series = null, seriesIndex = null, isEbook = true, isAudiobook = true,
+        isEbook = true, isAudiobook = true,
         pairId = 7,
     )
 
     private val audiobook = AudioBookEntity(
         id = 1516, title = "Bartleby", author = null, filename = "b.m4b",
-        durationSeconds = 60, format = "m4b", series = null, seriesIndex = null,
+        durationSeconds = 60, format = "m4b",
         uploadedAt = "2026-01-01T00:00:00",
     )
     private val ebook = EBookEntity(
         id = 42, title = "Bartleby", author = null, filename = "b.epub",
-        fileSize = 1, format = "epub", series = null, seriesIndex = null,
+        fileSize = 1, format = "epub",
         uploadedAt = "2026-01-01T00:00:00",
     )
     private val pair = BookPairEntity(

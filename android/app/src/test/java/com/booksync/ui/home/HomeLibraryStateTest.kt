@@ -98,8 +98,6 @@ class HomeLibraryStateTest {
         filename = "e$id.epub",
         fileSize = null,
         format = "epub",
-        series = null,
-        seriesIndex = null,
         uploadedAt = "2026-09-14T00:00:00",
     )
 
@@ -110,8 +108,6 @@ class HomeLibraryStateTest {
         filename = "a$id.m4b",
         durationSeconds = null,
         format = "m4b",
-        series = null,
-        seriesIndex = null,
         uploadedAt = "2026-09-14T00:00:00",
     )
 

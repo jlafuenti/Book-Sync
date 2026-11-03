@@ -44,7 +44,8 @@ data class AutoBook(
     val mediaId: String,
     val title: String,
     val author: String? = null,
-    val series: String? = null,
+    /** Every series the book is in, primary first (issue #908). */
+    val seriesNames: List<String> = emptyList(),
     val audiobookId: Int,
     /** Non-null when this row is a paired book. */
     val pairId: Int? = null,
@@ -66,7 +67,7 @@ data class AutoBook(
     val serverCoverPath: String? = null,
 )
 
-fun AutoBook.asSearchable() = AutoSearchable(mediaId, title, author, series)
+fun AutoBook.asSearchable() = AutoSearchable(mediaId, title, author, seriesNames)
 
 /**
  * The root's children. Two tabs, both folders — this is what fixes the browse

@@ -1,5 +1,7 @@
 package com.booksync.ui.home
 
+import com.booksync.data.local.SeriesEntry
+import com.booksync.data.local.encodeSeries
 import com.booksync.data.local.entity.AudioBookEntity
 import com.booksync.data.local.entity.BookPairEntity
 import com.booksync.data.local.entity.BookmarkEntity
@@ -100,13 +102,13 @@ class NextUpParityTest {
 
     private fun ebook(id: Int, series: String?, index: Float?) = EBookEntity(
         id = id, title = "Ebook $id", author = "An Author", filename = "e$id.epub", fileSize = 1L,
-        format = "epub", series = series, seriesIndex = index,
+        format = "epub", seriesJson = single(series, index),
         uploadedAt = "2026-01-01T00:00:00Z", isDownloaded = false,
     )
 
     private fun audiobook(id: Int, series: String?, index: Float?) = AudioBookEntity(
         id = id, title = "Audiobook $id", author = "An Author", filename = "a$id.m4b", durationSeconds = 60,
-        format = "m4b", series = series, seriesIndex = index,
+        format = "m4b", seriesJson = single(series, index),
         uploadedAt = "2026-01-01T00:00:00Z", isDownloaded = false,
     )
 
@@ -115,8 +117,11 @@ class NextUpParityTest {
         ebookFilename = "e$ebookId.epub", ebookFormat = "epub",
         audiobookId = audiobookId, audiobookTitle = "Audiobook $audiobookId", audiobookAuthor = "An Author",
         audiobookFilename = "a$audiobookId.m4b", audiobookFormat = "m4b", audiobookDurationSeconds = 60,
-        status = "synced", ebookSeries = series, ebookSeriesIndex = index,
+        status = "synced", seriesJson = single(series, index),
     )
+
+    private fun single(series: String?, index: Float?): String? =
+        encodeSeries(listOfNotNull(series?.let { SeriesEntry(it, index?.toDouble()) }))
 
     private fun progress(
         mediaType: String, mediaId: Int, completed: Boolean = false,
@@ -154,6 +159,98 @@ class NextUpParityTest {
 
         assertEquals("Axis", books.single().series)
         assertEquals(4.0, books.single().index!!, 0.0)
+    }
+
+    @Test
+    fun `a book in two series is emitted once per series, primary first`() {
+        val inBoth = encodeSeries(listOf(SeriesEntry("Axis Saga", 3.0), SeriesEntry("Axis Chronological", 1.5)))
+        val (books, _) = libraryToNextUpInput(
+            pairs = emptyList(),
+            ebooks = listOf(ebook(1, null, null).copy(seriesJson = inBoth)),
+            audiobooks = emptyList(),
+            progress = emptyList(),
+            bookmarks = emptyList(),
+        )
+
+        assertEquals(listOf("ebook_1", "ebook_1"), books.map { it.key })
+        assertEquals(listOf("Axis Saga", "Axis Chronological"), books.map { it.series })
+        assertEquals(listOf(3.0, 1.5), books.map { it.index })
+    }
+
+    @Test
+    fun `a pair's series are the union of the pair and its audiobook`() {
+        val (books, _) = libraryToNextUpInput(
+            pairs = listOf(pair(5, ebookId = 1, audiobookId = 2, series = "Axis Saga", index = 1f)),
+            ebooks = listOf(ebook(1, "Axis Saga", 1f)),
+            audiobooks = listOf(
+                audiobook(2, null, null).copy(
+                    seriesJson = encodeSeries(listOf(SeriesEntry("axis saga", 9.0), SeriesEntry("Axis Chronological", 2.0))),
+                ),
+            ),
+            progress = emptyList(),
+            bookmarks = emptyList(),
+        )
+
+        assertEquals(listOf("pair_5", "pair_5"), books.map { it.key })
+        assertEquals(listOf("Axis Saga", "Axis Chronological"), books.map { it.series })
+        assertEquals(listOf(1.0, 2.0), books.map { it.index })
+    }
+
+    @Test
+    fun `a book with no series is emitted once with none`() {
+        val (books, _) = libraryToNextUpInput(
+            pairs = emptyList(),
+            ebooks = listOf(ebook(1, null, null)),
+            audiobooks = emptyList(),
+            progress = emptyList(),
+            bookmarks = emptyList(),
+        )
+
+        assertEquals(1, books.size)
+        assertEquals(null, books.single().series)
+    }
+
+    @Test
+    fun `finishing a book that begins two series gives one Next up row`() {
+        fun two(saga: Double, chrono: Double) =
+            encodeSeries(listOf(SeriesEntry("Axis Saga", saga), SeriesEntry("Axis Chronological", chrono)))
+        val (books, activity) = libraryToNextUpInput(
+            pairs = emptyList(),
+            ebooks = listOf(
+                ebook(1, null, null).copy(seriesJson = two(1.0, 1.0)),
+                ebook(2, null, null).copy(seriesJson = two(2.0, 2.0)),
+            ),
+            audiobooks = emptyList(),
+            progress = listOf(progress("ebook", 1, completed = true, capturedAt = "2026-09-20T00:00:00Z")),
+            bookmarks = emptyList(),
+        )
+        val now = Instant.parse("2026-09-21T00:00:00Z").toEpochMilli()
+
+        val rows = computeNextUp(books, activity, now)
+
+        assertEquals(listOf("Axis Saga" to "ebook_2"), rows.map { it.series to it.book.key })
+    }
+
+    @Test
+    fun `a reader of two overlapping series gets a row for each when the next books differ`() {
+        val (books, activity) = libraryToNextUpInput(
+            pairs = emptyList(),
+            ebooks = listOf(
+                ebook(1, null, null).copy(
+                    seriesJson = encodeSeries(listOf(SeriesEntry("Axis Saga", 1.0), SeriesEntry("Axis Chronological", 1.0))),
+                ),
+                ebook(2, "Axis Saga", 2f),
+                ebook(3, "Axis Chronological", 2f),
+            ),
+            audiobooks = emptyList(),
+            progress = listOf(progress("ebook", 1, completed = true, capturedAt = "2026-09-20T00:00:00Z")),
+            bookmarks = emptyList(),
+        )
+        val now = Instant.parse("2026-09-21T00:00:00Z").toEpochMilli()
+
+        val rows = computeNextUp(books, activity, now).map { it.series to it.book.key }
+
+        assertEquals(listOf("Axis Saga" to "ebook_2", "Axis Chronological" to "ebook_3"), rows)
     }
 
     @Test

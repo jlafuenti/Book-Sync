@@ -11,6 +11,9 @@ import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkInfo
 import androidx.work.WorkManager
 import androidx.work.workDataOf
+import com.booksync.data.local.SeriesEntry
+import com.booksync.data.local.primary
+import com.booksync.data.local.seriesList
 import com.booksync.data.local.entity.AudioBookEntity
 import com.booksync.data.local.entity.BookPairEntity
 import com.booksync.data.local.entity.EBookEntity
@@ -52,8 +55,14 @@ data class DownloadedItem(
     val key: String get() = pair?.let { "pair_${it.id}" } ?: ebook?.let { "ebook_${it.id}" } ?: audiobook?.let { "audio_${it.id}" } ?: ""
     val title: String get() = pair?.ebookTitle ?: ebook?.title ?: audiobook?.title ?: ""
     val author: String? get() = pair?.ebookAuthor ?: pair?.audiobookAuthor ?: ebook?.author ?: audiobook?.author
-    val series: String? get() = pair?.ebookSeries ?: ebook?.series ?: audiobook?.series
-    val seriesIndex: Float? get() = pair?.ebookSeriesIndex ?: ebook?.seriesIndex ?: audiobook?.seriesIndex
+    /** See [LibraryItem.seriesList]: a pair's list is already the union of its halves (issue #908). */
+    val seriesList: List<SeriesEntry>
+        get() = when {
+            pair != null      -> pair.seriesList
+            ebook != null     -> ebook.seriesList
+            audiobook != null -> audiobook.seriesList
+            else              -> emptyList()
+        }
     val sortId: Int get() = pair?.id ?: ebook?.id ?: audiobook?.id ?: 0
 
     /** Adapter so this screen can reuse [lastOpenedFor] rather than repeat it. */
@@ -79,7 +88,7 @@ internal fun downloadedComparatorFor(
             .thenBy { sortTitle(it) }
         LibrarySort.TitleAsc       -> compareBy { sortTitle(it) }
         LibrarySort.AuthorAsc      -> compareBy(nullsLast()) { it.author?.lowercase() }
-        LibrarySort.SeriesOrder    -> compareBy(nullsLast()) { it.seriesIndex }
+        LibrarySort.SeriesOrder    -> compareBy(nullsLast()) { it.seriesList.primary()?.index }
         LibrarySort.SeriesCount    -> compareBy { sortTitle(it) }
     }
 }
@@ -179,7 +188,7 @@ class DownloadedViewModel @Inject constructor(
             allItems.filter { item ->
                 item.title.lowercase().contains(q) ||
                     item.author?.lowercase()?.contains(q) == true ||
-                    item.series?.lowercase()?.contains(q) == true
+                    item.seriesList.any { it.name.lowercase().contains(q) }
             }
         }
 
