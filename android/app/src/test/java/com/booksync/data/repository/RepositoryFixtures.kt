@@ -7,6 +7,7 @@ import com.booksync.data.local.dao.BookPairDao
 import com.booksync.data.local.dao.BookmarkDao
 import com.booksync.data.local.dao.BookmarkLogDao
 import com.booksync.data.local.dao.EBookDao
+import com.booksync.data.local.dao.NextUpDismissalDao
 import com.booksync.data.local.dao.PendingSyncDao
 import com.booksync.data.local.dao.SyncPointDao
 import com.booksync.data.local.dao.SyncPointWordsDao
@@ -103,6 +104,7 @@ internal fun buildLibraryRepository(
     acknowledgedItemDao: AcknowledgedItemDao = mockk(relaxed = true),
     diagnosticLogger: DiagnosticLogger = mockk(relaxed = true),
     userScopeProvider: UserScopeProvider = testScopeProvider(),
+    nextUpDismissalDao: NextUpDismissalDao = mockk(relaxed = true),
 ): LibraryRepository = LibraryRepository(
     api = api,
     bookPairDao = bookPairDao,
@@ -115,6 +117,7 @@ internal fun buildLibraryRepository(
     acknowledgedItemDao = acknowledgedItemDao,
     diagnosticLogger = diagnosticLogger,
     userScopeProvider = userScopeProvider,
+    nextUpDismissalDao = nextUpDismissalDao,
 )
 
 /** As [buildPositionRepository], for a [MediaDownloadRepository] tested directly. */

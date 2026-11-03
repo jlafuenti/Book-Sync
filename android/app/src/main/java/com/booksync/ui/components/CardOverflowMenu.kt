@@ -24,6 +24,7 @@ import androidx.compose.material.icons.filled.Headphones
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.LinkOff
+import androidx.compose.material.icons.filled.RemoveCircleOutline
 import androidx.compose.material.icons.filled.Replay
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Sync
@@ -78,6 +79,12 @@ sealed class OverflowTarget {
     abstract val title: String
     abstract val subtitle: String?
 
+    /**
+     * The series a Next up card is there for (issue #923); null for a card from any
+     * other carousel or screen, which never offers "Remove from Next up".
+     */
+    abstract val nextUpSeries: String?
+
     data class Pair(
         val pairId: Int,
         override val title: String,
@@ -99,6 +106,7 @@ sealed class OverflowTarget {
         val hasProgress: Boolean = false,
         val hasMismatchWarning: Boolean = false,
         val mismatchDetails: List<String> = emptyList(),
+        override val nextUpSeries: String? = null,
     ) : OverflowTarget()
 
     data class Ebook(
@@ -109,6 +117,7 @@ sealed class OverflowTarget {
         val isPaired: Boolean,
         val isComplete: Boolean = false,
         val hasProgress: Boolean = false,
+        override val nextUpSeries: String? = null,
     ) : OverflowTarget()
 
     data class Audiobook(
@@ -119,6 +128,7 @@ sealed class OverflowTarget {
         val isPaired: Boolean,
         val isComplete: Boolean = false,
         val hasProgress: Boolean = false,
+        override val nextUpSeries: String? = null,
     ) : OverflowTarget()
 
     /**
@@ -131,7 +141,9 @@ sealed class OverflowTarget {
         val itemCount: Int,
         override val title: String = name,
         override val subtitle: String? = if (itemCount == 1) "1 book" else "$itemCount books",
-    ) : OverflowTarget()
+    ) : OverflowTarget() {
+        override val nextUpSeries: String? get() = null
+    }
 }
 
 /**
@@ -316,7 +328,12 @@ data class OverflowActions(
     val onDownloadSeries: (() -> Unit)? = null,
     val onResetSeriesProgress: (() -> Unit)? = null,
     val onMarkSeriesComplete: (() -> Unit)? = null,
+    // Home's Next up carousel only (issue #923); the last row of the sheet.
+    val onRemoveFromNextUp: (() -> Unit)? = null,
 )
+
+/** Whether the sheet lists "Remove from Next up": only where the caller wired it. */
+fun offersRemoveFromNextUp(actions: OverflowActions): Boolean = actions.onRemoveFromNextUp != null
 
 /**
  * Card overflow bottom sheet.
@@ -451,6 +468,14 @@ fun CardOverflowMenu(
                 is OverflowTarget.Series    -> SeriesActions(target, actions,
                     onConfirmReset    = { confirmSeriesReset = true },
                     onConfirmComplete = { confirmSeriesComplete = true },
+                )
+            }
+            // Last row, for Next up cards only (issue #923). No confirmation: the
+            // snackbar's Undo is the way back.
+            actions.onRemoveFromNextUp?.takeIf { offersRemoveFromNextUp(actions) }?.let { remove ->
+                ActionRow(
+                    Icons.Default.RemoveCircleOutline, "Remove from Next up",
+                    onClick = { remove(); onDismiss() },
                 )
             }
         }

@@ -30,8 +30,10 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -157,6 +159,23 @@ fun HomeScreen(
         transcriptionMessage?.let {
             snackbarHostState.showSnackbar(it)
             viewModel.clearTranscriptionMessage()
+        }
+    }
+
+    // "Removed from Next up" with Undo (issue #923). Collected one at a time, so a
+    // second removal waits for the first snackbar to go.
+    LaunchedEffect(Unit) {
+        viewModel.nextUpEvents.collect { event ->
+            when (event) {
+                is NextUpEvent.Removed -> {
+                    val result = snackbarHostState.showSnackbar(
+                        message = "Removed from Next up",
+                        actionLabel = "Undo",
+                        duration = SnackbarDuration.Long,
+                    )
+                    if (result == SnackbarResult.ActionPerformed) viewModel.undoRemoveFromNextUp(event.series)
+                }
+            }
         }
     }
 
@@ -706,7 +725,7 @@ private fun HomeItem.toOverflowTarget(
         // Resolve the live pair from the flows we already collect so we can
         // use the same full-fidelity builder Recently Added / New Pairs use.
         val pair = (recentlyAdded + newPairs).firstOrNull { it.id == pairId }
-        pair?.toPairOverflowTarget(activeTxPairIds, progress)
+        pair?.toPairOverflowTarget(activeTxPairIds, progress)?.copy(nextUpSeries = nextUpSeries)
             ?: OverflowTarget.Pair(
                 pairId = pairId ?: 0,
                 title = title,
@@ -717,6 +736,7 @@ private fun HomeItem.toOverflowTarget(
                 isQueuedOrTranscribing = false,
                 isComplete = progress.isComplete,
                 hasProgress = progress.hasProgress,
+                nextUpSeries = nextUpSeries,
             )
     }
     HomeItem.MediaType.EBOOK -> OverflowTarget.Ebook(
@@ -732,6 +752,7 @@ private fun HomeItem.toOverflowTarget(
         isPaired = true,
         isComplete = progress.isComplete,
         hasProgress = progress.hasProgress,
+        nextUpSeries = nextUpSeries,
     )
     HomeItem.MediaType.AUDIOBOOK -> OverflowTarget.Audiobook(
         audiobookId = audiobookId ?: 0,
@@ -741,6 +762,7 @@ private fun HomeItem.toOverflowTarget(
         isPaired = true,
         isComplete = progress.isComplete,
         hasProgress = progress.hasProgress,
+        nextUpSeries = nextUpSeries,
     )
 }
 
@@ -762,6 +784,8 @@ private fun buildHomeOverflowActions(
     onOpenAudiobookDetails: (Int) -> Unit,
 ): OverflowActions {
     val isOnline by vm.isOnline.collectAsState()
+    // Only a Next up card carries a series (issue #923); the row is last in the sheet.
+    val removeFromNextUp: (() -> Unit)? = target.nextUpSeries?.let { s -> { vm.removeFromNextUp(s) } }
 
     return when (target) {
         is OverflowTarget.Pair -> OverflowActions(
@@ -774,12 +798,14 @@ private fun buildHomeOverflowActions(
             onListen      = if (target.hasAudiobookDownloaded || isOnline) { { onOpenPairPlayer(target.pairId) } } else null,
             onDownloadPair = if (!target.hasEbookDownloaded || !target.hasAudiobookDownloaded)
                 { { vm.downloadBothById(target.pairId) } } else null,
+            onRemoveFromNextUp = removeFromNextUp,
         )
         is OverflowTarget.Ebook -> OverflowActions(
             isOnline      = isOnline,
             onViewDetails = { onOpenEbookDetails(target.ebookId) },
             onRead        = if (target.isDownloaded) { { onOpenEbook(target.ebookId) } } else null,
             onDownloadEbook = if (!target.isDownloaded) { { /* ebook entity not in scope on home */ } } else null,
+            onRemoveFromNextUp = removeFromNextUp,
         )
         is OverflowTarget.Audiobook -> OverflowActions(
             isOnline         = isOnline,
@@ -787,6 +813,7 @@ private fun buildHomeOverflowActions(
             // A standalone audiobook streams too (issue #484).
             onListen         = if (target.isDownloaded || isOnline) { { onOpenAudiobook(target.audiobookId) } } else null,
             onDownloadAudiobook = if (!target.isDownloaded) { { /* audiobook entity not in scope on home */ } } else null,
+            onRemoveFromNextUp = removeFromNextUp,
         )
         // Home has no series-grouped grid; series overflow is library-only.
         is OverflowTarget.Series -> OverflowActions(isOnline = isOnline)

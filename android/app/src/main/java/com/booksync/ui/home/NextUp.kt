@@ -226,4 +226,6 @@ internal fun NextUpRow.toHomeItem(): HomeItem = HomeItem(
     // The series this row is for, not every series the book is in: the card says
     // why it is here ("Axis Saga #4"), with no "+N" to second-guess it.
     seriesList = listOf(SeriesEntry(series, book.index)),
+    // What "Remove from Next up" removes (issue #923).
+    nextUpSeries = series,
 )

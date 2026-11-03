@@ -464,3 +464,17 @@ data class PositionResponse(
     val device_name: String? = null,
     val hints: List<PositionHintResponse> = emptyList(),
 )
+
+// ---- Next up dismissals (issue #923) ----
+
+/** One series the reader removed from Next up. `dismissed_at` is a naive UTC string, like progress rows. */
+@Serializable
+data class NextUpDismissalDto(
+    val series: String,
+    val dismissed_at: String,
+)
+
+@Serializable
+data class NextUpDismissalRequest(
+    val series: String,
+)

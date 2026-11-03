@@ -221,3 +221,16 @@ data class BookmarkLogEntity(
     val deviceId: String? = null,
     val deviceName: String? = null
 )
+
+/**
+ * A series the reader removed from Home's "Next up" row (issue #923): the phone's
+ * copy of the server's `GET /api/next-up/dismissals`, replaced wholesale on every
+ * library refresh. [seriesKey] is the series trimmed and lowercased, the way the
+ * rule in `NextUp.kt` matches series names.
+ */
+@Entity(tableName = "next_up_dismissals")
+data class NextUpDismissalEntity(
+    @PrimaryKey val seriesKey: String,
+    val series: String,
+    val dismissedAtMs: Long,
+)

@@ -143,6 +143,8 @@ class LibraryLoader @Inject constructor(
             }
             repository.refreshEbooks()
             repository.refreshAudiobooks()
+            // Never fails the run: a failed fetch keeps the dismissals as they are (issue #923).
+            repository.refreshNextUpDismissals()
             currentCoroutineContext().ensureActive()
             _state.value = LibraryLoadState.Loaded
             startPositionSync()

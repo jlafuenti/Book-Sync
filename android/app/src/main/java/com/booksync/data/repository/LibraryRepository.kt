@@ -60,6 +60,7 @@ class LibraryRepository @Inject constructor(
     private val acknowledgedItemDao: AcknowledgedItemDao,
     private val diagnosticLogger: DiagnosticLogger,
     private val userScopeProvider: UserScopeProvider,
+    private val nextUpDismissalDao: NextUpDismissalDao,
 ) {
     /**
      * The account every cache query below is scoped to (issue #314).
@@ -625,4 +626,58 @@ class LibraryRepository @Inject constructor(
         val key = scopeKeyOrNull ?: return
         acknowledgedItemDao.acknowledge(ids.map { AcknowledgedItemEntity(key, it, type) })
     }
+
+    // ============ Next up dismissals (issue #923) ============
+
+    /** The series removed from Home's Next up row, for `computeNextUp`. */
+    fun getNextUpDismissalsFlow(): Flow<List<NextUpDismissalEntity>> = nextUpDismissalDao.observeAll()
+
+    /**
+     * Replace the local dismissals with the server's, on every library refresh.
+     * A failed fetch leaves the table as it is.
+     *
+     * Deliberately simple: a dismissal made while offline (or whose POST failed)
+     * hides the row until the next successful refresh, which then replaces the
+     * table with what the server holds. There is no retry queue.
+     */
+    suspend fun refreshNextUpDismissals() {
+        val remote = try {
+            api.getNextUpDismissals()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            log("refreshNextUpDismissals — fetch failed: ${e.message}; keeping local rows")
+            return
+        }
+        nextUpDismissalDao.replaceAll(
+            remote.map { NextUpDismissalEntity(nextUpKey(it.series), it.series, parseSyncTimestamp(it.dismissed_at)) }
+        )
+    }
+
+    /** Hide [series] from Next up: local row first (instant, works offline), then the server. */
+    suspend fun dismissNextUp(series: String) {
+        nextUpDismissalDao.upsert(NextUpDismissalEntity(nextUpKey(series), series.trim(), System.currentTimeMillis()))
+        try {
+            api.dismissNextUp(NextUpDismissalRequest(series))
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            log("dismissNextUp — server call failed: ${e.message}; keeping local row")
+        }
+    }
+
+    /** Undo [dismissNextUp]: local row first, then the server. */
+    suspend fun undoDismissNextUp(series: String) {
+        nextUpDismissalDao.deleteByKey(nextUpKey(series))
+        try {
+            api.undoDismissNextUp(series)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            log("undoDismissNextUp — server call failed: ${e.message}")
+        }
+    }
+
+    /** Series names match trimmed and case-insensitively, as in `NextUp.kt`. */
+    private fun nextUpKey(series: String) = series.trim().lowercase()
 }
