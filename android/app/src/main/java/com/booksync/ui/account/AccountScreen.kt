@@ -32,7 +32,12 @@ import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.OpenInBrowser
+import com.booksync.player.castAddressLine
+import com.booksync.player.castFallbackLine
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.material3.Button
 import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -440,6 +445,9 @@ fun AccountScreen(
                 }
             }
 
+            item { SectionTitle("Casting") }
+            item { CastSettingsCard() }
+
             item { SectionTitle("Diagnostics") }
             item {
                 Column(
@@ -668,6 +676,80 @@ fun AccountScreen(
 // ---------------------------------------------------------------------------
 // Subcomponents
 // ---------------------------------------------------------------------------
+
+/**
+ * The cast port (issue #931). Saved when the field loses focus or on Done; an
+ * entry that is not a port in 1024..65535 is refused and the saved value shown
+ * again. The address line is what a firewall rule has to allow, so it can be
+ * written from the phone without reading logcat.
+ */
+@Composable
+private fun CastSettingsCard(viewModel: CastSettingsViewModel = hiltViewModel()) {
+    val colors = Tandem.colors
+    val port by viewModel.port.collectAsState()
+    val portError by viewModel.portError.collectAsState()
+    val liveAddress by viewModel.serverAddress.collectAsState()
+    // The Wi-Fi address can change while the screen is open, but a rule is written
+    // against whatever the phone has when it is looked at; no live updates needed.
+    val wifiIp = remember { viewModel.wifiIp() }
+    var edit by remember(port) { mutableStateOf(port.toString()) }
+    var wasFocused by remember { mutableStateOf(false) }
+    val focusManager = LocalFocusManager.current
+
+    fun commit() {
+        if (!viewModel.commitPort(edit)) edit = port.toString()
+    }
+
+    LaunchedEffect(Unit) { viewModel.clearPortError() }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(Tandem.shapes.card)
+            .background(colors.bgCard)
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        OutlinedTextField(
+            value = edit,
+            onValueChange = { text ->
+                edit = text.filter { it.isDigit() }.take(5)
+                viewModel.clearPortError()
+            },
+            label = { Text("Cast port") },
+            singleLine = true,
+            isError = portError != null,
+            modifier = Modifier
+                .fillMaxWidth()
+                .onFocusChanged { state ->
+                    if (wasFocused && !state.isFocused) commit()
+                    wasFocused = state.isFocused
+                },
+            keyboardOptions = KeyboardOptions(
+                keyboardType = KeyboardType.Number,
+                imeAction = ImeAction.Done,
+            ),
+            keyboardActions = KeyboardActions(onDone = {
+                commit()
+                focusManager.clearFocus()
+            }),
+        )
+        if (portError != null) {
+            Text(portError.orEmpty(), color = colors.statusError, fontSize = 12.sp)
+        }
+        Text(castAddressLine(wifiIp, port), color = colors.textPrimary, fontSize = 13.sp)
+        liveAddress?.takeIf { it.usingFallbackPort }?.let { live ->
+            Text(castFallbackLine(live.port, port), color = colors.textSecondary, fontSize = 12.sp)
+        }
+        Text(
+            "Casting plays the downloaded file from this phone over Wi-Fi. If your network keeps " +
+                "speakers on their own VLAN, allow them to reach this phone on this port. " +
+                "A new port applies at the next cast.",
+            color = colors.textMuted,
+            fontSize = 12.sp,
+        )
+    }
+}
 
 @Composable
 private fun SectionTitle(label: String) {

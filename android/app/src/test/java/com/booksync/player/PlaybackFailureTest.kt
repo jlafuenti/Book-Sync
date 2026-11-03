@@ -242,6 +242,34 @@ class PlaybackFailureTest {
         }
     }
 
+    // --- Cast: the speaker could not get the audio (issue #932) ---
+
+    @Test
+    fun `a receiver that never fetched is explained as a Wi-Fi reach problem with the cast port named`() {
+        val failure = castFailureMessage(CastFailure.Reason.RECEIVER_NEVER_FETCHED)
+        assertEquals(
+            "The speaker could not reach this phone over Wi-Fi. If your network keeps speakers on " +
+                "their own VLAN, allow them to reach this phone on the cast port (see Account).",
+            failure.message,
+        )
+        assertEquals(PlaybackRecovery.RETRY, failure.recovery)
+    }
+
+    @Test
+    fun `a receiver error is a different sentence but still points at the cast port and offers a retry`() {
+        val failure = castFailureMessage(CastFailure.Reason.RECEIVER_ERROR)
+        assertEquals(PlaybackRecovery.RETRY, failure.recovery)
+        assertTrue(failure.message.contains("cast port"))
+        assertTrue(failure.message != castFailureMessage(CastFailure.Reason.RECEIVER_NEVER_FETCHED).message)
+    }
+
+    @Test
+    fun `every cast failure reason says something`() {
+        for (reason in CastFailure.Reason.values()) {
+            assertTrue(reason.name, castFailureMessage(reason).message.isNotBlank())
+        }
+    }
+
     @Test
     fun `an unrecognised code still offers a retry`() {
         val failure = playbackFailureFor(

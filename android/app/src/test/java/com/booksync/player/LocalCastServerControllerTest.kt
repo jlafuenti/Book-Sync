@@ -17,7 +17,12 @@ import org.junit.Test
 class LocalCastServerControllerTest {
 
     /** A server that records its lifecycle instead of opening a socket. */
-    private class FakeServer(val token: String, private val failToOpen: Boolean = false) : CastFileServer {
+    private class FakeServer(
+        val token: String,
+        val requestedPort: Int,
+        val onTokenMatchedRequest: (Long) -> Unit,
+        private val failToOpen: Boolean = false,
+    ) : CastFileServer {
         var opened = 0
         var closed = 0
         var readTimeoutMs = -1
@@ -27,18 +32,26 @@ class LocalCastServerControllerTest {
             opened++
         }
         override fun close() { closed++ }
-        override fun boundPort(): Int = 40_000 + token.length
+        // Port 0 means "any free port", as for a real socket.
+        override fun boundPort(): Int = if (requestedPort == 0) 40_000 + token.length else requestedPort
     }
 
     private var ip: String? = "192.0.2.2"
     private val servers = mutableListOf<FakeServer>()
     private var tokenCounter = 0
     private var nextFails = false
+    private var preferredPort = 8484
+
+    /** Ports that refuse to bind; port 0 never does unless [nextFails] is set. */
+    private val busyPorts = mutableSetOf<Int>()
 
     private fun controller() = LocalCastServerController(
         readTimeoutMs = 60_000,
         detectIp = { ip },
-        newServer = { token -> FakeServer(token, nextFails).also { servers += it } },
+        preferredPort = { preferredPort },
+        newServer = { token, port, onRequest ->
+            FakeServer(token, port, onRequest, nextFails || port in busyPorts).also { servers += it }
+        },
         newToken = { "token${++tokenCounter}" },
     )
 
@@ -46,7 +59,7 @@ class LocalCastServerControllerTest {
     fun `start boots one server at the Wi-Fi address with a fresh token`() {
         val c = controller()
         val address = c.start()
-        assertEquals(CastServerAddress("192.0.2.2", 40_006, "token1"), address)
+        assertEquals(CastServerAddress("192.0.2.2", 8484, "token1"), address)
         assertEquals(address, c.address)
         assertEquals(1, servers.size)
         assertEquals(1, servers[0].opened)
@@ -114,5 +127,104 @@ class LocalCastServerControllerTest {
         val b = c.start()!!.pathToken
         assertNotEquals(a, b)
         assertTrue(servers.map { it.token }.containsAll(listOf(a, b)))
+    }
+
+    // --- Fixed port (issue #931) ---
+
+    @Test
+    fun `the preferred port is the one the server is asked to bind`() {
+        preferredPort = 9001
+        val address = controller().start()!!
+        assertEquals(9001, servers.single().requestedPort)
+        assertEquals(9001, address.port)
+        assertFalse(address.usingFallbackPort)
+    }
+
+    @Test
+    fun `a busy preferred port falls back to an ephemeral one and says so`() {
+        busyPorts += 8484
+        val c = controller()
+        val address = c.start()!!
+        assertEquals("preferred first, then any free port", listOf(8484, 0), servers.map { it.requestedPort })
+        assertEquals(0, servers[0].opened)
+        assertEquals(1, servers[1].opened)
+        assertEquals(40_000 + "token1".length, address.port)
+        assertTrue(address.usingFallbackPort)
+        assertEquals(address, c.address)
+    }
+
+    @Test
+    fun `both binds failing leaves nothing running`() {
+        busyPorts += 8484
+        // Port 0 fails too: the whole socket layer is unavailable.
+        nextFails = true
+        val c = controller()
+        assertNull(c.start())
+        assertFalse(c.isRunning)
+        assertEquals("one retry, not a loop", 2, servers.size)
+    }
+
+    @Test
+    fun `an ephemeral preference does not retry`() {
+        preferredPort = 0
+        nextFails = true
+        assertNull(controller().start())
+        assertEquals(1, servers.size)
+    }
+
+    @Test
+    fun `the fallback keeps the same path token`() {
+        busyPorts += 8484
+        controller().start()
+        assertEquals(servers[0].token, servers[1].token)
+    }
+
+    @Test
+    fun `the port setting is read at each start, not once`() {
+        val c = controller()
+        c.start()
+        c.stop()
+        preferredPort = 9002
+        val second = c.start()!!
+        assertEquals(listOf(8484, 9002), servers.map { it.requestedPort })
+        assertEquals(9002, second.port)
+    }
+
+    @Test
+    fun `a running server is not restarted just because the setting changed`() {
+        val c = controller()
+        c.start()
+        preferredPort = 9002
+        c.start()
+        assertEquals("applied at the next session", 1, servers.size)
+    }
+
+    // --- Receiver fetch notifications (issue #932) ---
+
+    @Test
+    fun `a token-matched request reaches the listener the service installed`() {
+        val c = controller()
+        val seen = mutableListOf<Long>()
+        c.onReceiverRequest = { seen += it }
+        c.start()
+        servers[0].onTokenMatchedRequest(1234L)
+        assertEquals(listOf(1234L), seen)
+    }
+
+    @Test
+    fun `a request with no listener installed is harmless`() {
+        val c = controller()
+        c.start()
+        servers[0].onTokenMatchedRequest(1L)
+    }
+
+    @Test
+    fun `a listener installed after the server started still gets requests`() {
+        val c = controller()
+        c.start()
+        val seen = mutableListOf<Long>()
+        c.onReceiverRequest = { seen += it }
+        servers[0].onTokenMatchedRequest(7L)
+        assertEquals(listOf(7L), seen)
     }
 }

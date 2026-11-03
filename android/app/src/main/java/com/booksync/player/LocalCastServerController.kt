@@ -17,7 +17,7 @@ interface CastFileServer {
 
     fun close()
 
-    /** The ephemeral port the server bound to; valid after [open]. */
+    /** The port the server actually bound to (the requested one, or the one chosen for port 0); valid after [open]. */
     fun boundPort(): Int
 }
 
@@ -39,8 +39,19 @@ class LocalCastServerController(
     private val readTimeoutMs: Int,
     /** The phone's Wi-Fi IPv4, or null when there is no Wi-Fi network. */
     private val detectIp: () -> String?,
-    /** A fresh, not-yet-started server that will gate on the given path token. */
-    private val newServer: (pathToken: String) -> CastFileServer,
+    /**
+     * The port to try first: the Account-screen cast port (issue #931), read at
+     * each start so a change applies to the next Cast session. 0 means "any
+     * free port".
+     */
+    private val preferredPort: () -> Int,
+    /**
+     * A fresh, not-yet-started server that will gate on the given path token
+     * and bind the given port (0 = any free port). It calls the third argument,
+     * with a monotonic timestamp, whenever a request carrying the token arrives
+     * (issue #932) -- on the server's own thread, not the main one.
+     */
+    private val newServer: (pathToken: String, port: Int, onTokenMatchedRequest: (Long) -> Unit) -> CastFileServer,
     private val newToken: () -> String = { UUID.randomUUID().toString().replace("-", "") },
 ) {
     companion object {
@@ -48,6 +59,14 @@ class LocalCastServerController(
     }
 
     private var server: CastFileServer? = null
+
+    /**
+     * Told when the receiver fetches from the phone (issue #932). Set by the
+     * service; read on the server thread, so volatile. Looked up per request
+     * rather than captured, so it can be installed after [start].
+     */
+    @Volatile
+    var onReceiverRequest: ((nowMs: Long) -> Unit)? = null
 
     /** Where the receiver should fetch from, or null when nothing is serving. */
     @Volatile
@@ -79,21 +98,46 @@ class LocalCastServerController(
         stop()
 
         val token = newToken()
-        val candidate = newServer(token)
+        val preferred = preferredPort()
+        var usingFallback = false
+        var candidate = newServer(token, preferred, ::notifyReceiverRequest)
         try {
             candidate.open(readTimeoutMs)
         } catch (e: Exception) {
-            Log.e(TAG, "start: failed to start", e)
-            return null
+            if (preferred == 0) {
+                Log.e(TAG, "start: failed to start", e)
+                return null
+            }
+            // The cast port is busy (or refused). A network that needs no
+            // firewall rule should not lose casting over it, so take any free
+            // port -- once. The address says it happened (issue #931).
+            Log.w(TAG, "start: port $preferred unavailable, falling back to an ephemeral port", e)
+            usingFallback = true
+            candidate = newServer(token, 0, ::notifyReceiverRequest)
+            try {
+                candidate.open(readTimeoutMs)
+            } catch (e2: Exception) {
+                Log.e(TAG, "start: failed to start", e2)
+                return null
+            }
         }
         server = candidate
-        val bound = CastServerAddress(ip = currentIp, port = candidate.boundPort(), pathToken = token)
+        val bound = CastServerAddress(
+            ip = currentIp,
+            port = candidate.boundPort(),
+            pathToken = token,
+            usingFallbackPort = usingFallback,
+        )
         address = bound
         // Host and port only. The path token gates the LAN server that serves
         // the audiobook, so logging it hands anyone reading logcat a working
         // stream URL for as long as the cast session lives (issue #231).
         Log.i(TAG, "LocalCastHttpServer started at http://${bound.ip}:${bound.port}/")
         return bound
+    }
+
+    private fun notifyReceiverRequest(nowMs: Long) {
+        onReceiverRequest?.invoke(nowMs)
     }
 
     /** Tears the server down. Safe to call when nothing is running. */

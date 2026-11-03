@@ -9,12 +9,16 @@ import androidx.work.WorkManager
 import com.booksync.data.local.entity.AudioBookEntity
 import com.booksync.data.local.entity.BookPairEntity
 import com.booksync.data.repository.BookSyncRepository
+import com.booksync.cast.CastSessionMonitor
+import com.booksync.player.CastFailure
+import com.booksync.player.CastServerAddress
 import com.booksync.player.PlaybackRecovery
 import io.mockk.coEvery
 import io.mockk.coVerifyOrder
 import io.mockk.every
 import io.mockk.mockk
 import io.mockk.mockkObject
+import io.mockk.verify
 import io.mockk.unmockkObject
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -80,6 +84,12 @@ class PlayerViewModelPlaybackErrorTest {
         uploadedAt = "2026-01-01T00:00:00", isDownloaded = downloaded,
     )
 
+    /** The monitor's failure flow, which the service writes and the view model reads (issue #932). */
+    private val castFailure = MutableStateFlow<CastFailure?>(null)
+    private val castMonitor = mockk<CastSessionMonitor>(relaxed = true).also {
+        every { it.castFailure } returns castFailure
+    }
+
     private fun pairedViewModel(downloaded: Boolean): PlayerViewModel {
         every { repository.getPairsFlow() } returns flowOf(listOf(pair(downloaded)))
         return PlayerViewModel(
@@ -88,7 +98,7 @@ class PlayerViewModelPlaybackErrorTest {
             serverUrlManager = mockk(relaxed = true),
             coverArtHelper = mockk(relaxed = true),
             networkMonitor = mockk(relaxed = true),
-            castSessionMonitor = mockk(relaxed = true),
+            castSessionMonitor = castMonitor,
             savedStateHandle = SavedStateHandle(mapOf("pairId" to 42)),
         )
     }
@@ -102,7 +112,7 @@ class PlayerViewModelPlaybackErrorTest {
             serverUrlManager = mockk(relaxed = true),
             coverArtHelper = mockk(relaxed = true),
             networkMonitor = mockk(relaxed = true),
-            castSessionMonitor = mockk(relaxed = true),
+            castSessionMonitor = castMonitor,
             savedStateHandle = SavedStateHandle(mapOf("audiobookId" to 17)),
         )
     }
@@ -268,5 +278,125 @@ class PlayerViewModelPlaybackErrorTest {
         vm.retryPlayback()
 
         assertNull(vm.playbackError.value)
+    }
+
+    // --- Cast failures (issue #932) ---
+
+    private val failure = CastFailure(
+        CastFailure.Reason.RECEIVER_NEVER_FETCHED,
+        CastServerAddress("192.0.2.2", 8484, "token"),
+    )
+
+    @Test
+    fun `a cast failure from the service reaches the screen as a retryable playback failure`() =
+        runTest(dispatcher.scheduler) {
+            val vm = pairedViewModel(downloaded = true)
+            advanceUntilIdle()
+
+            castFailure.value = failure
+            advanceUntilIdle()
+
+            val shown = vm.playbackError.value
+            assertNotNull(shown)
+            assertEquals(com.booksync.player.castFailureMessage(failure.reason), shown)
+            assertEquals(PlaybackRecovery.RETRY, shown!!.recovery)
+        }
+
+    @Test
+    fun `a cast failure reported before the screen opened is shown when it does`() =
+        runTest(dispatcher.scheduler) {
+            castFailure.value = failure
+            val vm = pairedViewModel(downloaded = true)
+            advanceUntilIdle()
+
+            assertNotNull(vm.playbackError.value)
+        }
+
+    @Test
+    fun `dismissing a cast failure clears it at the source too`() = runTest(dispatcher.scheduler) {
+        val vm = pairedViewModel(downloaded = true)
+        advanceUntilIdle()
+        castFailure.value = failure
+        advanceUntilIdle()
+
+        vm.clearPlaybackError()
+
+        assertNull(vm.playbackError.value)
+        verify { castMonitor.clear() }
+    }
+
+    @Test
+    fun `the phone resuming after the cast ends does not take the explanation down`() =
+        runTest(dispatcher.scheduler) {
+            val vm = pairedViewModel(downloaded = true)
+            advanceUntilIdle()
+            castFailure.value = failure
+            advanceUntilIdle()
+
+            vm.onPlayingChanged(true)
+
+            assertNotNull(vm.playbackError.value)
+        }
+
+    @Test
+    fun `sound arriving still clears an ordinary playback error`() = runTest(dispatcher.scheduler) {
+        val vm = pairedViewModel(downloaded = true)
+        advanceUntilIdle()
+        vm.onPlaybackError(PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED)
+
+        vm.onPlayingChanged(true)
+
+        assertNull(vm.playbackError.value)
+    }
+
+    @Test
+    fun `a player error replaces a cast failure and sound then clears it`() = runTest(dispatcher.scheduler) {
+        val vm = pairedViewModel(downloaded = true)
+        advanceUntilIdle()
+        castFailure.value = failure
+        advanceUntilIdle()
+
+        vm.onPlaybackError(PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED)
+        vm.onPlayingChanged(true)
+
+        assertNull(vm.playbackError.value)
+    }
+
+    @Test
+    fun `a new cast session clears the failure from the screen`() = runTest(dispatcher.scheduler) {
+        val vm = pairedViewModel(downloaded = true)
+        advanceUntilIdle()
+        castFailure.value = failure
+        advanceUntilIdle()
+
+        castFailure.value = null // CastSessionMonitor does this when a session starts
+        advanceUntilIdle()
+
+        assertNull(vm.playbackError.value)
+    }
+
+    @Test
+    fun `the monitor clearing does not wipe an unrelated player error`() = runTest(dispatcher.scheduler) {
+        val vm = pairedViewModel(downloaded = true)
+        advanceUntilIdle()
+        vm.onPlaybackError(PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED)
+
+        castFailure.value = null
+        advanceUntilIdle()
+
+        assertNotNull(vm.playbackError.value)
+    }
+
+    @Test
+    fun `retrying after a cast failure clears it at the source too`() = runTest(dispatcher.scheduler) {
+        val vm = pairedViewModel(downloaded = true)
+        advanceUntilIdle()
+        castFailure.value = failure
+        advanceUntilIdle()
+
+        vm.retryPlayback()
+
+        assertNull(vm.playbackError.value)
+        verify { castMonitor.clear() }
     }
 }

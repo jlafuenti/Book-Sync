@@ -564,9 +564,18 @@ report from a version whose mapping was never kept is close to unusable.
 
 ## Casting
 
-Audio can be cast to a Chromecast. Because a cast receiver fetches media over plain HTTP with no
-Authorization header, the server issues short-lived (15 minute) resource-scoped media tokens for
-those URLs rather than exposing the JWT.
+Audio can be cast to a Chromecast, but only a **downloaded** book. A receiver cannot send a bearer
+token, so the phone serves its own copy of the file to the speaker over the local network
+(`LocalCastHttpServer`) instead of the receiver fetching it from the Tandem server. The Cast
+control channel is outbound from the phone, but the speaker's fetch is a new connection *to* the
+phone, so a network that isolates speakers (for example, on their own VLAN) must allow them to
+reach the phone on the **cast port**. The port is **8484** by default and can be changed under
+Account > Casting (1024-65535; applied at the next cast), which also shows the address the
+speaker fetches from. If that port is busy the phone falls back to a random one for that session
+and says so on the same screen; a firewall rule for the configured port will not cover that
+session. When a speaker does not fetch within about eight seconds of accepting the load, or
+reports an error, the app ends the Cast session, resumes playback on the phone and shows why on
+the player screen (issues #931, #932).
 
 ## Privacy
 

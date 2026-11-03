@@ -71,7 +71,7 @@ class PlayerViewModelTeardownTest {
             serverUrlManager = mockk(relaxed = true),
             coverArtHelper = mockk(relaxed = true),
         networkMonitor = mockk(relaxed = true),
-        castSessionMonitor = mockk(relaxed = true),
+        castSessionMonitor = relaxedCastMonitor(),
             savedStateHandle = SavedStateHandle(mapOf("pairId" to 42)),
         )
         advanceUntilIdle()
@@ -107,7 +107,7 @@ class PlayerViewModelTeardownTest {
             serverUrlManager = mockk(relaxed = true),
             coverArtHelper = mockk(relaxed = true),
         networkMonitor = mockk(relaxed = true),
-        castSessionMonitor = mockk(relaxed = true),
+        castSessionMonitor = relaxedCastMonitor(),
             savedStateHandle = SavedStateHandle(mapOf("audiobookId" to 17)),
         )
         advanceUntilIdle() // restore completes; the write gate is open

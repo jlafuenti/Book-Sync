@@ -3,8 +3,18 @@ package com.booksync.player
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
 
-/** Where the phone's LAN cast server is listening, for the life of one Cast session. */
-data class CastServerAddress(val ip: String, val port: Int, val pathToken: String)
+/**
+ * Where the phone's LAN cast server is listening, for the life of one Cast session.
+ * [usingFallbackPort] is true when the configured cast port was busy and the server
+ * took an ephemeral one instead (issue #931), so a firewall rule written for the
+ * configured port will not cover this session.
+ */
+data class CastServerAddress(
+    val ip: String,
+    val port: Int,
+    val pathToken: String,
+    val usingFallbackPort: Boolean = false,
+)
 
 /**
  * What the Cast receiver is told to load (issue #225).

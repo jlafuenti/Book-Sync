@@ -88,4 +88,15 @@ class PlayerSwitchDecisionTest {
         assertEquals("UNKNOWN idle=none", castStatusLabel(MediaStatus.PLAYER_STATE_UNKNOWN, MediaStatus.IDLE_REASON_NONE))
         assertEquals("state=42 idle=reason=17", castStatusLabel(42, 17))
     }
+
+    @Test
+    fun `only idle with the error reason is a receiver error`() {
+        assertEquals(true, isCastReceiverError(MediaStatus.PLAYER_STATE_IDLE, MediaStatus.IDLE_REASON_ERROR))
+        // A book that ended, or a stop the user asked for, is not a failed cast.
+        assertEquals(false, isCastReceiverError(MediaStatus.PLAYER_STATE_IDLE, MediaStatus.IDLE_REASON_FINISHED))
+        assertEquals(false, isCastReceiverError(MediaStatus.PLAYER_STATE_IDLE, MediaStatus.IDLE_REASON_CANCELED))
+        assertEquals(false, isCastReceiverError(MediaStatus.PLAYER_STATE_IDLE, MediaStatus.IDLE_REASON_NONE))
+        assertEquals(false, isCastReceiverError(MediaStatus.PLAYER_STATE_LOADING, MediaStatus.IDLE_REASON_ERROR))
+        assertEquals(false, isCastReceiverError(MediaStatus.PLAYER_STATE_PLAYING, MediaStatus.IDLE_REASON_NONE))
+    }
 }

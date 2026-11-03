@@ -82,7 +82,7 @@ class PlayerViewModelLoadWindowTest {
         serverUrlManager = mockk(relaxed = true),
         coverArtHelper = mockk(relaxed = true),
         networkMonitor = mockk(relaxed = true),
-        castSessionMonitor = mockk(relaxed = true),
+        castSessionMonitor = relaxedCastMonitor(),
         savedStateHandle = SavedStateHandle(args),
     )
 

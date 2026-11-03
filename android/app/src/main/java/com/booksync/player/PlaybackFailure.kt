@@ -157,3 +157,27 @@ fun playbackFailureFor(errorCode: Int, isDownloaded: Boolean): PlaybackFailure =
         recovery = PlaybackRecovery.RETRY,
     )
 }
+
+/**
+ * What the listener is told when a Cast session was ended because the speaker
+ * could not play from the phone (issue #932).
+ *
+ * Cast serves the phone's own copy over the LAN, so the usual cause is a
+ * network that stops the speaker connecting *to* the phone: the session
+ * connects and the LOAD is acknowledged, because the control channel is
+ * outbound from the phone, and then nothing arrives. Both messages therefore
+ * point at the cast port. Retry, because the session is already back on the
+ * phone and asking again starts a new one.
+ */
+fun castFailureMessage(reason: CastFailure.Reason): PlaybackFailure = when (reason) {
+    CastFailure.Reason.RECEIVER_NEVER_FETCHED -> PlaybackFailure(
+        message = "The speaker could not reach this phone over Wi-Fi. If your network keeps " +
+            "speakers on their own VLAN, allow them to reach this phone on the cast port (see Account).",
+        recovery = PlaybackRecovery.RETRY,
+    )
+    CastFailure.Reason.RECEIVER_ERROR -> PlaybackFailure(
+        message = "The speaker could not play this audiobook. If your network keeps speakers on " +
+            "their own VLAN, allow them to reach this phone on the cast port (see Account).",
+        recovery = PlaybackRecovery.RETRY,
+    )
+}
