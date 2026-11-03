@@ -107,6 +107,11 @@ does not try to guess around it; fix the name in ABS, or edit the series on the 
 - A rescan, rescan-all or Audiobookshelf enrich **adds** the series names the book lacks after the
   ones it has. It keeps the order and your edited indexes and never removes a series; the enrich's
   force option overwrites other fields but not the series list.
+- A metadata edit can send `series_add` (the web's bulk "Add or update this series"). It appends
+  the names the book lacks. For a name the book already has, the entry keeps its place and
+  spelling and takes the number in the request when one is given; a request with no number leaves
+  the book's number alone. Unlike a rescan, this is a deliberate edit, so it may change a number
+  you set before.
 - Clearing a book's series (saving an empty list) marks it cleared, and it stays that way through
   every later rescan and enrich until you give it a series again. Saving an unrelated edit on a
   book that never had a series does not mark it cleared.

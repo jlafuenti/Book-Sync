@@ -2,7 +2,8 @@
 `PATCH /api/library/{ebooks,audiobooks}/{id}` and series (issue #905).
 
 `series_list` replaces the whole list (`[]` clears it); `series_add` appends the
-names the row lacks. `series_cleared` records a user emptying a list, and only
+names the row lacks and, for a name it already has, keeps the entry's place and
+takes the new number when one is given (issue #913). `series_cleared` records a user emptying a list, and only
 that: saving an unrelated edit on a book that never had a series must not set
 it. Any non-empty result clears it again.
 """
@@ -123,21 +124,43 @@ async def test_an_omitted_series_list_leaves_series_alone(db, editor_client, med
 
 
 @pytest.mark.parametrize("media", ["ebook", "audiobook"])
-async def test_series_add_appends_only_missing_names(db, editor_client, media):
+async def test_series_add_appends_missing_names(db, editor_client, media):
     row = await _MAKE[media](db, series_list=[AXIS])
 
-    body = await _patch(editor_client, media, row, {"series_add": [CHRONO, {"name": "axis saga", "index": 9}]})
+    body = await _patch(editor_client, media, row, {"series_add": [CHRONO]})
 
     assert body["series_list"] == [AXIS, CHRONO]
 
 
 @pytest.mark.parametrize("media", ["ebook", "audiobook"])
-async def test_series_add_of_a_name_already_present_is_a_no_op(db, editor_client, media):
+async def test_series_add_of_an_existing_name_changes_its_number_in_place(db, editor_client, media):
+    row = await _MAKE[media](db, series_list=[CHRONO, AXIS])
+
+    body = await _patch(editor_client, media, row, {"series_add": [{"name": "axis saga", "index": 9}]})
+
+    # Same place, same spelling, new number; the other entry is untouched.
+    assert body["series_list"] == [CHRONO, {"name": "Axis Saga", "index": 9.0}]
+
+
+@pytest.mark.parametrize("media", ["ebook", "audiobook"])
+async def test_series_add_of_an_existing_name_without_a_number_leaves_it(db, editor_client, media):
     row = await _MAKE[media](db, series_list=[AXIS])
 
-    body = await _patch(editor_client, media, row, {"series_add": [{"name": "Axis Saga", "index": 99}]})
+    body = await _patch(editor_client, media, row, {"series_add": [{"name": "Axis Saga"}]})
 
     assert body["series_list"] == [AXIS]
+
+
+@pytest.mark.parametrize("media", ["ebook", "audiobook"])
+async def test_series_add_updates_and_appends_in_one_request(db, editor_client, media):
+    row = await _MAKE[media](db, series_list=[AXIS])
+
+    body = await _patch(
+        editor_client, media, row,
+        {"series_add": [CHRONO, {"name": "Axis Saga", "index": 5}]},
+    )
+
+    assert body["series_list"] == [{"name": "Axis Saga", "index": 5.0}, CHRONO]
 
 
 @pytest.mark.parametrize("media", ["ebook", "audiobook"])

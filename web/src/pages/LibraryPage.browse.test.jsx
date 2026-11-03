@@ -12,6 +12,7 @@ import { AuthProvider } from '../contexts/AuthContext'
 const {
     getLibraryItemsPageMock, getLibraryFacetsMock, getAllProgressMock, coverSrcMock,
     acknowledgeNewItemsMock, acknowledgeNewPairsMock, updateEbookMetadataMock,
+    updateAudiobookMetadataMock,
 } = vi.hoisted(() => ({
     getLibraryItemsPageMock: vi.fn(),
     getLibraryFacetsMock: vi.fn(),
@@ -20,6 +21,7 @@ const {
     acknowledgeNewItemsMock: vi.fn(),
     acknowledgeNewPairsMock: vi.fn(),
     updateEbookMetadataMock: vi.fn(),
+    updateAudiobookMetadataMock: vi.fn(),
 }))
 
 vi.mock('../api', async () => {
@@ -45,7 +47,7 @@ vi.mock('../api', async () => {
         acknowledgeNewItems: acknowledgeNewItemsMock,
         acknowledgeNewPairs: acknowledgeNewPairsMock,
         updateEbookMetadata: updateEbookMetadataMock,
-        updateAudiobookMetadata: vi.fn(),
+        updateAudiobookMetadata: updateAudiobookMetadataMock,
         uploadEbook: vi.fn(), uploadAudiobook: vi.fn(), scanLibrary: vi.fn(), normalizeLibrary: vi.fn(),
         rescanAllLibrary: vi.fn(), deleteEbook: vi.fn(), deleteAudiobook: vi.fn(), verifyFiles: vi.fn(),
         cleanupOrphans: vi.fn(),
@@ -352,9 +354,9 @@ describe('LibraryPage delete confirmations are dialogs (issue #279)', () => {
         expect(dialog).toHaveAccessibleName('Edit 2 Items')
         expect(dialog).toHaveTextContent('Only filled fields will be updated.')
 
-        fireEvent.change(screen.getAllByPlaceholderText('Leave blank to keep unchanged')[0], {
-            target: { value: 'Robin Hobb' },
-        })
+        // Both books are by Author A, so the field opens with it (issue #914).
+        expect(screen.getByLabelText('Author')).toHaveValue('Author A')
+        fireEvent.change(screen.getByLabelText('Author'), { target: { value: 'Robin Hobb' } })
         fireEvent.click(screen.getByRole('button', { name: 'Save to 2 Items' }))
 
         await waitFor(() => expect(updateEbookMetadataMock).toHaveBeenCalledTimes(2))
@@ -379,14 +381,46 @@ describe('LibraryPage delete confirmations are dialogs (issue #279)', () => {
         fireEvent.click(screen.getByRole('button', { name: 'Select' }))
         fireEvent.click(screen.getByText('Ebook 3'))
         fireEvent.click(await screen.findByRole('button', { name: 'Edit Metadata' }))
-        fireEvent.click(screen.getByRole('radio', { name: 'Add to series' }))
-        const [, name, index] = screen.getAllByPlaceholderText('Leave blank to keep unchanged')
-        fireEvent.change(name, { target: { value: 'Axis Chronological' } })
-        fireEvent.change(index, { target: { value: '2' } })
+        // The book's own series opens prefilled, in "add or update" mode (#914).
+        expect(screen.getByLabelText('Series')).toHaveValue('Axis Saga')
+        expect(screen.getByRole('radio', { name: 'Add or update this series' })).toBeChecked()
+        fireEvent.change(screen.getByLabelText('Series'), { target: { value: 'Axis Chronological' } })
+        fireEvent.change(screen.getByLabelText('Number for Ebook 3'), { target: { value: '2' } })
         fireEvent.click(screen.getByRole('button', { name: 'Save to 1 Item' }))
 
         await waitFor(() => expect(updateEbookMetadataMock).toHaveBeenCalledWith(3, { series_add: [{ name: 'Axis Chronological', index: 2 }] }))
         await waitFor(() => expect(document.querySelector('.lib-book-card-series').textContent).toBe('Axis Saga #4 +1'))
+    })
+
+    // Issue #913: each selected book gets its own number, and each PATCH
+    // carries that book's number only.
+    it('bulk edit numbers each selected book on its own (issue #913)', async () => {
+        getLibraryItemsPageMock.mockResolvedValue(pageOf([ebookItem(3), pairItem(7, 1, 2), ebookItem(5)], 3))
+        updateEbookMetadataMock.mockResolvedValue({})
+        updateAudiobookMetadataMock.mockResolvedValue({})
+        renderPage()
+        await screen.findByText('Ebook 3')
+
+        fireEvent.click(screen.getByRole('button', { name: 'Select' }))
+        fireEvent.click(screen.getByText('Ebook 3'))
+        fireEvent.click(screen.getByText('Ebook 1'))
+        fireEvent.click(screen.getByText('Ebook 5'))
+        fireEvent.click(await screen.findByRole('button', { name: 'Edit Metadata' }))
+
+        fireEvent.change(screen.getByLabelText('Series'), { target: { value: 'Axis Saga' } })
+        fireEvent.click(screen.getByRole('radio', { name: 'Add or update this series' }))
+        fireEvent.click(screen.getByRole('button', { name: 'Number 1 to 3 in this order' }))
+        fireEvent.change(screen.getByLabelText('Number for Ebook 5'), { target: { value: '2.5' } })
+        fireEvent.click(screen.getByRole('button', { name: 'Save to 3 Items' }))
+
+        await waitFor(() => expect(updateEbookMetadataMock).toHaveBeenCalledTimes(3))
+        const entry = (index) => ({ series_add: [{ name: 'Axis Saga', index }] })
+        expect(updateEbookMetadataMock).toHaveBeenCalledWith(3, entry(1))
+        expect(updateEbookMetadataMock).toHaveBeenCalledWith(1, entry(2))      // the pair's ebook ...
+        expect(updateAudiobookMetadataMock).toHaveBeenCalledWith(2, entry(2))  // ... and its audiobook
+        expect(updateEbookMetadataMock).toHaveBeenCalledWith(5, entry(2.5))
+        expect(updateAudiobookMetadataMock).toHaveBeenCalledTimes(1)
+        await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
     })
 
     it('the bulk confirmation counts the selection and takes Escape', async () => {

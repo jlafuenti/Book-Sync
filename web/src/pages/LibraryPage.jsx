@@ -589,35 +589,49 @@ function LibraryPage({ tab }) {
         lastSelectedIndexRef.current = null
     }
 
-    // Parse selected IDs back to {mediaType, id}
-    const parseSelectedIds = () => {
-        return [...selectedIds].flatMap(key => {
-            if (key.startsWith('pair-')) {
-                const pairId = parseInt(key.slice(5))
-                const entry = filteredBooks.find(b => b.mediaType === 'pair' && b.pair_id === pairId)
-                if (!entry) return []
-                const results = []
-                if (entry.ebook_id) results.push({ mediaType: 'ebook', id: entry.ebook_id })
-                if (entry.audiobook_id) results.push({ mediaType: 'audiobook', id: entry.audiobook_id })
-                return results
-            }
-            const idx = key.lastIndexOf('-')
-            return [{ mediaType: key.slice(0, idx), id: parseInt(key.slice(idx + 1)) }]
-        })
+    // Resolve one selection key back to its {mediaType, id} media rows
+    const mediaIdsForKey = (key) => {
+        if (key.startsWith('pair-')) {
+            const pairId = parseInt(key.slice(5))
+            const entry = filteredBooks.find(b => b.mediaType === 'pair' && b.pair_id === pairId)
+            if (!entry) return []
+            const results = []
+            if (entry.ebook_id) results.push({ mediaType: 'ebook', id: entry.ebook_id })
+            if (entry.audiobook_id) results.push({ mediaType: 'audiobook', id: entry.audiobook_id })
+            return results
+        }
+        const idx = key.lastIndexOf('-')
+        return [{ mediaType: key.slice(0, idx), id: parseInt(key.slice(idx + 1)) }]
     }
+
+    // Parse selected IDs back to {mediaType, id}
+    const parseSelectedIds = () => [...selectedIds].flatMap(mediaIdsForKey)
+
+    // What the bulk editor shows and prefills from (issues #913, #914), in the
+    // order the page lists the books.
+    const bulkEditItems = useMemo(() => filteredBooks
+        .filter(b => selectedIds.has(bookKey(b)))
+        .map(b => ({
+            key: bookKey(b), title: b.title, author: b.author, series_list: b.series_list,
+            publisher: b.publisher, published_year: b.published_year,
+        })), [filteredBooks, selectedIds])
 
     // ---- Bulk operations ----
 
-    const handleBulkEdit = async (patch) => {
+    // One patch per book (issue #913): the shared fields are the same in each,
+    // only the series number differs.
+    const handleBulkEdit = async (patches) => {
         setBulkSaving(true)
         try {
-            const selected = parseSelectedIds()
-            const answers = await Promise.all(selected.map(s => {
+            const jobs = patches
+                .filter(({ patch }) => Object.keys(patch).length > 0)
+                .flatMap(({ key, patch }) => mediaIdsForKey(key).map(s => ({ ...s, patch })))
+            const answers = await Promise.all(jobs.map(s => {
                 const fn = s.mediaType === 'ebook' ? updateEbookMetadata : updateAudiobookMetadata
-                return fn(s.id, patch)
+                return fn(s.id, s.patch)
             }))
-            browse.patchItems(items => selected.reduce(
-                (acc, s, i) => patchMedia(acc, s.mediaType, s.id, localPatch(patch, answers[i])), items))
+            browse.patchItems(items => jobs.reduce(
+                (acc, s, i) => patchMedia(acc, s.mediaType, s.id, localPatch(s.patch, answers[i])), items))
             setFacetsTick(t => t + 1)
             setBulkEditOpen(false)
             exitSelectMode()
@@ -1508,7 +1522,7 @@ function LibraryPage({ tab }) {
             {/* Bulk Edit Modal — the shared component (issue #276) */}
             <BulkMetadataEditModal
                 open={bulkEditOpen}
-                selectionCount={selectedIds.size}
+                items={bulkEditItems}
                 saving={bulkSaving}
                 description="Leave fields blank to keep existing values. Only filled fields will be updated."
                 onSave={handleBulkEdit}

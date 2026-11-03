@@ -985,8 +985,10 @@ class MetadataUpdate(BaseModel):
     print_page_count: Optional[int] = Field(None, ge=0, le=100000)
     # Issue #905. Series are a list, not columns, so they are not in
     # MEDIA_METADATA_FIELDS. `series_list` replaces the whole list (`[]` clears
-    # it); `series_add` appends the names the row lacks, for a bulk "add to
-    # series". Omitted (None) leaves the series alone.
+    # it); `series_add` is a bulk "add or update this series": it appends the
+    # names the row lacks and, for a name the row already has, keeps the entry's
+    # place and takes the entry's index when one is given (issue #913).
+    # Omitted (None) leaves the series alone.
     series_list: Optional[List[SeriesEntry]] = None
     series_add: Optional[List[SeriesEntry]] = None
 
@@ -1046,7 +1048,10 @@ async def _refresh_write_back_hash(db: AsyncSession, book, *, is_ebook: bool) ->
 
 
 def _apply_series_update(book, meta: MetadataUpdate) -> None:
-    """Apply a PATCH's `series_list` (replace) and `series_add` (append).
+    """Apply a PATCH's `series_list` (replace) and `series_add` (add or update).
+
+    `series_add` appends the names the row lacks, and for a name it already
+    has keeps the entry's place and takes the given number (issue #913).
 
     A user edit: emptying a list that had entries marks the row
     `series_cleared`, and any non-empty result clears the mark again.
@@ -1054,7 +1059,9 @@ def _apply_series_update(book, meta: MetadataUpdate) -> None:
     if meta.series_list is not None:
         set_series(book, [e.model_dump() for e in meta.series_list], user_edit=True)
     if meta.series_add:
-        merged = merge_missing(entries_of(book), [e.model_dump() for e in meta.series_add])
+        merged = merge_missing(
+            entries_of(book), [e.model_dump() for e in meta.series_add], update_index=True,
+        )
         set_series(book, merged, user_edit=True)
 
 

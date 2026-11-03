@@ -172,18 +172,31 @@ def primary(entries: Optional[Iterable[Any]]) -> tuple[Optional[str], Optional[f
     return normalized[0]["name"], normalized[0]["index"]
 
 
-def merge_missing(existing: Optional[Iterable[Any]], found: Optional[Iterable[Any]]) -> list[dict]:
+def merge_missing(
+    existing: Optional[Iterable[Any]],
+    found: Optional[Iterable[Any]],
+    *,
+    update_index: bool = False,
+) -> list[dict]:
     """`existing` plus the names in `found` it lacks (case-folded), appended.
 
-    The rescan rule: add what the row does not have, keep the row's order and
-    its edited indexes, never remove anything.
+    The rescan rule (the default): add what the row does not have, keep the
+    row's order and its edited indexes, never remove anything.
+
+    With `update_index` (a user's bulk "add or update this series", issue
+    #913) a name the row already has also keeps its place and spelling but
+    takes the index `found` carries, when it carries one; an entry with no
+    index leaves the row's number alone.
     """
     merged = normalize_entries(existing)
-    have = {e["name"].casefold() for e in merged}
+    position = {e["name"].casefold(): i for i, e in enumerate(merged)}
     for entry in normalize_entries(found):
-        if entry["name"].casefold() not in have:
+        key = entry["name"].casefold()
+        if key not in position:
+            position[key] = len(merged)
             merged.append(entry)
-            have.add(entry["name"].casefold())
+        elif update_index and entry["index"] is not None:
+            merged[position[key]]["index"] = entry["index"]
     return merged
 
 
