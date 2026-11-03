@@ -812,3 +812,45 @@
         padding: 20px 24px;
     }
 }
+
+/* ---- Next up: removal strip and mobile More button (issue #922) ---- */
+
+.home-nextup-undo {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 12px;
+    padding: 8px 12px;
+    border-radius: 8px;
+    background: var(--bg-card-hover);
+    border: 1px solid var(--border);
+    color: var(--text-secondary, var(--text-primary));
+    font-size: 0.85rem;
+}
+
+.home-nextup-undo button {
+    background: none;
+    border: none;
+    padding: 4px 8px;
+    color: var(--accent);
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.series-card-more {
+    position: absolute;
+    top: 8px;
+    left: 8px;
+    z-index: 1;
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    border: 1px solid var(--border);
+    background: var(--bg-card-hover);
+    color: var(--text-primary);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+}

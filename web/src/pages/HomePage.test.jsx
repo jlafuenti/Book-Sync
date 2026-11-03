@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, within, act } from '@testing-library/react'
 import { MemoryRouter, Routes, Route, useLocation, useNavigate } from 'react-router-dom'
 import HomePage, { BookCard } from './HomePage'
 import { TourAnchors, TourScreens, TourRegistryContext, TourControllerContext } from '../tour/anchors'
@@ -9,6 +9,7 @@ const {
     getAllProgressMock, getEbooksMock, getAudiobooksMock, getPairsMock, getTranscriptionQueueMock,
     updatePositionMock, resetPairProgressMock, resetPositionMock, getProgressMock, getPositionMock,
     getDeviceIdMock, getDeviceNameMock, coverSrcMock,
+    getNextUpDismissalsMock, dismissNextUpSeriesMock, undismissNextUpSeriesMock,
 } = vi.hoisted(() => ({
     getAllProgressMock: vi.fn(),
     getEbooksMock: vi.fn(),
@@ -23,6 +24,9 @@ const {
     getDeviceIdMock: vi.fn(() => 'device-abc'),
     getDeviceNameMock: vi.fn(() => 'Web · Chrome'),
     coverSrcMock: vi.fn(),
+    getNextUpDismissalsMock: vi.fn(),
+    dismissNextUpSeriesMock: vi.fn(),
+    undismissNextUpSeriesMock: vi.fn(),
 }))
 
 vi.mock('../api', () => ({
@@ -39,6 +43,9 @@ vi.mock('../api', () => ({
     getDeviceId: getDeviceIdMock,
     getDeviceName: getDeviceNameMock,
     coverSrc: coverSrcMock,
+    getNextUpDismissals: getNextUpDismissalsMock,
+    dismissNextUpSeries: dismissNextUpSeriesMock,
+    undismissNextUpSeries: undismissNextUpSeriesMock,
 }))
 
 // Isolate HomePage from its heavier children -- EbookReader pulls in epubjs,
@@ -98,6 +105,9 @@ vi.mock('../hooks/useIsMobile', () => ({ default: () => mobileRef.value }))
 
 beforeEach(() => {
     coverSrcMock.mockReset()
+    getNextUpDismissalsMock.mockReset().mockResolvedValue([])
+    dismissNextUpSeriesMock.mockReset().mockResolvedValue({})
+    undismissNextUpSeriesMock.mockReset().mockResolvedValue(undefined)
     getAllProgressMock.mockReset().mockResolvedValue([])
     getEbooksMock.mockReset().mockResolvedValue([])
     getAudiobooksMock.mockReset().mockResolvedValue([])
@@ -699,6 +709,130 @@ describe('HomePage Next up (issue #716)', () => {
         await waitFor(() => expect(getAllProgressMock).toHaveBeenCalled())
         await screen.findAllByText(/Recently Added|Axis One/)
         expect(screen.queryByText('Next up')).toBeNull()
+    })
+
+    // Issue #922: a Next up card has the Continue Reading card's menu, and removing
+    // a series is undoable for a few seconds.
+    describe('Remove from Next up (issue #922)', () => {
+        const finishedOne = () => {
+            getEbooksMock.mockResolvedValue([book(1, 'Axis One', 1), book(2, 'Axis Two', 2)])
+            getAllProgressMock.mockResolvedValue([{
+                id: 9, media_type: 'ebook', ebook_id: 1, is_completed: true,
+                epub_progress_percent: 100, updated_at: recent, captured_at: recent,
+            }])
+        }
+        const nextUpSection = async () => (await screen.findByText('Next up')).closest('section')
+        const openMenu = async () => {
+            const section = await nextUpSection()
+            fireEvent.click(within(section).getByTitle('More options'))
+            return section
+        }
+
+        it('the card menu offers View Details and Remove from Next up', async () => {
+            finishedOne()
+            renderWithDetails()
+            const section = await openMenu()
+
+            expect(within(section).getByText('View Details')).toBeInTheDocument()
+            expect(within(section).getByText('Remove from Next up')).toBeInTheDocument()
+        })
+
+        it('View Details opens the book', async () => {
+            finishedOne()
+            renderWithDetails()
+            const section = await openMenu()
+            fireEvent.click(within(section).getByText('View Details'))
+
+            expect(await screen.findByText('details for this book')).toBeInTheDocument()
+        })
+
+        it('Remove hides the row, posts its series, and names the title in the strip', async () => {
+            finishedOne()
+            renderWithDetails()
+            const section = await openMenu()
+            fireEvent.click(within(section).getByText('Remove from Next up'))
+
+            expect(dismissNextUpSeriesMock).toHaveBeenCalledWith('Axis')
+            expect(await screen.findByText('Removed Axis Two from Next up')).toBeInTheDocument()
+            expect(within(section).queryByTitle('Axis Two')).toBeNull()
+            // The section stays up while the strip does, with nothing else in it.
+            expect(screen.getByText('Next up')).toBeInTheDocument()
+        })
+
+        it('Undo puts the row back and deletes the dismissal', async () => {
+            finishedOne()
+            renderWithDetails()
+            const section = await openMenu()
+            fireEvent.click(within(section).getByText('Remove from Next up'))
+            fireEvent.click(await screen.findByRole('button', { name: 'Undo' }))
+
+            expect(undismissNextUpSeriesMock).toHaveBeenCalledWith('Axis')
+            expect(await within(section).findByTitle('Axis Two')).toBeInTheDocument()
+            expect(screen.queryByText(/Removed Axis Two/)).toBeNull()
+        })
+
+        it('the strip clears itself after about six seconds, and the empty section goes with it', async () => {
+            vi.useFakeTimers({ shouldAdvanceTime: true })
+            try {
+                finishedOne()
+                renderWithDetails()
+                const section = await openMenu()
+                fireEvent.click(within(section).getByText('Remove from Next up'))
+                await screen.findByText('Removed Axis Two from Next up')
+
+                act(() => { vi.advanceTimersByTime(6500) })
+
+                expect(screen.queryByText(/Removed Axis Two/)).toBeNull()
+                expect(screen.queryByText('Next up')).toBeNull()
+            } finally {
+                vi.useRealTimers()
+            }
+        })
+
+        it('a failed save puts the row back and says so', async () => {
+            finishedOne()
+            dismissNextUpSeriesMock.mockRejectedValue(new Error('boom'))
+            renderWithDetails()
+            const section = await openMenu()
+            fireEvent.click(within(section).getByText('Remove from Next up'))
+
+            expect(await screen.findByText(/could not be saved/i)).toBeInTheDocument()
+            expect(await within(section).findByTitle('Axis Two')).toBeInTheDocument()
+        })
+
+        it('hides a row the server says was removed after the series was last read', async () => {
+            finishedOne()
+            const later = new Date(Date.now() - 86_400_000).toISOString().replace('Z', '')
+            getNextUpDismissalsMock.mockResolvedValue([{ series: 'Axis', dismissed_at: later }])
+            renderWithDetails()
+
+            await waitFor(() => expect(getNextUpDismissalsMock).toHaveBeenCalled())
+            await screen.findAllByText(/Recently Added|Axis One/)
+            expect(screen.queryByText('Next up')).toBeNull()
+        })
+
+        it('still renders Next up when the dismissals request fails', async () => {
+            finishedOne()
+            getNextUpDismissalsMock.mockRejectedValue(new Error('not deployed yet'))
+            renderWithDetails()
+
+            const section = await nextUpSection()
+            expect(within(section).getByTitle('Axis Two')).toBeInTheDocument()
+        })
+
+        it('on a phone the card keeps its cover-only look and opens the same actions in a sheet', async () => {
+            mobileRef.value = true
+            finishedOne()
+            renderWithDetails()
+            const section = await openMenu()
+
+            const dialog = within(section).getByRole('dialog')
+            expect(within(dialog).getByText('View Details')).toBeInTheDocument()
+            fireEvent.click(within(dialog).getByText('Remove from Next up'))
+
+            expect(dismissNextUpSeriesMock).toHaveBeenCalledWith('Axis')
+            expect(await screen.findByText('Removed Axis Two from Next up')).toBeInTheDocument()
+        })
     })
 })
 

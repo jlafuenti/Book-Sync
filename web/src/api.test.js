@@ -1901,6 +1901,9 @@ describe('every section surfaces the server detail, and falls back to its own me
         ['Calibre', 'getCalibreStatus', a => a.getCalibreStatus(), 'Failed to check calibre status'],
         ['Unsupported', 'getUnsupportedFiles', a => a.getUnsupportedFiles(), 'Failed to load unsupported files'],
         ['Import sources', 'listImportSources', a => a.listImportSources(), 'Failed to list import sources'],
+        ['Next up', 'getNextUpDismissals', a => a.getNextUpDismissals(), 'Failed to fetch Next up removals'],
+        ['Next up', 'dismissNextUpSeries', a => a.dismissNextUpSeries('Axis Saga'), 'Failed to remove series from Next up'],
+        ['Next up', 'undismissNextUpSeries', a => a.undismissNextUpSeries('Axis Saga'), 'Failed to restore series to Next up'],
         ['Troubleshoot', 'getLibraryIssues', a => a.getLibraryIssues(), 'Failed to load library issues'],
     ]
 
@@ -2282,5 +2285,45 @@ describe('metadata PATCH series body (issue #907)', () => {
             { series_list: [] },
             { series_add: [{ name: 'Axis Chronological', index: 2 }] },
         ])
+    })
+})
+
+describe('Next up dismissals (issue #922)', () => {
+    const ok = (status, body) => vi.fn().mockResolvedValue({ ok: true, status, json: async () => body })
+
+    it('getNextUpDismissals reads the list', async () => {
+        const rows = [{ series: 'Axis Saga', dismissed_at: '2026-11-03T12:00:00' }]
+        const fetchMock = ok(200, rows)
+        vi.stubGlobal('fetch', fetchMock)
+        localStorage.setItem('tandem_token', 't')
+        const { getNextUpDismissals } = await import('./api')
+
+        expect(await getNextUpDismissals()).toEqual(rows)
+        expect(String(fetchMock.mock.calls[0][0])).toBe('/api/next-up/dismissals')
+    })
+
+    it('dismissNextUpSeries POSTs the series name', async () => {
+        const fetchMock = ok(200, { series: 'Axis Saga', dismissed_at: '2026-11-03T12:00:00' })
+        vi.stubGlobal('fetch', fetchMock)
+        localStorage.setItem('tandem_token', 't')
+        const { dismissNextUpSeries } = await import('./api')
+
+        await dismissNextUpSeries('Axis Saga')
+        const [url, init] = fetchMock.mock.calls[0]
+        expect(String(url)).toBe('/api/next-up/dismissals')
+        expect(init.method).toBe('POST')
+        expect(JSON.parse(init.body)).toEqual({ series: 'Axis Saga' })
+    })
+
+    it('undismissNextUpSeries DELETEs with the series encoded in the query', async () => {
+        const fetchMock = ok(204, null)
+        vi.stubGlobal('fetch', fetchMock)
+        localStorage.setItem('tandem_token', 't')
+        const { undismissNextUpSeries } = await import('./api')
+
+        await undismissNextUpSeries('Axis Saga & Co')
+        const [url, init] = fetchMock.mock.calls[0]
+        expect(String(url)).toBe('/api/next-up/dismissals?series=Axis%20Saga%20%26%20Co')
+        expect(init.method).toBe('DELETE')
     })
 })
