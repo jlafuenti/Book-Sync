@@ -130,6 +130,7 @@ operator must do by hand rather than read about afterwards.
 
 ### Added
 
+- Home: a Next up card's menu can remove that series from Next up until it is read again, with Undo (#922).
 - The Transcription queue page shows a banner while the transcription worker is unreachable,
   saying since when and that the queue is on hold rather than failing (#866). It reads a new
   `GET /api/transcription/provider-status`, which reports the queue's own state and never probes

@@ -4,6 +4,7 @@ import { TourAnchors, TourScreens, TourEvents, useTourAnchor, useTourScreen, use
 import {
     getAllProgress, getEbooks, getAudiobooks, getPairs, getTranscriptionQueue,
     resetPairProgress, resetPosition, getProgress as apiGetProgress, getPosition,
+    getNextUpDismissals, dismissNextUpSeries, undismissNextUpSeries,
 } from '../api'
 import { useAudioPlayer } from '../contexts/AudioPlayerContext'
 import { positionTarget, writePosition } from '../lib/position'
@@ -232,6 +233,102 @@ export function BookCard({ book, size = 'continue', progress, onPrimary, onRead,
     )
 }
 
+// ---- Next up card (issue #922) ----
+
+// A Next up card with the Continue Reading card's menu. Desktop gets the hover
+// three-dot dropdown; a phone has no hover, so the cover-only card gets a small
+// More button that opens the same actions in the sheet BookCard uses (#273).
+function NextUpCard({ row, isMobile, onOpen, onRemove }) {
+    const { book } = row
+    const [menuOpen, setMenuOpen] = useState(false)
+    const [sheetOpen, setSheetOpen] = useState(false)
+    const menuRef = useRef(null)
+
+    useEffect(() => {
+        if (!menuOpen) return
+        const handler = (e) => {
+            if (menuRef.current && !menuRef.current.contains(e.target)) setMenuOpen(false)
+        }
+        window.addEventListener('mousedown', handler)
+        return () => window.removeEventListener('mousedown', handler)
+    }, [menuOpen])
+
+    const dots = (size) => (
+        <svg viewBox="0 0 24 24" fill="currentColor" width={size} height={size}>
+            <circle cx="12" cy="5" r="1.5" /><circle cx="12" cy="12" r="1.5" /><circle cx="12" cy="19" r="1.5" />
+        </svg>
+    )
+
+    if (isMobile) {
+        return (
+            <div className="home-series-card-mobile" onClick={onOpen}>
+                {book.coverPath ? (
+                    <CoverImg path={book.coverPath} alt={book.title} loading="lazy" />
+                ) : (
+                    <div className="series-card-placeholder">
+                        <span>📖</span>
+                    </div>
+                )}
+                <div className="series-card-gradient" />
+                <div className="series-card-title">{book.title}</div>
+                {book.index != null && (
+                    <div className="series-card-badge">BK {book.index}</div>
+                )}
+                <button
+                    className="series-card-more"
+                    title="More options"
+                    onClick={e => { e.stopPropagation(); setSheetOpen(true) }}
+                >
+                    {dots(14)}
+                </button>
+                {sheetOpen && (
+                    <div className="home-card-sheet-backdrop" onClick={e => { e.stopPropagation(); setSheetOpen(false) }}>
+                        <div className="home-card-sheet" role="dialog" aria-label={book.title} onClick={e => e.stopPropagation()}>
+                            <div className="home-card-sheet-title">{book.title}</div>
+                            <button onClick={() => { setSheetOpen(false); onOpen() }}>View Details</button>
+                            <button onClick={() => { setSheetOpen(false); onRemove() }}>Remove from Next up</button>
+                        </div>
+                    </div>
+                )}
+            </div>
+        )
+    }
+
+    return (
+        <div className="home-book-card continue-size" onClick={onOpen}>
+            <div className="home-book-card-cover">
+                {book.coverPath ? (
+                    <CoverImg path={book.coverPath} alt={book.title} loading="lazy" />
+                ) : (
+                    <div className="home-book-card-placeholder">
+                        <span>📖</span>
+                    </div>
+                )}
+                {book.index != null && (
+                    <div className="home-book-card-badge">#{book.index}</div>
+                )}
+                <div className="home-book-card-menu" ref={menuRef} onClick={e => e.stopPropagation()}>
+                    <button
+                        className="home-book-card-menu-btn"
+                        onClick={() => setMenuOpen(o => !o)}
+                        title="More options"
+                    >
+                        {dots(16)}
+                    </button>
+                    {menuOpen && (
+                        <div className="home-book-card-dropdown">
+                            <button onClick={() => { setMenuOpen(false); onOpen() }}>View Details</button>
+                            <button onClick={() => { setMenuOpen(false); onRemove() }}>Remove from Next up</button>
+                        </div>
+                    )}
+                </div>
+            </div>
+            <div className="home-book-card-title" title={book.title}>{book.title}</div>
+            <div className="home-book-card-author">{row.series}</div>
+        </div>
+    )
+}
+
 // ---- Main Component ----
 
 function HomePage() {
@@ -246,6 +343,9 @@ function HomePage() {
 
     const [continueItems, setContinueItems] = useState([])
     const [seriesItems, setSeriesItems] = useState([])
+    // The strip above Next up (#922): { kind: 'removed' | 'failed', row }.
+    const [nextUpNotice, setNextUpNotice] = useState(null)
+    const nextUpNoticeTimer = useRef(null)
     const [recentItems, setRecentItems] = useState([])
     const [txData, setTxData] = useState(null)
     const [mediaLookup, setMediaLookup] = useState({ ebooks: {}, audiobooks: {} })
@@ -257,14 +357,56 @@ function HomePage() {
     // `source: 'audiobook'` write.
     const readerSaveFlushRef = useRef(null)
 
+    // ---- Remove from Next up (issue #922) ----
+    const showNextUpNotice = useCallback((notice) => {
+        clearTimeout(nextUpNoticeTimer.current)
+        setNextUpNotice(notice)
+        if (notice) nextUpNoticeTimer.current = setTimeout(() => setNextUpNotice(null), 6000)
+    }, [])
+    useEffect(() => () => clearTimeout(nextUpNoticeTimer.current), [])
+
+    // Put a row back where it was, unless it is already there.
+    const restoreNextUpRow = useCallback((row, index) => {
+        setSeriesItems(items => {
+            if (items.includes(row)) return items
+            const next = items.slice()
+            next.splice(Math.min(Math.max(index, 0), next.length), 0, row)
+            return next
+        })
+    }, [])
+
+    const removeFromNextUp = (row) => {
+        const index = seriesItems.indexOf(row)
+        setSeriesItems(items => items.filter(r => r !== row))
+        showNextUpNotice({ kind: 'removed', row, index })
+        dismissNextUpSeries(row.series).catch(err => {
+            console.error('Failed to remove series from Next up:', err)
+            restoreNextUpRow(row, index)
+            showNextUpNotice({ kind: 'failed', row, index })
+        })
+    }
+
+    const undoRemoveFromNextUp = () => {
+        if (!nextUpNotice || nextUpNotice.kind !== 'removed') return
+        const { row, index } = nextUpNotice
+        restoreNextUpRow(row, index)
+        showNextUpNotice(null)
+        undismissNextUpSeries(row.series).catch(err => {
+            console.error('Failed to restore series to Next up:', err)
+        })
+    }
+
     const loadData = useCallback(async () => {
         try {
-            const [progress, ebooks, audiobooks, pairs, txQueue] = await Promise.all([
+            const [progress, ebooks, audiobooks, pairs, txQueue, nextUpDismissals] = await Promise.all([
                 getAllProgress(),
                 getEbooks(),
                 getAudiobooks(),
                 getPairs(),
                 getTranscriptionQueue().catch(() => []),
+                // Series removed from Next up (#922). A failure, or a server that
+                // predates the endpoint, just means nothing has been removed.
+                getNextUpDismissals().catch(() => []),
             ])
 
             const ebookMap = {}
@@ -369,7 +511,8 @@ function HomePage() {
             // server/tests/fixtures/sync_parity/next_up_cases.json: the next book in
             // every series touched in the last 90 days, finished books included.
             const { books: nextUpBooks, activity } = libraryToNextUpInput({ ebooks, audiobooks, pairs, progress })
-            setSeriesItems(computeNextUp(nextUpBooks, activity, new Date()))
+            const removed = (nextUpDismissals || []).map(d => ({ series: d.series, at: d.dismissed_at }))
+            setSeriesItems(computeNextUp(nextUpBooks, activity, new Date(), removed))
 
             // --- Recently Added ---
             const allMedia = [
@@ -735,56 +878,38 @@ function HomePage() {
             </section>
 
             {/* ── Next up (issue #716) ── */}
-            {seriesItems.length > 0 && (
+            {(seriesItems.length > 0 || nextUpNotice) && (
                 <section className="home-section" ref={nextUpAnchorRef}>
                     <div className="home-section-header">
                         <h3>Next up</h3>
                     </div>
-                    <Carousel>
-                        {seriesItems.map(({ key, book }) => {
-                            // A card opens the book itself; the series name is the
-                            // secondary line, the book's number the badge.
-                            const open = () => navigate(`/book/${book.detailType}/${book.detailId}`)
-
-                            if (isMobile) {
-                                return (
-                                    <div key={key} className="home-series-card-mobile" onClick={open}>
-                                        {book.coverPath ? (
-                                            <CoverImg path={book.coverPath} alt={book.title} loading="lazy" />
-                                        ) : (
-                                            <div className="series-card-placeholder">
-                                                <span>📖</span>
-                                            </div>
-                                        )}
-                                        <div className="series-card-gradient" />
-                                        <div className="series-card-title">{book.title}</div>
-                                        {book.index != null && (
-                                            <div className="series-card-badge">BK {book.index}</div>
-                                        )}
-                                    </div>
-                                )
-                            }
-
-                            return (
-                                <div key={key} className="home-book-card continue-size" onClick={open}>
-                                    <div className="home-book-card-cover">
-                                        {book.coverPath ? (
-                                            <CoverImg path={book.coverPath} alt={book.title} loading="lazy" />
-                                        ) : (
-                                            <div className="home-book-card-placeholder">
-                                                <span>📖</span>
-                                            </div>
-                                        )}
-                                        {book.index != null && (
-                                            <div className="home-book-card-badge">#{book.index}</div>
-                                        )}
-                                    </div>
-                                    <div className="home-book-card-title" title={book.title}>{book.title}</div>
-                                    <div className="home-book-card-author">{book.series}</div>
-                                </div>
-                            )
-                        })}
-                    </Carousel>
+                    {nextUpNotice && (
+                        <div className="home-nextup-undo" role="status">
+                            <span>
+                                {nextUpNotice.kind === 'failed'
+                                    ? `The removal of ${nextUpNotice.row.book.title} from Next up could not be saved.`
+                                    : `Removed ${nextUpNotice.row.book.title} from Next up`}
+                            </span>
+                            {nextUpNotice.kind === 'removed' && (
+                                <button onClick={undoRemoveFromNextUp}>Undo</button>
+                            )}
+                        </div>
+                    )}
+                    {seriesItems.length > 0 && (
+                        <Carousel>
+                            {seriesItems.map((row) => (
+                                // A card opens the book itself; the series name is the
+                                // secondary line, the book's number the badge.
+                                <NextUpCard
+                                    key={`${row.key}|${row.series}`}
+                                    row={row}
+                                    isMobile={isMobile}
+                                    onOpen={() => navigate(`/book/${row.book.detailType}/${row.book.detailId}`)}
+                                    onRemove={() => removeFromNextUp(row)}
+                                />
+                            ))}
+                        </Carousel>
+                    )}
                 </section>
             )}
 

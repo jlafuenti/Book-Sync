@@ -45,3 +45,4 @@ export * from './api/stats';
 export * from './api/settings';
 export * from './api/importSources';
 export * from './api/troubleshoot';
+export * from './api/nextUp';
