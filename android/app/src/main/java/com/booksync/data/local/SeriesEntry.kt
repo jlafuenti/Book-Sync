@@ -73,6 +73,15 @@ fun seriesLabel(list: List<SeriesEntry>): String? {
 }
 
 /**
+ * Card label while the Library is filtered to the series called [name] (issue #916):
+ * that series and the book's number in it, `Axis Chronological #6`, with no `+N`
+ * because the filter already says which series this is. The bare name when the
+ * entry has no number; null when [list] has no such series.
+ */
+fun seriesLabelFor(list: List<SeriesEntry>, name: String): String? =
+    list.firstOrNull { seriesNameMatches(it.name, name) }?.let { formatSeriesEntry(it) }
+
+/**
  * A pair's series: the ebook's entries, then the audiobook's names not already
  * present (case-insensitive), the ebook's index winning. The same rule as the
  * server's pair browse and the web's `seriesOf`.

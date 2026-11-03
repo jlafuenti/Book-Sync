@@ -43,6 +43,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.booksync.data.local.SeriesEntry
 import com.booksync.data.local.seriesLabel
+import com.booksync.data.local.seriesLabelFor
 import com.booksync.ui.theme.Tandem
 
 /**
@@ -111,6 +112,9 @@ fun BookCard(
     // guided walkthrough (issue #597 Track B, `TourAnchor.CardOverflow`) —
     // every other caller leaves this at its default, which changes nothing.
     overflowModifier: Modifier = Modifier,
+    // The series the Library is filtered to, if any (issue #916): the series line
+    // then shows this series and the book's number in it. Null everywhere else.
+    focusSeries: String? = null,
 ) {
     val colors = Tandem.colors
     val shapes = Tandem.shapes
@@ -214,7 +218,7 @@ fun BookCard(
                             overflow = TextOverflow.Ellipsis,
                         )
                     }
-                    cardSeriesLabel(variant)?.let { label ->
+                    cardSeriesLabel(variant, focusSeries)?.let { label ->
                         Spacer(Modifier.height(2.dp))
                         Text(
                             text = label,
@@ -414,9 +418,16 @@ private fun cardSubtitle(variant: BookCardVariant): String? = when (variant) {
     is BookCardVariant.SeriesStack  -> variant.author
 }
 
-/** The primary series with a `+N` for the rest (issue #908); detail pages list them all. */
-private fun cardSeriesLabel(variant: BookCardVariant): String? = when (variant) {
-    is BookCardVariant.Pair        -> seriesLabel(variant.seriesList)
-    is BookCardVariant.SingleMedia -> seriesLabel(variant.seriesList)
-    else -> null
+/**
+ * The primary series with a `+N` for the rest (issue #908); detail pages list them all.
+ * While the Library is filtered to [focusSeries] and the book is in it, that series and
+ * the book's number in it instead (issue #916).
+ */
+internal fun cardSeriesLabel(variant: BookCardVariant, focusSeries: String? = null): String? {
+    val list = when (variant) {
+        is BookCardVariant.Pair        -> variant.seriesList
+        is BookCardVariant.SingleMedia -> variant.seriesList
+        else -> return null
+    }
+    return focusSeries?.let { seriesLabelFor(list, it) } ?: seriesLabel(list)
 }

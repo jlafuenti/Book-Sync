@@ -250,7 +250,9 @@ class LibraryViewModel @Inject constructor(
         _uiState.value = _uiState.value.copy(
             filter        = filter ?: _uiState.value.filter,
             seriesFilter  = series,
-            sort          = sort ?: _uiState.value.sort,
+            // Opening a series (e.g. from the details screen) lands in series order,
+            // like drillIntoSeries; an explicit sort in the link still wins (#916).
+            sort          = sort ?: if (series != null) LibrarySort.SeriesOrder else _uiState.value.sort,
             groupBySeries = groupBySeries ?: _uiState.value.groupBySeries,
         )
     }

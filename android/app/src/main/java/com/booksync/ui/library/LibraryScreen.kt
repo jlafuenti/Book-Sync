@@ -343,6 +343,7 @@ fun LibraryScreen(
                     downloadingPercent = downloading,
                     gridState = gridState,
                     tourPairId = tourPairId,
+                    focusSeries = ui.seriesFilter,
                     onItemClick = { item -> openItem(item, scope, viewModel, onBookSelect, onAudioSelect, onStandaloneAudioSelect, onOpenDetails) },
                     // Reading the stored position is a point lookup in Room, so
                     // the sheet opens a frame later rather than offering a
@@ -674,6 +675,8 @@ private fun ItemGrid(
     // The pair the walkthrough picked (issue #597 Track B), so exactly one
     // card's ⋮ can be spotlighted — every other caller leaves this null.
     tourPairId: Int? = null,
+    // The series the Library is filtered to, so each card shows its number in it (issue #916).
+    focusSeries: String? = null,
 ) {
     val context = LocalContext.current
     LazyVerticalGrid(
@@ -711,6 +714,7 @@ private fun ItemGrid(
                 onOverflow = { onItemOverflow(item) },
                 status = item.defaultBadge(),
                 downloadPercent = dlPct,
+                focusSeries = focusSeries,
                 overflowModifier = if (item.pair?.id == tourPairId) {
                     Modifier.tourAnchor(TourAnchor.CardOverflow)
                 } else {
