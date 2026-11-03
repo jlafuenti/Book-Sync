@@ -69,6 +69,25 @@ export function sharedValues(items) {
     }
 }
 
+/**
+ * Where the items actually differ: true for a field with at least one
+ * non-empty value that the items do not all share. A field every item leaves
+ * empty is not "varying" — there is nothing to keep, so it gets the plain
+ * placeholder.
+ */
+export function variesAcross(items) {
+    const shared = sharedValues(items)
+    const norms = {
+        author: it => textOf(it.author),
+        publisher: it => textOf(it.publisher),
+        published_year: it => yearOf(it.published_year),
+        series: it => textOf(primarySeries(it.series_list)?.name),
+    }
+    return Object.fromEntries(Object.entries(norms).map(([key, norm]) => [
+        key, shared[key] === null && items.some(it => norm(it) !== null),
+    ]))
+}
+
 /** The row values for a series name: each item's number in it, as text. */
 function seedIndexes(items, name) {
     const out = {}
@@ -149,6 +168,7 @@ export default function BulkMetadataEditModal({
     // What the books shared when the modal opened is what a field is compared
     // against to decide whether the user changed it.
     const shared = useMemo(() => sharedValues(items), [items])
+    const varies = useMemo(() => variesAcross(items), [items])
 
     // A reopen starts from the shared values — both pages used to reset their
     // copy of this state by hand after every successful save.
@@ -172,7 +192,7 @@ export default function BulkMetadataEditModal({
         onSave(patches)
     }
 
-    const placeholderFor = (key) => (shared[key] === null ? VARIES : KEEP)
+    const placeholderFor = (key) => (varies[key] ? VARIES : KEEP)
     const labelStyle = { display: 'block', marginBottom: '4px', fontSize: '0.9rem', fontWeight: 500 }
 
     return (

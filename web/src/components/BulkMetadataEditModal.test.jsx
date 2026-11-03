@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import { useState } from 'react'
 import { render, screen, fireEvent, within } from '@testing-library/react'
-import BulkMetadataEditModal, { buildPatches, sharedValues } from './BulkMetadataEditModal'
+import BulkMetadataEditModal, { buildPatches, sharedValues, variesAcross } from './BulkMetadataEditModal'
 
 const { knownSeriesMock } = vi.hoisted(() => ({ knownSeriesMock: vi.fn(() => []) }))
 vi.mock('../lib/useKnownSeries', () => ({ default: (...args) => knownSeriesMock(...args) }))
@@ -55,6 +55,26 @@ describe('sharedValues (issue #914)', () => {
 
     it('is all null for no items', () => {
         expect(sharedValues([])).toEqual({ author: null, publisher: null, published_year: null, series: null })
+    })
+})
+
+describe('variesAcross (issue #914)', () => {
+    it('is true only where there is a non-empty value and the items do not all agree', () => {
+        const items = [
+            { key: 'a', author: 'Ann', publisher: '', published_year: 1999, series_list: [{ name: 'Axis Saga' }] },
+            { key: 'b', author: 'Bob', publisher: ' ', published_year: 1999, series_list: [] },
+        ]
+        expect(variesAcross(items)).toEqual({ author: true, publisher: false, published_year: false, series: true })
+    })
+
+    it('is false when every item agrees, and for no items', () => {
+        const items = [
+            { key: 'a', author: 'Ann', series_list: [{ name: 'Axis Saga' }] },
+            { key: 'b', author: 'Ann', series_list: [{ name: 'axis saga' }] },
+        ]
+        expect(variesAcross(items).author).toBe(false)
+        expect(variesAcross(items).series).toBe(false)
+        expect(variesAcross([])).toEqual({ author: false, publisher: false, published_year: false, series: false })
     })
 })
 
@@ -362,11 +382,28 @@ describe('BulkMetadataEditModal (issue #276)', () => {
         })
 
         it('opens blank with the "Varies" placeholder where the books differ', () => {
-            renderModal({ items: makeItems(2) })
+            const items = makeItems(2)
+            items[0].series_list = [{ name: 'Axis Saga', index: 1 }]
+            renderModal({ items })
             for (const label of ['Author', 'Publisher', 'Published Year', 'Series']) {
                 expect(field(label)).toHaveValue(label === 'Published Year' ? null : '')
                 expect(field(label)).toHaveAttribute('placeholder', 'Varies — leave blank to keep each')
             }
+        })
+
+        it('keeps the plain placeholder where every book is empty for the field', () => {
+            renderModal({ items: makeItems(2, { author: '', publisher: null, published_year: null }) })
+            for (const label of ['Author', 'Publisher', 'Published Year', 'Series']) {
+                expect(field(label)).toHaveAttribute('placeholder', 'Leave blank to keep unchanged')
+            }
+        })
+
+        it('says "Varies" when only some books have a value', () => {
+            const items = makeItems(2, { author: '' })
+            items[0].author = 'Ann Lee'
+            renderModal({ items })
+            expect(field('Author')).toHaveValue('')
+            expect(field('Author')).toHaveAttribute('placeholder', 'Varies — leave blank to keep each')
         })
 
         it('keeps the plain placeholder on a prefilled field', () => {
