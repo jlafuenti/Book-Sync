@@ -66,6 +66,16 @@ export function seriesLabel(list) {
     return `${formatSeriesEntry(all[0])}${extra}`
 }
 
+/**
+ * Label for a book seen through a series filter (issue #917): that series and
+ * the book's number in it, no `+N`. Null when the book is not in it.
+ */
+export function seriesLabelFor(list, name) {
+    const key = fold(name)
+    const hit = entries(list).find(e => fold(e.name) === key)
+    return hit ? formatSeriesEntry(hit) : null
+}
+
 /** Every series name, in order. */
 export function seriesNames(list) {
     return entries(list).map(e => e.name)

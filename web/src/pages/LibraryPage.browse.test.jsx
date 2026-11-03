@@ -452,4 +452,27 @@ describe('LibraryPage series label (issue #907)', () => {
         await waitFor(() => expect(document.querySelector('.lib-book-row')).not.toBeNull())
         expect(within(document.querySelector('.lib-book-row')).getByText('Axis Saga #4 +1')).toBeInTheDocument()
     })
+
+    // Issue #917: inside ?series=, the label is that series and the book's number in it.
+    it('under ?series= a card and a row show the filtered series and its number', async () => {
+        const both = [{ name: 'Axis Saga', index: 1 }, { name: 'Axis Chronological', index: 6 }]
+        getLibraryItemsPageMock.mockResolvedValue(pageOf([ebookItem(3, { series_list: both })], 1))
+        renderPage('/library?series=Axis%20Chronological')
+        await screen.findByText('Ebook 3')
+        expect(document.querySelector('.lib-book-card-series').textContent).toBe('Axis Chronological #6')
+
+        fireEvent.click(screen.getAllByTitle('List view')[0])
+        await waitFor(() => expect(document.querySelector('.lib-book-row')).not.toBeNull())
+        const row = within(document.querySelector('.lib-book-row'))
+        expect(row.getByText('Axis Chronological #6')).toBeInTheDocument()
+        expect(row.queryByText('Axis Saga #1 +1')).toBeNull()
+    })
+
+    it('without ?series= the label is still the primary series with +N', async () => {
+        const both = [{ name: 'Axis Saga', index: 1 }, { name: 'Axis Chronological', index: 6 }]
+        getLibraryItemsPageMock.mockResolvedValue(pageOf([ebookItem(3, { series_list: both })], 1))
+        renderPage('/library')
+        await screen.findByText('Ebook 3')
+        expect(document.querySelector('.lib-book-card-series').textContent).toBe('Axis Saga #1 +1')
+    })
 })

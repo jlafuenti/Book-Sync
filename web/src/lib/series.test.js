@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
     seriesOf, unionSeries, primarySeries, formatSeriesEntry, formatSeriesList,
-    seriesLabel, groupBySeries, seriesNames, hasSeries, seriesIndexIn, cleanSeriesList,
+    seriesLabel, seriesLabelFor, groupBySeries, seriesNames, hasSeries, seriesIndexIn, cleanSeriesList,
 } from './series'
 
 const saga = (index = 4) => ({ name: 'Axis Saga', index })
@@ -157,5 +157,30 @@ describe('groupBySeries', () => {
         const groups = groupBySeries([dup], x => x.list)
         expect(groups).toHaveLength(1)
         expect(groups[0].entries).toEqual([{ item: dup, index: 1 }])
+    })
+})
+
+describe('seriesLabelFor (issue #917)', () => {
+    const list = [{ name: 'Axis Saga', index: 1 }, { name: 'Axis Chronological', index: 6 }]
+
+    it('labels the named series with its own number and no +N', () => {
+        expect(seriesLabelFor(list, 'Axis Chronological')).toBe('Axis Chronological #6')
+    })
+
+    it('matches the name case-insensitively, ignoring surrounding space', () => {
+        expect(seriesLabelFor(list, '  axis chronological ')).toBe('Axis Chronological #6')
+    })
+
+    it('gives the bare name when that entry has no number', () => {
+        expect(seriesLabelFor([{ name: 'Axis Saga', index: null }], 'Axis Saga')).toBe('Axis Saga')
+    })
+
+    it('is null when the book is not in that series', () => {
+        expect(seriesLabelFor(list, 'Other Series')).toBeNull()
+    })
+
+    it('is null for an empty or missing list', () => {
+        expect(seriesLabelFor([], 'Axis Saga')).toBeNull()
+        expect(seriesLabelFor(undefined, 'Axis Saga')).toBeNull()
     })
 })
