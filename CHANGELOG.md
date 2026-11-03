@@ -18,6 +18,9 @@ operator must do by hand rather than read about afterwards.
 
 ### Changed
 
+- With the Library filtered to a series (`?series=`), each card and row now shows that series and
+  the book's number in it, such as "Axis Chronological #6", instead of the book's primary series
+  with a `+N` (#917). The unfiltered label is unchanged.
 - A book can now belong to several series (#905), such as a Discworld book that is also in its
   Witches sub-series. Each ebook and audiobook keeps an ordered list of `{name, index}` entries,
   and the first is its primary series. The API field is `series_list` on the ebook, audiobook and

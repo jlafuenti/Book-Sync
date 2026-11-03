@@ -11,7 +11,7 @@ import {
 import { pairTargetPath } from '../utils/pairRouting'
 import useLibraryBrowse from '../hooks/useLibraryBrowse'
 import { toDisplayEntry, entryKey, groupProgressByPair, patchMedia, localPatch } from '../lib/libraryItems'
-import { seriesLabel } from '../lib/series'
+import { seriesLabel, seriesLabelFor } from '../lib/series'
 // Server timestamps are naive UTC — parse via the shared helper (issue #216).
 import { formatDate } from '../lib/datetime'
 import EnhancedMetadataModal from '../components/EnhancedMetadataModal'
@@ -95,7 +95,7 @@ function TypeBadge({ mediaType }) {
 
 // ---- Book Card (Grid View) ----
 
-export function BookCard({ book, selectMode, isSelected, onSelect, onStartSelect, onEdit, onDelete, onNavigate, canEdit, tourWanted, onTourScrolled }) {
+export function BookCard({ book, focusSeries = '', selectMode, isSelected, onSelect, onStartSelect, onEdit, onDelete, onNavigate, canEdit, tourWanted, onTourScrolled }) {
     const [menuOpen, setMenuOpen] = useState(false)
     const menuRef = useRef(null)
 
@@ -194,7 +194,7 @@ export function BookCard({ book, selectMode, isSelected, onSelect, onStartSelect
             <div className="lib-book-card-title" title={book.title}>{book.title}</div>
             {book.author && <div className="lib-book-card-author">{book.author}</div>}
             {book.series_list?.length > 0 && (
-                <div className="lib-book-card-series">{seriesLabel(book.series_list)}</div>
+                <div className="lib-book-card-series">{(focusSeries && seriesLabelFor(book.series_list, focusSeries)) || seriesLabel(book.series_list)}</div>
             )}
         </div>
     )
@@ -202,7 +202,7 @@ export function BookCard({ book, selectMode, isSelected, onSelect, onStartSelect
 
 // ---- Book Row (List View) ----
 
-export function BookRow({ book, selectMode, isSelected, onSelect, onEdit, onDelete, onNavigate, canEdit, tourWanted, onTourScrolled }) {
+export function BookRow({ book, focusSeries = '', selectMode, isSelected, onSelect, onEdit, onDelete, onNavigate, canEdit, tourWanted, onTourScrolled }) {
     const coverUrl = useCoverSrc(book.cover_path)
 
     // Same anchor as BookCard's (issue #598 Track B) — list view is the same
@@ -257,7 +257,7 @@ export function BookRow({ book, selectMode, isSelected, onSelect, onEdit, onDele
             </div>
             <div className="lib-book-row-cell">{book.author || '\u2014'}</div>
             <div className="lib-book-row-cell">
-                {seriesLabel(book.series_list) || '\u2014'}
+                {(focusSeries && seriesLabelFor(book.series_list, focusSeries)) || seriesLabel(book.series_list) || '\u2014'}
             </div>
             <div className="lib-book-row-cell">
                 {book.mediaType !== 'pair' && <span className="badge badge-auto_matched">{book.format}</span>}
@@ -1293,6 +1293,7 @@ function LibraryPage({ tab }) {
                             <BookCard
                                 key={bookKey(book)}
                                 book={book}
+                                focusSeries={seriesFilter}
                                 selectMode={selectMode}
                                 isSelected={selectedIds.has(bookKey(book))}
                                 onSelect={(e) => handleSelect(book, idx, e?.shiftKey)}
@@ -1342,6 +1343,7 @@ function LibraryPage({ tab }) {
                         <BookRow
                             key={bookKey(book)}
                             book={book}
+                            focusSeries={seriesFilter}
                             selectMode={selectMode}
                             isSelected={selectedIds.has(bookKey(book))}
                             onSelect={(e) => handleSelect(book, idx, e?.shiftKey)}

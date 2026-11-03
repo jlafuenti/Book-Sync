@@ -40,6 +40,28 @@ describe('LibraryPage BookCard', () => {
     })
 })
 
+describe('LibraryPage series label under a series filter (issue #917)', () => {
+    const SERIES = [{ name: 'Axis Saga', index: 1 }, { name: 'Axis Chronological', index: 6 }]
+
+    it('a card labels the focused series with its own number', () => {
+        coverSrcMock.mockResolvedValue('x')
+        render(<BookCard book={book({ series_list: SERIES })} focusSeries="Axis Chronological" onNavigate={() => {}} onSelect={() => {}} onStartSelect={() => {}} onEdit={() => {}} onDelete={() => {}} />)
+        expect(screen.getByText('Axis Chronological #6')).toBeInTheDocument()
+    })
+
+    it('a card falls back to the primary label when the book is not in the focused series', () => {
+        coverSrcMock.mockResolvedValue('x')
+        render(<BookCard book={book({ series_list: SERIES })} focusSeries="Other Series" onNavigate={() => {}} onSelect={() => {}} onStartSelect={() => {}} onEdit={() => {}} onDelete={() => {}} />)
+        expect(screen.getByText('Axis Saga #1 +1')).toBeInTheDocument()
+    })
+
+    it('a row labels the focused series with its own number', () => {
+        coverSrcMock.mockResolvedValue('x')
+        render(<BookRow book={book({ series_list: SERIES })} focusSeries="axis chronological" onNavigate={() => {}} onSelect={() => {}} onEdit={() => {}} onDelete={() => {}} />)
+        expect(screen.getByText('Axis Chronological #6')).toBeInTheDocument()
+    })
+})
+
 describe('LibraryPage BookRow', () => {
     it('renders the resolved cover image once coverSrc() resolves', async () => {
         coverSrcMock.mockResolvedValue('/api/files/covers/a.jpg?token=tok')
