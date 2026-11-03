@@ -110,4 +110,26 @@ class SeriesEntryTest {
         assertEquals(2.5, listOf(saga, chrono).indexIn("axis chronological"))
         assertNull(listOf(saga, chrono).indexIn("Elsewhere"))
     }
+
+    @Test
+    fun `seriesLabelFor names the focused series and its number, with no plus-N`() {
+        assertEquals("Axis Chronological #2.5", seriesLabelFor(listOf(saga, chrono), "Axis Chronological"))
+        assertEquals("Axis Saga #4", seriesLabelFor(listOf(saga, chrono), "Axis Saga"))
+    }
+
+    @Test
+    fun `seriesLabelFor matches the name ignoring case and outer spaces`() {
+        assertEquals("Axis Chronological #2.5", seriesLabelFor(listOf(saga, chrono), "  axis chronological "))
+    }
+
+    @Test
+    fun `seriesLabelFor gives the bare name when the entry has no number`() {
+        assertEquals("Axis Saga", seriesLabelFor(listOf(SeriesEntry("Axis Saga")), "Axis Saga"))
+    }
+
+    @Test
+    fun `seriesLabelFor is null when the list has no such series`() {
+        assertNull(seriesLabelFor(listOf(saga), "Elsewhere"))
+        assertNull(seriesLabelFor(emptyList(), "Axis Saga"))
+    }
 }
