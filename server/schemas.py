@@ -266,6 +266,13 @@ class SeriesEntry(BaseModel):
         from_attributes = True
 
 
+class WriteBackResult(BaseModel):
+    """Outcome of writing the row's metadata into its file (issue #894)."""
+
+    ok: bool
+    error: Optional[str] = None
+
+
 class MediaResponseBase(BaseModel):
     """The response fields `EBookResponse` and `AudioBookResponse` share.
 
@@ -302,6 +309,9 @@ class MediaResponseBase(BaseModel):
     is_abridged: Optional[bool] = None
     cover_path: Optional[str] = None
     acknowledged: bool = False
+    # Set only by the two metadata PATCH handlers (issue #894); null on every
+    # other response.
+    write_back: Optional[WriteBackResult] = None
 
     class Config:
         from_attributes = True

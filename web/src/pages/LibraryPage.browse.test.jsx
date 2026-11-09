@@ -365,6 +365,48 @@ describe('LibraryPage delete confirmations are dialogs (issue #279)', () => {
         await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
     })
 
+    // Issue #894: the PATCH saves the row even when the file write fails, and
+    // says so in `write_back`; a bulk edit must tell the user how many.
+    it('bulk edit alerts when some files could not be updated (issue #894)', async () => {
+        const alertSpy = vi.spyOn(window, 'alert').mockImplementation(() => {})
+        getLibraryItemsPageMock.mockResolvedValue(pageOf([ebookItem(3), ebookItem(5)], 2))
+        updateEbookMetadataMock.mockImplementation(async (id) => ({
+            id, write_back: id === 3 ? { ok: false, error: 'Permission denied' } : { ok: true, error: null },
+        }))
+        renderPage()
+        await screen.findByText('Ebook 3')
+
+        fireEvent.click(screen.getByRole('button', { name: 'Select' }))
+        fireEvent.click(screen.getByText('Ebook 3'))
+        fireEvent.click(screen.getByText('Ebook 5'))
+        fireEvent.click(await screen.findByRole('button', { name: 'Edit Metadata' }))
+        fireEvent.change(screen.getByLabelText('Author'), { target: { value: 'Robin Hobb' } })
+        fireEvent.click(screen.getByRole('button', { name: 'Save to 2 Items' }))
+
+        await waitFor(() => expect(alertSpy).toHaveBeenCalledTimes(1))
+        expect(alertSpy.mock.calls[0][0]).toBe(
+            'Saved 2 book(s), but the file could not be updated for 1 of them. See the server log.')
+        alertSpy.mockRestore()
+    })
+
+    it('bulk edit does not alert when every file write succeeded (issue #894)', async () => {
+        const alertSpy = vi.spyOn(window, 'alert').mockImplementation(() => {})
+        getLibraryItemsPageMock.mockResolvedValue(pageOf([ebookItem(3)], 1))
+        updateEbookMetadataMock.mockResolvedValue({ id: 3, write_back: { ok: true, error: null } })
+        renderPage()
+        await screen.findByText('Ebook 3')
+
+        fireEvent.click(screen.getByRole('button', { name: 'Select' }))
+        fireEvent.click(screen.getByText('Ebook 3'))
+        fireEvent.click(await screen.findByRole('button', { name: 'Edit Metadata' }))
+        fireEvent.change(screen.getByLabelText('Author'), { target: { value: 'Robin Hobb' } })
+        fireEvent.click(screen.getByRole('button', { name: 'Save to 1 Item' }))
+
+        await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+        expect(alertSpy).not.toHaveBeenCalled()
+        alertSpy.mockRestore()
+    })
+
     // Issue #907: "Add to series" sends series_add, and the cards show what the
     // server answered with, not the request.
     it('bulk "Add to series" refreshes the cards from the server\'s series_list', async () => {

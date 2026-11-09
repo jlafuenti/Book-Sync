@@ -427,6 +427,16 @@
             "format": "date-time",
             "title": "Uploaded At",
             "type": "string"
+          },
+          "write_back": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/WriteBackResult"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -675,6 +685,16 @@
             "format": "date-time",
             "title": "Uploaded At",
             "type": "string"
+          },
+          "write_back": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/WriteBackResult"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -1879,6 +1899,16 @@
             "format": "date-time",
             "title": "Uploaded At",
             "type": "string"
+          },
+          "write_back": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/WriteBackResult"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -2126,6 +2156,16 @@
             "format": "date-time",
             "title": "Uploaded At",
             "type": "string"
+          },
+          "write_back": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/WriteBackResult"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -6870,6 +6910,31 @@
           "checked_at"
         ],
         "title": "WorkerVersionStatus",
+        "type": "object"
+      },
+      "WriteBackResult": {
+        "description": "Outcome of writing the row's metadata into its file (issue #894).",
+        "properties": {
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "ok": {
+            "title": "Ok",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "title": "WriteBackResult",
         "type": "object"
       }
     },

@@ -157,15 +157,20 @@ function BookDetailPage() {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [playerOpen])
 
+    const showToast = (message, type = 'success') => {
+        setToast({ message, type })
+        setTimeout(() => setToast(null), 4000)
+    }
+
     const handleSaveMetadata = async (bookId, data) => {
         const updateFunc = type === 'ebook' ? updateEbookMetadata : updateAudiobookMetadata;
         const updatedBook = await updateFunc(bookId, data);
         setBook(updatedBook);
-    }
-
-    const showToast = (message, type = 'success') => {
-        setToast({ message, type })
-        setTimeout(() => setToast(null), 4000)
+        // The row is saved either way; say so when the file did not follow
+        // (issue #894).
+        if (updatedBook?.write_back?.ok === false) {
+            showToast(`Saved, but the file could not be updated: ${updatedBook.write_back.error || 'unknown error'}`, 'error')
+        }
     }
 
     const handleEnrichFromAbs = async () => {

@@ -95,3 +95,31 @@ describe('BulkMatchModal page_count remap (issue #730)', () => {
         expect(updateAudiobookMetadata).not.toHaveBeenCalled()
     })
 })
+
+// Issue #894: the row is saved even when the file could not be written; the
+// wizard says so and carries on.
+describe('BulkMatchModal write-back report (issue #894)', () => {
+    it('alerts with the reason and still advances when the file write failed', async () => {
+        const alertSpy = vi.spyOn(window, 'alert').mockImplementation(() => {})
+        updateEbookMetadata.mockResolvedValue({ id: 1, write_back: { ok: false, error: 'Permission denied' } })
+        render(<BulkMatchModal books={books} bookType="ebook" onClose={vi.fn()} onUpdate={vi.fn()} />)
+
+        fireEvent.click(screen.getByRole('button', { name: 'apply-match' }))
+
+        await waitFor(() => expect(alertSpy).toHaveBeenCalledWith('Saved, but the file could not be updated: Permission denied'))
+        expect(await screen.findByText('Book 2 of 2')).toBeInTheDocument()
+        alertSpy.mockRestore()
+    })
+
+    it('does not alert when the file write succeeded', async () => {
+        const alertSpy = vi.spyOn(window, 'alert').mockImplementation(() => {})
+        updateEbookMetadata.mockResolvedValue({ id: 1, write_back: { ok: true, error: null } })
+        render(<BulkMatchModal books={books} bookType="ebook" onClose={vi.fn()} onUpdate={vi.fn()} />)
+
+        fireEvent.click(screen.getByRole('button', { name: 'apply-match' }))
+
+        expect(await screen.findByText('Book 2 of 2')).toBeInTheDocument()
+        expect(alertSpy).not.toHaveBeenCalled()
+        alertSpy.mockRestore()
+    })
+})

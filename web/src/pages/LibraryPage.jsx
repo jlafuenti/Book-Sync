@@ -630,6 +630,12 @@ function LibraryPage({ tab }) {
                 const fn = s.mediaType === 'ebook' ? updateEbookMetadata : updateAudiobookMetadata
                 return fn(s.id, s.patch)
             }))
+            // The rows are saved either way; tell the user when a file did not
+            // follow (issue #894).
+            const failed = answers.filter(a => a?.write_back?.ok === false).length
+            if (failed > 0) {
+                alert(`Saved ${answers.length} book(s), but the file could not be updated for ${failed} of them. See the server log.`)
+            }
             browse.patchItems(items => jobs.reduce(
                 (acc, s, i) => patchMedia(acc, s.mediaType, s.id, localPatch(s.patch, answers[i])), items))
             setFacetsTick(t => t + 1)

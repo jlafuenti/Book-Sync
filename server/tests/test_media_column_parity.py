@@ -233,6 +233,8 @@ _EXPECTED_EBOOK_RESPONSE_FIELDS = frozenset({
     "uploaded_at", "description", "publisher", "publish_year", "language",
     "genres", "tags", "isbn", "asin", "narrators", "is_explicit",
     "is_abridged", "cover_path", "acknowledged",
+    # issue #894: set only by the two metadata PATCH handlers, null elsewhere.
+    "write_back",
     # issue #730: ebook-only, added directly to EBookResponse (not the shared
     # MediaResponseBase), since an audiobook has no printed page count.
     "print_page_count",

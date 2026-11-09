@@ -12,6 +12,7 @@ const {
     getEbookMock,
     getAudiobookMock, getSettingsMock, enrichAudiobookFromAbsMock, getProgressMock, getPositionMock,
     updatePositionMock, resetPairProgressMock, resetPositionMock, getDeviceIdMock, getDeviceNameMock,
+    updateAudiobookMetadataMock,
 } = vi.hoisted(() => ({
     getEbookMock: vi.fn(),
     getAudiobookMock: vi.fn(),
@@ -24,13 +25,14 @@ const {
     resetPositionMock: vi.fn(),
     getDeviceIdMock: vi.fn(() => 'device-abc'),
     getDeviceNameMock: vi.fn(() => 'Web · Chrome'),
+    updateAudiobookMetadataMock: vi.fn(),
 }))
 
 vi.mock('../api', () => ({
     getEbook: getEbookMock,
     getAudiobook: getAudiobookMock,
     updateEbookMetadata: vi.fn(),
-    updateAudiobookMetadata: vi.fn(),
+    updateAudiobookMetadata: updateAudiobookMetadataMock,
     rescanBook: vi.fn(),
     getSettings: getSettingsMock,
     enrichAudiobookFromAbs: enrichAudiobookFromAbsMock,
@@ -44,7 +46,13 @@ vi.mock('../api', () => ({
 }))
 
 vi.mock('react-markdown', () => ({ default: ({ children }) => <div>{children}</div> }))
-vi.mock('../components/EnhancedMetadataModal', () => ({ default: () => null }))
+// The modal is replaced by one button that calls the page's onSave, so the
+// save path (and its write-back toast, issue #894) can be driven directly.
+vi.mock('../components/EnhancedMetadataModal', () => ({
+    default: (props) => (
+        <button onClick={() => props.onSave(props.book.id, { title: 'New Title' })}>save-metadata</button>
+    ),
+}))
 // The overlays surface the props the page hands them, so the reader/player
 // handoff can be driven without rendering either for real. `player` is mutable
 // so a test can put the page in "audiobook playing" state.
@@ -107,6 +115,7 @@ beforeEach(() => {
     })
     getSettingsMock.mockReset().mockResolvedValue({ abs_enabled: true })
     enrichAudiobookFromAbsMock.mockReset()
+    updateAudiobookMetadataMock.mockReset()
     getProgressMock.mockReset().mockResolvedValue(null)
     getPositionMock.mockReset().mockResolvedValue(null)
     updatePositionMock.mockReset().mockResolvedValue({})
@@ -638,5 +647,33 @@ describe('BookDetailPage tour anchors, screen readiness and events (issue #598 T
         fireEvent.click(screen.getByText('trigger-close-overlays'))
 
         await waitFor(() => expect(screen.queryByTestId('reader')).not.toBeInTheDocument())
+    })
+})
+
+// Issue #894: a metadata PATCH can save the row and still fail to write the
+// file; the response says so in `write_back`, and the page must not stay quiet.
+describe('BookDetailPage metadata save reports a failed file write (issue #894)', () => {
+    const saved = (write_back) => ({ id: 1538, title: 'New Title', author: 'L. E. Modesitt Jr', cover_path: null, write_back })
+
+    async function save() {
+        renderPage()
+        fireEvent.click(await screen.findByRole('button', { name: /Edit Metadata/ }))
+        fireEvent.click(screen.getByRole('button', { name: 'save-metadata' }))
+    }
+
+    it('shows an error toast carrying the server\'s reason', async () => {
+        updateAudiobookMetadataMock.mockResolvedValue(saved({ ok: false, error: 'Permission denied' }))
+        await save()
+
+        const toast = await screen.findByText('Saved, but the file could not be updated: Permission denied')
+        expect(toast.getAttribute('style')).toContain('var(--error)')
+    })
+
+    it('shows no toast when the file write succeeded', async () => {
+        updateAudiobookMetadataMock.mockResolvedValue(saved({ ok: true, error: null }))
+        await save()
+
+        await waitFor(() => expect(updateAudiobookMetadataMock).toHaveBeenCalled())
+        expect(screen.queryByText(/could not be updated/)).toBeNull()
     })
 })

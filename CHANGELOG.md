@@ -71,6 +71,9 @@ operator must do by hand rather than read about afterwards.
 
 ### Fixed
 
+- The metadata PATCH for an ebook or audiobook now says when the row was saved but the file could
+  not be written: the response carries `write_back: {ok, error}`, and the web shows the error after
+  a save or bulk edit instead of a silent 200 (#894).
 - M4B write-back now writes the album as the book's title, as MP3 and FLAC have since #886, so
   Readarr-style managers keep the file on the right book instead of re-filing it under a series
   name left in the album (#929).
