@@ -112,6 +112,11 @@ operator must do by hand rather than read about afterwards.
 - Writing audiobook metadata no longer overwrites the M4B track number with the series index, and
   a full release date in the file is kept when its year already matches the library's year, on
   M4B, MP3 and FLAC/Ogg and in the Audiobookshelf write-back (#895).
+- An M4B whose chapter titles are not valid UTF-8 (a legacy Nero `chpl` atom) now scans with its
+  embedded tags and cover and accepts metadata writes, instead of falling back to the filename and
+  silently writing nothing. Tandem reads around the bad atom and no longer repairs the file on its
+  own during an Audiobookshelf sync; Troubleshoot still lists the file and its Repair button is
+  unchanged (#935).
 
 ### Upgrade notes
 

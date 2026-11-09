@@ -256,7 +256,7 @@ class _FakeMP4Write(dict):
 
 @pytest.fixture
 def fake_mp4_file(monkeypatch, tmp_path):
-    """Bind `mutagen.mp4.MP4(path)` to a fake seeded with the given tags, and
+    """Bind the ABS writer's MP4 opener to a fake seeded with the given tags, and
     hand the fake back so a test can assert on what survived the write."""
     import mutagen.mp4
 
@@ -264,7 +264,7 @@ def fake_mp4_file(monkeypatch, tmp_path):
         path = tmp_path / name
         path.write_bytes(b"")
         audio = _FakeMP4Write(tags)
-        monkeypatch.setattr(mutagen.mp4, "MP4", lambda p: audio)
+        monkeypatch.setattr(abs_metadata, "TolerantMP4", lambda p: audio)
         return path, audio
 
     return _install

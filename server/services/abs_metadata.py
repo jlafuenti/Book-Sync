@@ -21,8 +21,9 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from models.settings import SystemSetting
-from services import chapter_repair, credentials
+from services import credentials
 from services.metadata_utils import SERIES_LIST_KEY
+from services.mp4_open import MP4 as TolerantMP4
 from services.series import abs_series_entries, entries_of, parse_abs_series_name
 from services.tag_writer import _year_already_in, apply_mp4_series
 from services.url_safety import assert_safe_url
@@ -263,9 +264,6 @@ def fills_written_back_field(before: dict, after: dict) -> bool:
     return any(differs(f) for f in WRITTEN_BACK_FIELDS)
 
 
-_CHAPTER_TITLE_ERROR_RE = chapter_repair.CHAPTER_TITLE_ERROR_RE
-
-
 def write_metadata_to_file(filepath: str, file_meta: dict) -> tuple[bool, Optional[str]]:
     """
     Write enriched metadata back into the audio file's embedded tags.
@@ -273,10 +271,10 @@ def write_metadata_to_file(filepath: str, file_meta: dict) -> tuple[bool, Option
     Returns (True, None) on success, (False, error_message) on failure.
     error_message is None when the file was simply skipped (unsupported format).
 
-    If the file has a legacy Nero-style chapter list whose titles aren't
-    valid UTF-8 (mutagen raises "chapter N title: ..." while just opening
-    the file), attempt a one-shot repair via services.chapter_repair and
-    retry before giving up.
+    A legacy Nero-style chapter list whose titles aren't valid UTF-8 does not
+    block the write: services.mp4_open reads around that atom (issue #935),
+    and the file is never repaired from here -- only the operator's Repair
+    button in Troubleshoot edits a purchased media file.
     """
     ext = os.path.splitext(filepath)[1].lower()
     if ext not in (".m4b", ".m4a", ".mp4"):
@@ -286,31 +284,12 @@ def write_metadata_to_file(filepath: str, file_meta: dict) -> tuple[bool, Option
     try:
         return _write_tags(filepath, file_meta)
     except Exception as e:
-        if _CHAPTER_TITLE_ERROR_RE.search(str(e)):
-            # WARNING, not INFO: nobody clicked "repair" — this is a metadata
-            # sync deciding on its own to write to a purchased media file
-            # (issue #243). The repair restores the original on failure, but
-            # the operator should still be able to find this in the log.
-            logger.warning(
-                f"[abs_metadata] Non-UTF-8 chapter title detected in {filepath}, "
-                "attempting an automatic chapter-atom repair"
-            )
-            repaired, repair_error = chapter_repair.repair_chapter_encoding(filepath)
-            if repaired:
-                try:
-                    return _write_tags(filepath, file_meta)
-                except Exception as e2:
-                    logger.warning(f"[abs_metadata] Failed to write tags to {filepath} after chapter repair: {e2}")
-                    return False, str(e2)
-            logger.warning(f"[abs_metadata] Chapter repair failed for {filepath}: {repair_error}")
         logger.warning(f"[abs_metadata] Failed to write tags to {filepath}: {e}")
         return False, str(e)
 
 
 def _write_tags(filepath: str, file_meta: dict) -> tuple[bool, Optional[str]]:
-    import mutagen.mp4
-
-    audio = mutagen.mp4.MP4(filepath)
+    audio = TolerantMP4(filepath)
 
     def _set(tag: str, val) -> None:
         """Write `val`, or clear the tag — but only when the caller has an

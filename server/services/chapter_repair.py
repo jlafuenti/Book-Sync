@@ -5,8 +5,11 @@ Some audiobook files carry a malformed or variant `moov.udta.chpl` atom.
 mutagen's MP4Chapters._parse_chpl assumes one fixed binary layout and raises
 "chapter N title: <decode error>" when the bytes don't line up — often
 landing on binary timestamp bytes it mistakes for title text — which aborts
-the whole mutagen.mp4.MP4(filepath) call before any tags can be written
-(services.abs_metadata.write_metadata_to_file). ffmpeg/ffprobe, by contrast,
+the whole mutagen.mp4.MP4(filepath) call. Since issue #935 services.mp4_open
+parses around the atom for tag reads and writes, so such a file no longer needs
+repairing to be scanned or tagged; this module remains the operator-driven
+repair (Troubleshoot) and, through check_chapter_encoding, the strict detector
+that lists these files. ffmpeg/ffprobe, by contrast,
 read these same files' chapters fine, via their own more tolerant chpl
 parser and/or the QuickTime chapter text track.
 

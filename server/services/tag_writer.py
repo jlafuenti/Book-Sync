@@ -26,7 +26,6 @@ import re
 import tempfile
 import zipfile
 
-import mutagen
 # defusedxml rather than the stdlib parser (issue #265). Python 3.12's expat
 # already refuses external entities and caps amplification, so this changes no
 # behaviour -- it makes the choice explicit for input that arrives as an
@@ -41,6 +40,7 @@ from services.file_mode import copy_mode_and_owner
 from xml.etree.ElementTree import SubElement, register_namespace
 
 from services.metadata_utils import normalize_author
+from services.mp4_open import open_audio
 from services.series import entries_of, tag_values
 
 logger = logging.getLogger(__name__)
@@ -383,7 +383,7 @@ def write_audiobook_metadata(filepath: str, book) -> None:
     logger.info(f"[write-back] Writing audio metadata to: {filepath}")
     
     try:
-        audio = mutagen.File(filepath)
+        audio = open_audio(filepath)
         # `is None`, not falsy: mutagen's FileType is a mapping, so a file with no
         # tags at all is falsy yet perfectly writable (issue #893).
         if audio is None:

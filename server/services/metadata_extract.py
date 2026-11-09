@@ -42,6 +42,7 @@ from models.settings import SystemSetting
 from routers.settings import DEFAULT_SETTINGS
 from services.audio_duration import probe_duration_seconds
 from services.filename_patterns import compile_pattern
+from services.mp4_open import open_audio
 from services.metadata_utils import (
     MEDIA_EXTRACTED_FIELDS,
     SERIES_LIST_KEY,
@@ -373,10 +374,11 @@ def _read_embedded_metadata(filepath: str, file_type: str) -> Dict[str, Any]:
             duration = probe_duration_seconds(filepath)
 
             try:
-                audio = mutagen.File(filepath)
-            except mutagen.mp4.MP4MetadataError:
+                audio = open_audio(filepath)
+            except Exception as e:
+                # Any container mutagen cannot open falls back to the filename.
                 audio = None
-                logger.warning(f"[extract_metadata] MP4 chapter parse failed for {filepath}, skipping embedded tags")
+                logger.warning(f"[extract_metadata] Could not open {filepath}, skipping embedded tags: {e}")
 
             # The mutagen fallback is guarded on `is not None`, not on the
             # `if audio:` below: mutagen's FileType defines __len__ as its tag
@@ -652,7 +654,7 @@ def _extract_and_save_cover(filepath: str, book_type: str, book_id: int, book_ti
                         ext = Path(item.file_name).suffix if item.file_name else ".jpg"
         
         elif book_type == "audiobook":
-            audio = mutagen.File(filepath)
+            audio = open_audio(filepath)
             if audio:
                 if type(audio).__name__ in ('MP4', 'M4A') and 'covr' in audio:
                     covers = audio['covr']
