@@ -13,11 +13,11 @@ structures. The XML parser is defusedxml on purpose (issue #265): the archive
 is attacker-supplied input, and `tests/test_xml_entity_safety.py` pins the
 choice.
 
-The two writers differ in how they fail, and both callers depend on it: the
-EPUB writer re-raises after logging (the PATCH handler catches it, the
-discrepancy resolver commits *before* calling it so a failure cannot lose the
-resolution — see docs/request-transactions.md), while the audio writer
-swallows everything and logs.
+Both writers log a failure and re-raise it (the audio one changed for
+issue #894, so the PATCH can report a failed write). The PATCH handlers catch it, and the discrepancy resolver commits
+*before* calling them so a failure cannot lose the resolution — see
+docs/request-transactions.md. Only the early, deliberate skips return quietly:
+a missing file, a file mutagen cannot open, an unsupported container.
 """
 
 import logging
@@ -362,6 +362,15 @@ def apply_mp4_series(audio, entries) -> None:
         del audio['----:com.apple.iTunes:SERIES-PART']
 
 
+def _year_already_in(values, year) -> bool:
+    """True when any of `values` (strings, or tag frames/atoms) starts with
+    `year`. The library holds only a year, so a fuller date in the file whose
+    year agrees (``2020-01-07`` for 2020) is kept rather than flattened -- the
+    audio counterpart of the EPUB writer's rule for ``dc:date`` (issue #895)."""
+    wanted = str(year)
+    return any(str(v).strip().startswith(wanted) for v in values)
+
+
 def write_audiobook_metadata(filepath: str, book) -> None:
     """
     Write metadata back to an audiobook file.
@@ -375,7 +384,9 @@ def write_audiobook_metadata(filepath: str, book) -> None:
     
     try:
         audio = mutagen.File(filepath)
-        if not audio:
+        # `is None`, not falsy: mutagen's FileType is a mapping, so a file with no
+        # tags at all is falsy yet perfectly writable (issue #893).
+        if audio is None:
             logger.warning(f"[write-back] Mutagen could not open: {filepath}")
             return
         
@@ -384,6 +395,8 @@ def write_audiobook_metadata(filepath: str, book) -> None:
         
         if audio_type in ('MP4', 'M4A'):
             # iTunes-style atoms for M4B/M4A
+            if audio.tags is None:
+                audio.add_tags()
             if book.title is not None:
                 audio['\xa9nam'] = [book.title]
                 # Readarr-style managers identify the book by its album, so it
@@ -397,10 +410,6 @@ def write_audiobook_metadata(filepath: str, book) -> None:
             series_entries = _series_to_write(book)
             if series_entries is not None:
                 apply_mp4_series(audio, series_entries)
-                # The track number keeps today's behaviour, from the primary
-                # series' index (issue #895 tracks changing that).
-                if series_entries and series_entries[0]['index'] is not None:
-                    audio['trkn'] = [(int(series_entries[0]['index']), 0)]
             # extract_metadata reads an MP4 description from `©des` first, then
             # `desc`, then `©cmt` (issue #538). Setting writes both of the first
             # two so a stale `©des` can't outrank the new text; clearing removes
@@ -414,7 +423,9 @@ def write_audiobook_metadata(filepath: str, book) -> None:
                     if tag in audio:
                         del audio[tag]
             if getattr(book, 'genres', None) is not None: audio['\xa9gen'] = [book.genres]
-            if getattr(book, 'publish_year', None) is not None: audio['\xa9day'] = [str(book.publish_year)]
+            year = getattr(book, 'publish_year', None)
+            if year is not None and not _year_already_in(audio.get('\xa9day', []), year):
+                audio['\xa9day'] = [str(year)]
                 
         elif audio_type == 'MP3':
             from mutagen.id3 import TIT1, TIT2, TPE1, TALB, TXXX, COMM, TCON, TYER, TPUB
@@ -469,11 +480,22 @@ def write_audiobook_metadata(filepath: str, book) -> None:
                     elif key.startswith('TXXX:') and key[len('TXXX:'):].lower() == 'comment':
                         del audio.tags[key]
             if getattr(book, 'genres', None) is not None: audio.tags['TCON'] = TCON(encoding=3, text=book.genres)
-            if getattr(book, 'publish_year', None) is not None: audio.tags['TYER'] = TYER(encoding=3, text=str(book.publish_year))
+            year = getattr(book, 'publish_year', None)
+            if year is not None and not _year_already_in(
+                [audio.tags[k] for k in ('TDRC', 'TYER') if k in audio.tags], year
+            ):
+                # The extractor reads TDRC before TYER, so a stale TDRC left
+                # beside the new TYER would still win on the next scan.
+                for key in ('TDRC', 'TYER'):
+                    if key in audio.tags:
+                        del audio.tags[key]
+                audio.tags['TYER'] = TYER(encoding=3, text=str(year))
             if getattr(book, 'publisher', None) is not None: audio.tags['TPUB'] = TPUB(encoding=3, text=book.publisher)
                 
         elif audio_type in ('FLAC', 'OggVorbis', 'OggOpus'):
             # Vorbis comments
+            if audio.tags is None:
+                audio.add_tags()
             if book.title is not None:
                 audio['title'] = [book.title]
                 audio['album'] = [book.title]   # the book's title, not the series (#886)
@@ -499,7 +521,9 @@ def write_audiobook_metadata(filepath: str, book) -> None:
                     if tag in audio:
                         del audio[tag]
             if getattr(book, 'genres', None) is not None: audio['genre'] = [book.genres]
-            if getattr(book, 'publish_year', None) is not None: audio['date'] = [str(book.publish_year)]
+            year = getattr(book, 'publish_year', None)
+            if year is not None and not _year_already_in(audio.get('date', []), year):
+                audio['date'] = [str(year)]
             if getattr(book, 'publisher', None) is not None: audio['organization'] = [book.publisher]
         else:
             logger.warning(f"[write-back] Unsupported audio type for write-back: {audio_type}")
@@ -510,4 +534,5 @@ def write_audiobook_metadata(filepath: str, book) -> None:
         
     except Exception as e:
         logger.error(f"[write-back] Failed to write audio metadata: {e}")
+        raise
 

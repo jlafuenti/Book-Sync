@@ -86,6 +86,28 @@ def write_minimal_mp3(path):
     return str(path)
 
 
+def write_minimal_flac(path):
+    """Write a real, tag-less FLAC stream that mutagen can open.
+
+    `fLaC` plus one STREAMINFO block (flagged last) and no audio frames:
+    enough for `mutagen.flac.FLAC` to parse it, and for `save()` to add a
+    Vorbis-comment block and round-trip a tag. Like `write_minimal_mp3`, it is
+    the shape of an untagged file (issue #893).
+    """
+    streaminfo = (
+        struct.pack(">HH", 4096, 4096)  # min / max block size
+        + bytes(3) + bytes(3)  # min / max frame size (unknown)
+        # 20 bits sample rate, 3 bits channels-1, 5 bits bits-per-sample-1,
+        # 36 bits total samples, packed into 8 bytes.
+        + ((44100 << 44) | (1 << 41) | (15 << 36)).to_bytes(8, "big")
+        + bytes(16)  # MD5 of the (absent) audio
+    )
+    assert len(streaminfo) == 34
+    with open(path, "wb") as f:
+        f.write(b"fLaC" + bytes([0x80]) + (34).to_bytes(3, "big") + streaminfo)
+    return str(path)
+
+
 def write_minimal_m4a(path):
     """Write a real, near-empty M4A/MP4 container that mutagen can open.
 

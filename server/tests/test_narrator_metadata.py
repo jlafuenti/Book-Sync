@@ -430,3 +430,14 @@ def test_write_tags_leaves_the_album_alone_without_a_title(fake_mp4_file):
     abs_metadata.write_metadata_to_file(str(path), {"author": "Ann Axis"})
 
     assert audio["\xa9alb"] == ["Millennium's Rule"]
+
+
+def test_write_tags_keeps_a_full_date_whose_year_matches_and_replaces_one_that_does_not(fake_mp4_file):
+    """#895: the library holds a year; a fuller date in the file that agrees is kept."""
+    path, audio = fake_mp4_file({"\xa9day": ["2020-01-07"]})
+
+    abs_metadata.write_metadata_to_file(str(path), {"publish_year": 2020})
+    assert audio["\xa9day"] == ["2020-01-07"]
+
+    abs_metadata.write_metadata_to_file(str(path), {"publish_year": 2021})
+    assert audio["\xa9day"] == ["2021"]

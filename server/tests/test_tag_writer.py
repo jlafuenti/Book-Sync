@@ -7,15 +7,15 @@ tag objects the way `test_embedded_metadata.py` does, because mutagen selects
 its tag dialect on the *class name* of what `mutagen.File` returns, and
 building genuine M4B/MP3/FLAC containers per case would test mutagen, not this.
 
-Two pre-existing behaviours are pinned rather than fixed here, because the
-extraction was a pure move:
+Two bugs found during the extraction have since been fixed:
 
-* (fixed in #428: the EPUB writer used to raise `AttributeError` on every
-  call because defusedxml re-exports only the parsers; the round-trip tests
-  below now run against the writer as shipped, with no shim);
-* a container mutagen opens but which carries *no tags at all* is treated as
-  unopenable, because mutagen's `FileType` is a mapping whose truthiness is
-  its tag count (see `_read_embedded_metadata` for the same trap).
+* (#428: the EPUB writer used to raise `AttributeError` on every call because
+  defusedxml re-exports only the parsers; the round-trip tests below run
+  against the writer as shipped, with no shim);
+* (#893: a container mutagen opens but which carries *no tags at all* was
+  treated as unopenable, because mutagen's `FileType` is a mapping whose
+  truthiness is its tag count; the writer now tests `is None`, and real
+  untagged MP3, M4A and FLAC files are written below).
 
 The "clearing a description also clears the comment tags it can come back
 from" tests (issue #538) are the one place that does build genuine MP3/M4A
@@ -34,7 +34,7 @@ import pytest
 
 from services import tag_writer
 from services.metadata_extract import _read_embedded_metadata
-from tests.factories import write_epub, write_minimal_m4a, write_minimal_mp3
+from tests.factories import write_epub, write_minimal_flac, write_minimal_m4a, write_minimal_mp3
 
 DC = "{http://purl.org/dc/elements/1.1/}"
 OPF = "{http://www.idpf.org/2007/opf}"
@@ -291,6 +291,8 @@ class _Tags(dict):
     "could not open".
     """
 
+    tags = {}  # real MP4 and FLAC objects always carry a `tags` attribute
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         if not self:
@@ -354,7 +356,6 @@ def test_mp4_atoms_are_written_including_both_series_spellings(audio, monkeypatc
     assert tags["\xa9grp"] == ["Saga #2"]
     assert tags["----:com.apple.iTunes:SERIES"] == [b"Saga"]
     assert tags["----:com.apple.iTunes:SERIES-PART"] == [b"2"]
-    assert tags["trkn"] == [(2, 0)]
     assert tags["desc"] == ["Blurb"]
     assert tags["\xa9gen"] == ["Fantasy"]
     assert tags["\xa9day"] == ["2001"]
@@ -368,6 +369,15 @@ def test_mp4_series_without_an_index_writes_the_bare_name(audio, monkeypatch):
     assert tags["\xa9grp"] == ["Saga"]
     assert "----:com.apple.iTunes:SERIES-PART" not in tags
     assert "trkn" not in tags
+
+
+def test_mp4_existing_track_number_is_left_alone(audio, monkeypatch):
+    """#895: the track number is not the series index."""
+    tags = _opened(monkeypatch, MP4({"trkn": [(1, 1)]}))
+
+    tag_writer.write_audiobook_metadata(audio, _book(title="T", series="Saga", series_index=5.0))
+
+    assert tags["trkn"] == [(1, 1)]
 
 
 def test_mp4_cleared_series_and_description_delete_the_tags(audio, monkeypatch):
@@ -472,17 +482,6 @@ def test_a_container_mutagen_cannot_open_is_skipped(audio, monkeypatch):
     tag_writer.write_audiobook_metadata(audio, _book(title="T"))  # no exception
 
 
-def test_a_container_with_no_tags_at_all_is_treated_as_unopenable(audio, monkeypatch, caplog):
-    """Pins the mutagen-truthiness trap: an untagged file gets nothing written."""
-    tags = _opened(monkeypatch, MP4())
-    tags.clear()
-
-    tag_writer.write_audiobook_metadata(audio, _book(title="T"))
-
-    assert not tags.saved and tags == {}
-    assert "Mutagen could not open" in caplog.text
-
-
 def test_a_missing_file_is_never_opened(tmp_path, monkeypatch):
     def _explode(*a, **k):
         raise AssertionError("mutagen.File must not be called for a missing path")
@@ -491,13 +490,14 @@ def test_a_missing_file_is_never_opened(tmp_path, monkeypatch):
     tag_writer.write_audiobook_metadata(str(tmp_path / "absent.m4b"), _book(title="T"))
 
 
-def test_a_failing_save_is_logged_not_raised(audio, monkeypatch, caplog):
+def test_a_failing_save_is_logged_and_raised(audio, monkeypatch, caplog):
     def _boom():
         raise OSError("read-only filesystem")
 
     tags = _opened(monkeypatch, MP4())
     tags.save = _boom  # the class name must stay MP4 to reach the save
-    tag_writer.write_audiobook_metadata(audio, _book(title="T"))
+    with pytest.raises(OSError):
+        tag_writer.write_audiobook_metadata(audio, _book(title="T"))
 
     assert "Failed to write audio metadata" in caplog.text
 
@@ -640,3 +640,119 @@ def test_clearing_a_vorbis_description_also_removes_the_summary_fallback(audio, 
     tag_writer.write_audiobook_metadata(audio, _book(title="T", description=None))
 
     assert "description" not in tags and "summary" not in tags
+
+
+# ------------------------------------------- untagged real files (#893)
+#
+# mutagen's `FileType` is a mapping, so a file with no tags is falsy; the writer
+# once took that for "could not open" and wrote nothing.
+
+
+def _make_untagged(kind, tmp_path):
+    if kind == "mp3":
+        return write_minimal_mp3(str(tmp_path / "book.mp3"))
+    if kind == "m4a":
+        return write_minimal_m4a(str(tmp_path / "book.m4a"))
+    return write_minimal_flac(str(tmp_path / "book.flac"))
+
+
+@pytest.mark.parametrize("kind", ["mp3", "m4a", "flac"])
+def test_an_untagged_file_gets_its_tags_written(tmp_path, kind):
+    path = _make_untagged(kind, tmp_path)
+
+    tag_writer.write_audiobook_metadata(path, _book(
+        title="T", author="A", series="Saga", series_index=2.0))
+
+    meta = _read_embedded_metadata(path, "audiobook")
+    assert meta["title"] == "T"
+    assert meta["author"] == "A"
+    assert meta["series_list"] == [{"name": "Saga", "index": 2.0}]
+
+
+# --------------------------------- full dates and track numbers (#895)
+#
+# The library holds only a year. A file that carries a full date whose year
+# already agrees keeps it, as the EPUB writer does; a different year replaces it.
+
+
+def _tagged_mp3(tmp_path, date):
+    from mutagen.id3 import TDRC
+    from mutagen.mp3 import MP3
+
+    path = write_minimal_mp3(str(tmp_path / "book.mp3"))
+    audio = MP3(path)
+    audio.add_tags()
+    if date:
+        audio.tags.add(TDRC(encoding=3, text=date))
+    audio.save()
+    return path
+
+
+def _tagged_flac(tmp_path, date):
+    from mutagen.flac import FLAC
+
+    path = write_minimal_flac(str(tmp_path / "book.flac"))
+    audio = FLAC(path)
+    audio.add_tags()
+    if date:
+        audio["date"] = [date]
+    audio.save()
+    return path
+
+
+def _tagged_m4a(tmp_path, date):
+    return _m4a_with(tmp_path, {"\xa9day": date} if date else {})
+
+
+def _raw_date(kind, path):
+    from mutagen.flac import FLAC
+    from mutagen.id3 import ID3
+    from mutagen.mp4 import MP4
+
+    if kind == "mp3":
+        tags = ID3(path)
+        return [str(tags[k]) for k in ("TDRC", "TYER") if k in tags]
+    if kind == "m4a":
+        return [str(v) for v in MP4(path).get("\xa9day", [])]
+    return list(FLAC(path).get("date", []))
+
+
+_TAGGED = {"mp3": _tagged_mp3, "m4a": _tagged_m4a, "flac": _tagged_flac}
+
+
+@pytest.mark.parametrize("kind", ["mp3", "m4a", "flac"])
+def test_a_full_date_is_kept_when_its_year_matches(tmp_path, kind):
+    path = _TAGGED[kind](tmp_path, "2020-01-07")
+
+    tag_writer.write_audiobook_metadata(path, _book(title="T", publish_year=2020))
+
+    assert _raw_date(kind, path) == ["2020-01-07"]
+    assert _read_embedded_metadata(path, "audiobook")["publish_year"] == 2020
+
+
+@pytest.mark.parametrize("kind", ["mp3", "m4a", "flac"])
+def test_a_full_date_is_replaced_when_the_year_differs(tmp_path, kind):
+    path = _TAGGED[kind](tmp_path, "2020-01-07")
+
+    tag_writer.write_audiobook_metadata(path, _book(title="T", publish_year=2021))
+
+    assert _read_embedded_metadata(path, "audiobook")["publish_year"] == 2021
+    assert not any(v.startswith("2020") for v in _raw_date(kind, path))
+    if kind != "mp3":
+        assert _raw_date(kind, path) == ["2021"]
+
+
+@pytest.mark.parametrize("kind", ["mp3", "m4a", "flac"])
+def test_a_file_with_no_date_gets_the_year(tmp_path, kind):
+    path = _TAGGED[kind](tmp_path, None)
+
+    tag_writer.write_audiobook_metadata(path, _book(title="T", publish_year=1999))
+
+    assert _read_embedded_metadata(path, "audiobook")["publish_year"] == 1999
+
+
+def test_year_already_in():
+    assert tag_writer._year_already_in(["2020-01-07"], 2020)
+    assert tag_writer._year_already_in([" 2020"], 2020)
+    assert not tag_writer._year_already_in(["2019-12-31"], 2020)
+    assert not tag_writer._year_already_in([], 2020)
