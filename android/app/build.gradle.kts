@@ -353,7 +353,7 @@ dependencies {
     implementation("io.coil-kt:coil-compose:2.7.0")
 
     // HTML Parsing
-    implementation("org.jsoup:jsoup:1.23.2")
+    implementation("org.jsoup:jsoup:1.24.1")
 
     // Testing
     testImplementation("junit:junit:4.13.2")
@@ -368,7 +368,7 @@ dependencies {
     // against a populated v19 database (issue #314). Room's MigrationTestHelper
     // needs an instrumentation context and this module has no androidTest source
     // set, so CI would never run it; this does the same job on the JVM.
-    testImplementation("org.xerial:sqlite-jdbc:3.53.4.0")
+    testImplementation("org.xerial:sqlite-jdbc:3.54.1.0")
     // Version must track the kotlinx-coroutines-core the app resolves to — a
     // mismatch breaks Dispatchers.setMain. Held at 1.10.2 deliberately: the
     // android-minor-and-patch group proposed 1.11.0, but nothing moves
