@@ -33,7 +33,12 @@ export default function BulkMatchModal({ books, bookType, onClose, onUpdate }) {
         try {
             const updateFn = bookType === 'ebook' ? updateEbookMetadata : updateAudiobookMetadata
             if (Object.keys(textFields).length > 0) {
-                await updateFn(current.id, textFields)
+                const answer = await updateFn(current.id, textFields)
+                // Saved either way; the file is the part that can fail
+                // (issue #894). Report it and carry on.
+                if (answer?.write_back?.ok === false) {
+                    alert('Saved, but the file could not be updated: ' + answer.write_back.error)
+                }
                 onUpdate(current.id, textFields)
             }
             if (coverUrl) {

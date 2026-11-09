@@ -46,7 +46,7 @@ from schemas import (
     LibraryItem, LibraryItemKind, LibraryTab, LibrarySort, SortDir,
     LibraryFacets, LibraryCounts, FacetCount,
     CalibreStatusResponse, CleanupResponse, MessageResponse, VerifyFilesResponse,
-    ActionResult, PrintPagesProgress, SeriesEntry,
+    ActionResult, PrintPagesProgress, SeriesEntry, WriteBackResult,
 )
 from rate_limit import expensive_reads, search_reads
 from routers.auth import get_current_user, get_editor_user, rate_limited
@@ -1095,6 +1095,7 @@ async def update_ebook_metadata(
     # Write metadata back to the file. Rewrites every entry of the EPUB zip,
     # so it crosses to a thread rather than running on the event loop
     # (issue #523).
+    write_back = WriteBackResult(ok=True)
     try:
         await asyncio.to_thread(_write_ebook_metadata, book.file_path, book)
         # The rewrite above just changed the file's bytes without changing its
@@ -1104,10 +1105,14 @@ async def update_ebook_metadata(
         await _refresh_write_back_hash(db, book, is_ebook=True)
     except Exception as e:
         logger.warning(f"Failed to write metadata to ebook file: {e}")
+        write_back = WriteBackResult(ok=False, error=str(e))
 
+    # The row is committed either way, deliberately: the user's edit is kept,
+    # and a file that disagrees with it is reported rather than hidden
+    # (issue #894).
     await db.commit()
     await db.refresh(book)
-    return book
+    return EBookResponse.model_validate(book).model_copy(update={"write_back": write_back})
 
 @router.post("/ebooks/{book_id}/cover", response_model=EBookResponse)
 async def upload_ebook_cover(
@@ -1177,6 +1182,7 @@ async def update_audiobook_metadata(
     # which for an MP3 whose ID3 padding is too small rewrites the whole
     # file, so it crosses to a thread rather than running on the event loop
     # (issue #523).
+    write_back = WriteBackResult(ok=True)
     try:
         await asyncio.to_thread(_write_audiobook_metadata, book.file_path, book)
         # Same reasoning as the ebook PATCH above (issue #533): the container
@@ -1186,10 +1192,14 @@ async def update_audiobook_metadata(
         await _refresh_write_back_hash(db, book, is_ebook=False)
     except Exception as e:
         logger.warning(f"Failed to write metadata to audiobook file: {e}")
+        write_back = WriteBackResult(ok=False, error=str(e))
 
+    # The row is committed either way, deliberately: the user's edit is kept,
+    # and a file that disagrees with it is reported rather than hidden
+    # (issue #894).
     await db.commit()
     await db.refresh(book)
-    return book
+    return AudioBookResponse.model_validate(book).model_copy(update={"write_back": write_back})
 
 @router.post("/audiobooks/{book_id}/cover", response_model=AudioBookResponse)
 async def upload_audiobook_cover(
