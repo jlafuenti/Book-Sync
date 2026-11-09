@@ -53,7 +53,7 @@ class TestWriteMetadataToFile:
                 )
 
         import mutagen.mp4
-        monkeypatch.setattr(mutagen.mp4, "MP4", lambda path: FakeMP4())
+        monkeypatch.setattr(abs_metadata, "TolerantMP4", lambda path: FakeMP4())
 
         with caplog.at_level("WARNING"):
             ok, error = abs_metadata.write_metadata_to_file(
@@ -74,7 +74,7 @@ class TestWriteMetadataToFile:
                 pass
 
         import mutagen.mp4
-        monkeypatch.setattr(mutagen.mp4, "MP4", lambda path: FakeMP4())
+        monkeypatch.setattr(abs_metadata, "TolerantMP4", lambda path: FakeMP4())
 
         ok, error = abs_metadata.write_metadata_to_file(
             str(fake_file), {"title": "Antiagon Fire"}
@@ -94,61 +94,22 @@ class TestWriteMetadataToFile:
         assert ok is False
         assert error is None
 
-    def test_chapter_title_decode_failure_triggers_repair_and_retries(
-        self, monkeypatch, tmp_path
-    ):
-        """Regression: a chapter-title UnicodeDecodeError (mutagen's
-        MP4Chapters._parse_chpl raises this while just constructing MP4())
-        must trigger a repair attempt via services.chapter_repair, then retry
-        the write once, rather than immediately failing."""
-        fake_file = tmp_path / "book.m4b"
-        fake_file.write_bytes(b"")
-
-        attempts = []
-
-        class FakeMP4(dict):
-            def save(self):
-                pass
-
-        def fake_mp4_ctor(path):
-            attempts.append(path)
-            if len(attempts) == 1:
-                raise mutagen.mp4.MP4MetadataError(
-                    "chapter 0 title: 'utf-8' codec can't decode byte 0xc4 "
-                    "in position 27: invalid continuation byte"
-                )
-            return FakeMP4()
-
-        monkeypatch.setattr(mutagen.mp4, "MP4", fake_mp4_ctor)
-        monkeypatch.setattr(
-            chapter_repair, "repair_chapter_encoding", lambda path: (True, None)
-        )
-
-        ok, error = abs_metadata.write_metadata_to_file(
-            str(fake_file), {"title": "Antiagon Fire"}
-        )
-
-        assert ok is True
-        assert error is None
-        assert len(attempts) == 2  # first attempt failed, retry after repair succeeded
-
-    def test_chapter_title_decode_failure_with_failed_repair_returns_original_error(
-        self, monkeypatch, tmp_path
-    ):
+    def test_a_failing_write_is_never_answered_with_a_repair(self, monkeypatch, tmp_path):
+        """Issue #935: the ABS sync used to repair a file whose chapter titles
+        mutagen could not decode, on its own, before retrying. It now reads
+        around the atom (services.mp4_open) and never edits the file; a write
+        that fails for any reason is reported as it is."""
         fake_file = tmp_path / "book.m4b"
         fake_file.write_bytes(b"")
 
         def fake_mp4_ctor(path):
-            raise mutagen.mp4.MP4MetadataError(
-                "chapter 0 title: 'utf-8' codec can't decode byte 0xc4 "
-                "in position 27: invalid continuation byte"
-            )
+            raise mutagen.mp4.MP4MetadataError("chapter 0 title: bad bytes")
 
-        monkeypatch.setattr(mutagen.mp4, "MP4", fake_mp4_ctor)
-        monkeypatch.setattr(
-            chapter_repair, "repair_chapter_encoding",
-            lambda path: (False, "ffmpeg not found"),
-        )
+        def no_repair(path):
+            raise AssertionError("must not repair")
+
+        monkeypatch.setattr(abs_metadata, "TolerantMP4", fake_mp4_ctor)
+        monkeypatch.setattr(chapter_repair, "repair_chapter_encoding", no_repair)
 
         ok, error = abs_metadata.write_metadata_to_file(
             str(fake_file), {"title": "Antiagon Fire"}

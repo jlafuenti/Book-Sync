@@ -108,7 +108,7 @@ def write_minimal_flac(path):
     return str(path)
 
 
-def write_minimal_m4a(path):
+def write_minimal_m4a(path, udta_extra=b""):
     """Write a real, near-empty M4A/MP4 container that mutagen can open.
 
     Hand-built rather than pulled from a bundled fixture (mutagen's own test
@@ -147,10 +147,29 @@ def write_minimal_m4a(path):
         + b"\x00",  # empty name
     )
     meta = box(b"meta", b"\x00\x00\x00\x00" + hdlr + box(b"ilst", b""))
-    moov = box(b"moov", mvhd + box(b"udta", meta))
+    moov = box(b"moov", mvhd + box(b"udta", meta + udta_extra))
     with open(path, "wb") as f:
         f.write(ftyp + moov)
     return str(path)
+
+
+#: The payload of the `chpl` atom `write_m4a_with_bad_chapter_title` embeds,
+#: kept so a test can find it again byte for byte after a tag write.
+BAD_CHPL_PAYLOAD = (
+    b"\x01\x00\x00\x00"  # version/flags
+    + b"\x00\x00\x00\x00"  # reserved
+    + b"\x01"  # chapter count
+    + struct.pack(">Q", 0)  # start time
+    + b"\x03" + b"\xff\xfe\xfd"  # title length + a title that is not UTF-8
+)
+
+
+def write_m4a_with_bad_chapter_title(path):
+    """`write_minimal_m4a` plus a legacy Nero `chpl` atom in `udta` whose one
+    chapter title is not valid UTF-8, so strict `mutagen.mp4.MP4(path)` raises
+    ``MP4MetadataError: chapter 0 title: ...`` (issue #935)."""
+    chpl = struct.pack(">I4s", 8 + len(BAD_CHPL_PAYLOAD), b"chpl") + BAD_CHPL_PAYLOAD
+    return write_minimal_m4a(path, udta_extra=chpl)
 
 
 async def suspend_user_progress_uniqueness(db):

@@ -339,7 +339,7 @@ def audio(tmp_path):
 
 
 def _opened(monkeypatch, obj):
-    monkeypatch.setattr(tag_writer.mutagen, "File", lambda *a, **k: obj)
+    monkeypatch.setattr(tag_writer, "open_audio", lambda *a, **k: obj)
     return obj
 
 
@@ -484,9 +484,9 @@ def test_a_container_mutagen_cannot_open_is_skipped(audio, monkeypatch):
 
 def test_a_missing_file_is_never_opened(tmp_path, monkeypatch):
     def _explode(*a, **k):
-        raise AssertionError("mutagen.File must not be called for a missing path")
+        raise AssertionError("open_audio must not be called for a missing path")
 
-    monkeypatch.setattr(tag_writer.mutagen, "File", _explode)
+    monkeypatch.setattr(tag_writer, "open_audio", _explode)
     tag_writer.write_audiobook_metadata(str(tmp_path / "absent.m4b"), _book(title="T"))
 
 
