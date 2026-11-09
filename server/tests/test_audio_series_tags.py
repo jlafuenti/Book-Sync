@@ -246,7 +246,7 @@ def test_m4b_writes_the_canonical_grouping_and_paired_series_atoms(tmp_path):
     assert audio["\xa9grp"] == ["Axis Saga #4; Axis Chronological #2.5"]
     assert audio["----:com.apple.iTunes:SERIES"] == [b"Axis Saga; Axis Chronological"]
     assert audio["----:com.apple.iTunes:SERIES-PART"] == [b"4; 2.5"]
-    assert audio["trkn"] == [(4, 0)]
+    assert "trkn" not in audio  # the series index is not the track number (#895)
     assert _read_all(path) == _TWO
 
 

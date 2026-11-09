@@ -24,7 +24,7 @@ from models.settings import SystemSetting
 from services import chapter_repair, credentials
 from services.metadata_utils import SERIES_LIST_KEY
 from services.series import abs_series_entries, entries_of, parse_abs_series_name
-from services.tag_writer import apply_mp4_series
+from services.tag_writer import _year_already_in, apply_mp4_series
 from services.url_safety import assert_safe_url
 
 logger = logging.getLogger(__name__)
@@ -344,10 +344,11 @@ def _write_tags(filepath: str, file_meta: dict) -> tuple[bool, Optional[str]]:
         audio["\xa9alb"] = [str(file_meta["title"])]
     _set("\xa9ART", file_meta.get("author"))
     _set("\xa9des", file_meta.get("description"))
-    _set(
-        "\xa9day",
-        str(file_meta["publish_year"]) if file_meta.get("publish_year") else None,
-    )
+    # The library holds a year: a fuller date in the file that agrees with it
+    # stays (#895).
+    year = file_meta.get("publish_year")
+    if year and not _year_already_in(audio.get("\xa9day", []), year):
+        _set("\xa9day", str(year))
     _set("\xa9gen", file_meta.get("genres"))
     _set("\xa9pub", file_meta.get("publisher"))
     _set("\xa9wrt", file_meta.get("narrators"))

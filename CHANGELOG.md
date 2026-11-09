@@ -104,6 +104,11 @@ operator must do by hand rather than read about afterwards.
   with only secondary elements gains a new primary one. A co-author already named in a joined
   author field is merged into the primary creator rather than credited twice, and removing an
   element also removes the metas refining it.
+- Audio metadata is now written into files that had no tags at all; before, a tagless MP3, M4B or
+  FLAC was skipped as if it could not be opened (#893).
+- Writing audiobook metadata no longer overwrites the M4B track number with the series index, and
+  a full release date in the file is kept when its year already matches the library's year, on
+  M4B, MP3 and FLAC/Ogg and in the Audiobookshelf write-back (#895).
 
 ### Upgrade notes
 
