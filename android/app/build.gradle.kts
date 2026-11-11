@@ -329,7 +329,7 @@ dependencies {
     implementation("androidx.media3:media3-datasource-okhttp:1.11.1")
 
     // Google Cast Framework (Chromecast)
-    implementation("com.google.android.gms:play-services-cast-framework:22.3.1")
+    implementation("com.google.android.gms:play-services-cast-framework:23.0.0")
 
     // Embedded HTTP server — serves locally-downloaded audiobooks to the Cast receiver over the
     // LAN. Avoids relying on public DNS for a LAN-only hostname (Google Home Mini hardcodes
