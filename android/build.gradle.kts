@@ -16,5 +16,5 @@ plugins {
     id("org.jetbrains.kotlinx.kover") version "0.9.11" apply false
     // Gradle Play Publisher: `publishReleaseBundle` uploads through the Play
     // Developer API. 4.x is the line that supports AGP 9; 3.x does not.
-    id("com.github.triplet.play") version "4.1.1" apply false
+    id("com.github.triplet.play") version "4.1.2" apply false
 }

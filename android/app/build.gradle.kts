@@ -309,7 +309,7 @@ dependencies {
     implementation("com.squareup.retrofit2:retrofit:3.0.0")
     implementation("com.squareup.okhttp3:okhttp:5.5.1")
     implementation("com.squareup.okhttp3:logging-interceptor:5.5.1")
-    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.12.0")
+    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.13.0")
     implementation("com.jakewharton.retrofit:retrofit2-kotlinx-serialization-converter:1.0.0")
 
     // Room (Local Database)
@@ -359,7 +359,7 @@ dependencies {
     testImplementation("junit:junit:4.13.2")
     // mockk mocks final Kotlin classes (NetworkMonitor, TokenManager) and suspend
     // functions, which is what makes ViewModels unit-testable off-device.
-    testImplementation("io.mockk:mockk:1.14.11")
+    testImplementation("io.mockk:mockk:1.14.12")
     // Counts requests, which is what the refresh-recursion bug is about
     // (issue #143): a unit test can assert "exactly one refresh POST" in a way
     // a mocked Chain cannot.
