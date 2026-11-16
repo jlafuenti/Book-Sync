@@ -118,6 +118,14 @@ operator must do by hand rather than read about afterwards.
   own during an Audiobookshelf sync; Troubleshoot still lists the file and its Repair button is
   unchanged (#935).
 
+### Security
+
+- The web build's PWA step no longer pulls in a minimatch version open to a glob-pattern
+  denial of service (GHSA-g3hv-75wg-m249). `web/package.json` overrides workbox-build's `glob`
+  to 14, which brings minimatch 11. Forcing minimatch 11 under workbox's own glob 11 was tried
+  first and rejected: that pair matches no files at all, which would have shipped an empty
+  offline cache without failing the build. Build-time only; nothing in the served app changes.
+
 ### Upgrade notes
 
 - Migration 0035 adds `next_up_dismissals`; it runs on start.
