@@ -39,6 +39,13 @@ class BuildConfigPinsTest {
      */
     private val requiredCompileSdk = 37
 
+    /**
+     * Lowest `compileSdkMinor` on top of [requiredCompileSdk]. Compose 1.13
+     * (compose-bom 2026.11.01) requires API 37.1 and fails
+     * `checkDebugAarMetadata` against 37.0.
+     */
+    private val requiredCompileSdkMinor = 1
+
     private fun buildScript(): String {
         // Gradle runs unit tests with the module directory as the working dir;
         // walking upward also covers being run from `android/`.
@@ -113,6 +120,17 @@ class BuildConfigPinsTest {
                 "and fail checkDebugAarMetadata below it (#454). Dropping back " +
                 "freezes every Android dependency again.",
             compile!! >= requiredCompileSdk,
+        )
+    }
+
+    @Test
+    fun `compileSdkMinor meets the floor Compose links against`() {
+        val minor = sdkLevel("compileSdkMinor") ?: 0
+        assertTrue(
+            "compileSdk is ${sdkLevel("compileSdk")}.$minor; Compose 1.13 needs " +
+                ">= $requiredCompileSdk.$requiredCompileSdkMinor and fails " +
+                "checkDebugAarMetadata below it.",
+            minor >= requiredCompileSdkMinor,
         )
     }
 

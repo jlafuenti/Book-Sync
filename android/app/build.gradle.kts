@@ -117,6 +117,9 @@ android {
     // library update at all while this sat on 36. targetSdk stays at 36; see
     // the note on it below and BuildConfigPinsTest.
     compileSdk = 37
+    // 37.1, not 37.0: Compose 1.13 (compose-bom 2026.11.01) fails
+    // checkDebugAarMetadata against 37.0. Pinned by BuildConfigPinsTest.
+    compileSdkMinor = 1
 
     defaultConfig {
         applicationId = "com.booksync"
