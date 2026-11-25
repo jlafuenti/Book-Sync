@@ -31,33 +31,49 @@ describe('ChangePasswordPage', () => {
     it('rejects a confirmation that does not match without calling the API', async () => {
         render(<ChangePasswordPage onPasswordChanged={vi.fn()} />)
 
-        fireEvent.change(screen.getByLabelText('Current Password'), { target: { value: 'old-pw' } })
-        fireEvent.change(screen.getByLabelText('New Password'), { target: { value: 'new-password' } })
-        fireEvent.change(screen.getByLabelText('Confirm New Password'), { target: { value: 'mismatch' } })
+        fireEvent.change(screen.getByLabelText(/^current password$/i), { target: { value: 'old-pw' } })
+        fireEvent.change(screen.getByLabelText(/^new password$/i), { target: { value: 'new-password' } })
+        fireEvent.change(screen.getByLabelText(/^confirm new password$/i), { target: { value: 'mismatch' } })
         fireEvent.click(screen.getByRole('button', { name: /set new password/i }))
 
         expect(await screen.findByText(/do not match/i)).toBeTruthy()
         expect(changePasswordMock).not.toHaveBeenCalled()
     })
 
-    it('hands the refreshed user back to the caller on success', async () => {
+    // Issue #962. The server bumps token_version and revokes every session on
+    // success, so this browser's tokens are dead too. The page used to call
+    // getMe() with them and hand the (null) result back, which dropped the user
+    // on the login screen with no word of why. It now reports the change and
+    // lets App say so on the login screen.
+    it('reports the change without asking the server who is signed in', async () => {
         changePasswordMock.mockResolvedValue({})
-        getMeMock.mockResolvedValue({ id: 1, username: 'admin', must_reset_password: false })
         const onPasswordChanged = vi.fn()
 
         render(<ChangePasswordPage onPasswordChanged={onPasswordChanged} />)
 
-        fireEvent.change(screen.getByLabelText('Current Password'), { target: { value: 'old-pw' } })
-        fireEvent.change(screen.getByLabelText('New Password'), { target: { value: 'new-password' } })
-        fireEvent.change(screen.getByLabelText('Confirm New Password'), { target: { value: 'new-password' } })
+        fireEvent.change(screen.getByLabelText(/^current password$/i), { target: { value: 'old-pw' } })
+        fireEvent.change(screen.getByLabelText(/^new password$/i), { target: { value: 'new-password' } })
+        fireEvent.change(screen.getByLabelText(/^confirm new password$/i), { target: { value: 'new-password' } })
         fireEvent.click(screen.getByRole('button', { name: /set new password/i }))
 
-        await waitFor(() => {
-            expect(changePasswordMock).toHaveBeenCalledWith('old-pw', 'new-password')
-            expect(onPasswordChanged).toHaveBeenCalledWith(
-                expect.objectContaining({ username: 'admin' }),
-            )
-        })
+        await waitFor(() => expect(onPasswordChanged).toHaveBeenCalledTimes(1))
+        expect(changePasswordMock).toHaveBeenCalledWith('old-pw', 'new-password')
+        expect(getMeMock).not.toHaveBeenCalled()
+    })
+
+    it('shows the server refusal and stays on the screen', async () => {
+        changePasswordMock.mockRejectedValue(new Error('Current password is incorrect'))
+        const onPasswordChanged = vi.fn()
+
+        render(<ChangePasswordPage onPasswordChanged={onPasswordChanged} />)
+
+        fireEvent.change(screen.getByLabelText(/^current password$/i), { target: { value: 'wrong' } })
+        fireEvent.change(screen.getByLabelText(/^new password$/i), { target: { value: 'new-password' } })
+        fireEvent.change(screen.getByLabelText(/^confirm new password$/i), { target: { value: 'new-password' } })
+        fireEvent.click(screen.getByRole('button', { name: /set new password/i }))
+
+        expect(await screen.findByText(/Current password is incorrect/)).toBeTruthy()
+        expect(onPasswordChanged).not.toHaveBeenCalled()
     })
 
     // Issue #205: the form used to say "at least 6 characters" while the API
@@ -66,9 +82,9 @@ describe('ChangePasswordPage', () => {
         render(<ChangePasswordPage onPasswordChanged={vi.fn()} />)
 
         const short = 'a'.repeat(PASSWORD_MIN_LENGTH - 1)
-        fireEvent.change(screen.getByLabelText('Current Password'), { target: { value: 'old-pw' } })
-        fireEvent.change(screen.getByLabelText('New Password'), { target: { value: short } })
-        fireEvent.change(screen.getByLabelText('Confirm New Password'), { target: { value: short } })
+        fireEvent.change(screen.getByLabelText(/^current password$/i), { target: { value: 'old-pw' } })
+        fireEvent.change(screen.getByLabelText(/^new password$/i), { target: { value: short } })
+        fireEvent.change(screen.getByLabelText(/^confirm new password$/i), { target: { value: short } })
         fireEvent.click(screen.getByRole('button', { name: /set new password/i }))
 
         await waitFor(() => expect(document.querySelector('.alert-error').textContent)
@@ -78,13 +94,12 @@ describe('ChangePasswordPage', () => {
 
     it('accepts a password exactly at the floor', async () => {
         changePasswordMock.mockResolvedValue({})
-        getMeMock.mockResolvedValue({ id: 1, username: 'admin', must_reset_password: false })
         render(<ChangePasswordPage onPasswordChanged={vi.fn()} />)
 
         const ok = 'a'.repeat(PASSWORD_MIN_LENGTH)
-        fireEvent.change(screen.getByLabelText('Current Password'), { target: { value: 'old-pw' } })
-        fireEvent.change(screen.getByLabelText('New Password'), { target: { value: ok } })
-        fireEvent.change(screen.getByLabelText('Confirm New Password'), { target: { value: ok } })
+        fireEvent.change(screen.getByLabelText(/^current password$/i), { target: { value: 'old-pw' } })
+        fireEvent.change(screen.getByLabelText(/^new password$/i), { target: { value: ok } })
+        fireEvent.change(screen.getByLabelText(/^confirm new password$/i), { target: { value: ok } })
         fireEvent.click(screen.getByRole('button', { name: /set new password/i }))
 
         await waitFor(() => expect(changePasswordMock).toHaveBeenCalledWith('old-pw', ok))
@@ -94,9 +109,9 @@ describe('ChangePasswordPage', () => {
         render(<ChangePasswordPage onPasswordChanged={vi.fn()} />)
 
         const long = 'a'.repeat(PASSWORD_MAX_LENGTH + 1)
-        fireEvent.change(screen.getByLabelText('Current Password'), { target: { value: 'old-pw' } })
-        fireEvent.change(screen.getByLabelText('New Password'), { target: { value: long } })
-        fireEvent.change(screen.getByLabelText('Confirm New Password'), { target: { value: long } })
+        fireEvent.change(screen.getByLabelText(/^current password$/i), { target: { value: 'old-pw' } })
+        fireEvent.change(screen.getByLabelText(/^new password$/i), { target: { value: long } })
+        fireEvent.change(screen.getByLabelText(/^confirm new password$/i), { target: { value: long } })
         fireEvent.click(screen.getByRole('button', { name: /set new password/i }))
 
         await waitFor(() => expect(document.querySelector('.alert-error').textContent)

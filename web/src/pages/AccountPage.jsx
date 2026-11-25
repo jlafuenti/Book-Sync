@@ -1,11 +1,19 @@
 import React, { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { deleteAccount } from '../api'
+import ChangePasswordForm from '../components/ChangePasswordForm'
 import { COMMUNITY_DISCORD_URL } from '../lib/community'
 import { useTourAnchor, useTourScreen, TourAnchors, TourScreens } from '../tour/anchors'
 import { useTour } from '../tour/TourContext'
 
 const CONFIRM_WORD = 'DELETE'
+
+export const CHANGE_PASSWORD_CONFIRM =
+    'Change your password and sign out on every device?\n\n' +
+    'This ends every session on this account, this browser included, so you ' +
+    'will sign in again with the new password.\n\n' +
+    'A device that is signed out cannot push reading positions it has not synced ' +
+    'yet; they stay on that device until it signs in again.'
 
 /**
  * Account settings, and the web half of self-service deletion (issue #146).
@@ -20,7 +28,10 @@ const CONFIRM_WORD = 'DELETE'
  * own. Typing the word is this page's, and it is here because the alternative is
  * a single button in a settings list that destroys an account on one click.
  */
-export default function AccountPage({ user, onAccountDeleted }) {
+export default function AccountPage({ user, onAccountDeleted, onPasswordChanged }) {
+    // Issue #962: collapsed like the deletion form, and remounted on Cancel so
+    // nothing typed survives being put away.
+    const [changingPassword, setChangingPassword] = useState(false)
     const [open, setOpen] = useState(false)
     const [password, setPassword] = useState('')
     const [confirm, setConfirm] = useState('')
@@ -66,6 +77,41 @@ export default function AccountPage({ user, onAccountDeleted }) {
                 <div style={{ color: 'var(--text-muted)', fontSize: '0.85rem', marginTop: 4 }}>
                     Role: {user?.role || 'user'}
                 </div>
+            </div>
+
+            {/* Issue #962: the web had no voluntary change-password form; only the
+                forced-reset screen did. Same endpoint and rules as Android's
+                Account -> Change password. */}
+            <h2 style={{ fontSize: '1rem' }}>Password</h2>
+            <div className="card" style={{ padding: 16, marginBottom: 24 }}>
+                <p style={{ fontSize: '0.9rem', marginTop: 0, marginBottom: 12 }}>
+                    Changing your password signs you out on every device, this one included.
+                    Sign in again with the new password afterwards.
+                </p>
+                {!changingPassword && (
+                    <button
+                        className="btn btn-secondary"
+                        onClick={() => setChangingPassword(true)}
+                    >
+                        Change password
+                    </button>
+                )}
+                {changingPassword && (
+                    <ChangePasswordForm
+                        idPrefix="account"
+                        submitLabel="Change password and sign out"
+                        confirmMessage={CHANGE_PASSWORD_CONFIRM}
+                        onChanged={() => onPasswordChanged?.()}
+                    >
+                        <button
+                            type="button"
+                            className="btn btn-secondary"
+                            onClick={() => setChangingPassword(false)}
+                        >
+                            Cancel
+                        </button>
+                    </ChangePasswordForm>
+                )}
             </div>
 
             {/* Issue #714: the community Discord, also on the Android Account screen. */}

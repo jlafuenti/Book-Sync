@@ -17,7 +17,7 @@ const MODE_OPEN = 'open'
 const MODE_INVITE = 'invite'
 const MODE_CLOSED = 'closed'
 
-function LoginPage({ onLogin }) {
+function LoginPage({ onLogin, notice }) {
     const [isRegistering, setIsRegistering] = useState(false)
     const [username, setUsername] = useState('')
     const [email, setEmail] = useState('')
@@ -93,6 +93,10 @@ function LoginPage({ onLogin }) {
                     {isRegistering ? 'Request an account' : 'Sign in to your account'}
                 </p>
 
+                {/* Why the previous session ended, when App knows (issue #962). */}
+                {notice && !error && !success && (
+                    <div className="alert alert-success" role="status">✓ {notice}</div>
+                )}
                 {error && <div className="alert alert-error">⚠️ {error}</div>}
                 {success && <div className="alert alert-success">✓ {success}</div>}
 

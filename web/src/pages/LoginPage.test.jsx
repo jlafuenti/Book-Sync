@@ -180,3 +180,18 @@ describe('LoginPage - account recovery', () => {
         expect(screen.queryByText(/forgot your password/i)).toBeNull()
     })
 })
+
+// Issue #962: a password change signs out every device, this browser included.
+// App sends the user here with a line saying why, rather than leaving them to
+// guess what happened.
+describe('LoginPage — notice from the previous session', () => {
+    it('shows the notice it is given', () => {
+        render(<LoginPage onLogin={vi.fn()} notice="Password changed. Sign in again with your new password." />)
+        expect(screen.getByText(/Password changed\. Sign in again/)).toBeInTheDocument()
+    })
+
+    it('shows nothing extra without one', () => {
+        render(<LoginPage onLogin={vi.fn()} />)
+        expect(document.querySelector('.alert-success')).toBeNull()
+    })
+})

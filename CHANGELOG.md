@@ -19,6 +19,8 @@ operator must do by hand rather than read about afterwards.
 ### Added
 
 - Next up removals are remembered per account: `GET`/`POST`/`DELETE /api/next-up/dismissals` (#921).
+- The web Account page can change your password (#962), as the Android app already could. It
+  signs out every device, this browser included, and the login screen says so.
 
 ### Changed
 
@@ -71,6 +73,8 @@ operator must do by hand rather than read about afterwards.
 
 ### Fixed
 
+- After the forced password reset, the web went to the login screen without saying why. It now
+  says the password changed and to sign in again (#962).
 - The metadata PATCH for an ebook or audiobook now says when the row was saved but the file could
   not be written: the response carries `write_back: {ok, error}`, and the web shows the error after
   a save or bulk edit instead of a silent 200 (#894).
