@@ -84,7 +84,7 @@ export default function AccountPage({ user, onAccountDeleted, onPasswordChanged 
                 Account -> Change password. */}
             <h2 style={{ fontSize: '1rem' }}>Password</h2>
             <div className="card" style={{ padding: 16, marginBottom: 24 }}>
-                <p style={{ fontSize: '0.9rem', marginTop: 0 }}>
+                <p style={{ fontSize: '0.9rem', marginTop: 0, marginBottom: 12 }}>
                     Changing your password signs you out on every device, this one included.
                     Sign in again with the new password afterwards.
                 </p>
