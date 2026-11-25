@@ -10,8 +10,17 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from database import Base
 from utils import utcnow
 
-# Role hierarchy: superadmin > admin > editor > user
-ROLE_HIERARCHY = {"superadmin": 4, "admin": 3, "editor": 2, "user": 1}
+# Role hierarchy: superadmin > admin > editor > user = demo
+#
+# `demo` (issue #963) is a `user` that cannot change its own account: the
+# shared account on a public demo server, whose password is published. It scores
+# the same as `user` so it clears every bar a reader clears — it is a lock on
+# the account, not a lesser reader — and the self-service routes that would let
+# one visitor break the demo for the rest refuse it by name (`routers.auth.
+# refuse_demo`). Nothing scores between 0 and `user`, so an unknown role still
+# clears nothing.
+DEMO_ROLE = "demo"
+ROLE_HIERARCHY = {"superadmin": 4, "admin": 3, "editor": 2, "user": 1, DEMO_ROLE: 1}
 VALID_ROLES = set(ROLE_HIERARCHY.keys())
 
 # Score for a role nobody recognises. An unknown *user* role scoring 0 is the
@@ -64,6 +73,11 @@ class User(Base):
     bookmarks = relationship("Bookmark", back_populates="user", cascade="all, delete-orphan")
     progress = relationship("UserProgress", back_populates="user",
                             cascade="all, delete-orphan")
+
+    @property
+    def is_demo(self) -> bool:
+        """True for the shared demo account, which cannot change itself (#963)."""
+        return self.role == DEMO_ROLE
 
     def has_role(self, minimum_role: str) -> bool:
         """True if this user's role meets or exceeds `minimum_role`.

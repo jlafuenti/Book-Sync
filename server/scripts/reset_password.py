@@ -85,7 +85,9 @@ async def reset_password(username: str, new_password: Optional[str] = None) -> s
         # The operator holding the shell is not necessarily the account's owner,
         # so the password printed here is a handover credential, not a chosen
         # one — the owner must replace it before they can use anything else.
-        user.must_reset_password = True
+        # Except the demo account (#963), which cannot change its own password:
+        # the operator is putting the published password back.
+        user.must_reset_password = not user.is_demo
         # Same pairing as the admin reset in `routers/users.py`: the bump kills
         # the tokens already in flight, the revoke stops the sessions behind
         # them being reusable.

@@ -10,7 +10,13 @@
  * `RoleGate` on Android — three copies of one ladder, and they must agree.
  */
 
-export const ROLE_HIERARCHY = { superadmin: 4, admin: 3, editor: 2, user: 1 }
+// `demo` (issue #963) is the shared account on a public demo server: a reader
+// in every respect, so it scores with `user`, except that it cannot change its
+// own account. The server refuses those changes; `isDemoUser` is how the UI
+// knows not to offer them.
+export const DEMO_ROLE = 'demo'
+
+export const ROLE_HIERARCHY = { superadmin: 4, admin: 3, editor: 2, user: 1, [DEMO_ROLE]: 1 }
 
 export const KNOWN_ROLES = Object.keys(ROLE_HIERARCHY)
 
@@ -25,4 +31,9 @@ export const KNOWN_ROLES = Object.keys(ROLE_HIERARCHY)
 export function roleMeets(userRole, minRole) {
     if (!Object.prototype.hasOwnProperty.call(ROLE_HIERARCHY, minRole)) return false
     return (ROLE_HIERARCHY[userRole] || 0) >= ROLE_HIERARCHY[minRole]
+}
+
+/** True for the shared demo account, which cannot change itself (issue #963). */
+export function isDemoUser(user) {
+    return user?.role === DEMO_ROLE
 }

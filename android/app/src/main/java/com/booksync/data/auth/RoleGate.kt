@@ -11,7 +11,24 @@ private val ROLE_HIERARCHY = mapOf(
     "admin" to 3,
     "editor" to 2,
     "user" to 1,
+    // Issue #963: the shared account on a public demo server. A reader in
+    // every respect, so it scores with `user`; see [canChangeOwnAccount].
+    DEMO_ROLE to 1,
 )
+
+private const val DEMO_ROLE = "demo"
+
+/**
+ * Whether the signed-in account may change itself: its password, every other
+ * device's sessions, its existence (issue #963).
+ *
+ * False only for `demo`, the shared account on a public demo server, whose
+ * password is published. The server refuses those calls for it with 403
+ * `demo_account_locked`; this is how the Account screen knows not to offer them.
+ * A null role (before `/auth/me` answers) keeps the controls, as before — the
+ * server is the barrier, this only spares a visitor a refusal.
+ */
+fun canChangeOwnAccount(role: String?): Boolean = role != DEMO_ROLE
 
 /**
  * Whether [role] is at least [minimumRole] (issue #170).

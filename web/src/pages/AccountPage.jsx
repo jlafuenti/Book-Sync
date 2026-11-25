@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import { deleteAccount } from '../api'
 import ChangePasswordForm from '../components/ChangePasswordForm'
 import { COMMUNITY_DISCORD_URL } from '../lib/community'
+import { isDemoUser } from '../roles'
 import { useTourAnchor, useTourScreen, TourAnchors, TourScreens } from '../tour/anchors'
 import { useTour } from '../tour/TourContext'
 
@@ -44,6 +45,10 @@ export default function AccountPage({ user, onAccountDeleted, onPasswordChanged 
     useTourScreen(TourScreens.Account, true)
 
     const ready = password.length > 0 && confirm === CONFIRM_WORD && !busy
+    // Issue #963: the shared account on a public demo server. Its password is
+    // published, so the server refuses every change to the account itself;
+    // offering the controls would only hand each visitor a 403.
+    const isDemo = isDemoUser(user)
 
     const handleDelete = async () => {
         if (!ready) return
@@ -79,40 +84,56 @@ export default function AccountPage({ user, onAccountDeleted, onPasswordChanged 
                 </div>
             </div>
 
-            {/* Issue #962: the web had no voluntary change-password form; only the
-                forced-reset screen did. Same endpoint and rules as Android's
-                Account -> Change password. */}
-            <h2 style={{ fontSize: '1rem' }}>Password</h2>
-            <div className="card" style={{ padding: 16, marginBottom: 24 }}>
-                <p style={{ fontSize: '0.9rem', marginTop: 0, marginBottom: 12 }}>
-                    Changing your password signs you out on every device, this one included.
-                    Sign in again with the new password afterwards.
-                </p>
-                {!changingPassword && (
-                    <button
-                        className="btn btn-secondary"
-                        onClick={() => setChangingPassword(true)}
-                    >
-                        Change password
-                    </button>
-                )}
-                {changingPassword && (
-                    <ChangePasswordForm
-                        idPrefix="account"
-                        submitLabel="Change password and sign out"
-                        confirmMessage={CHANGE_PASSWORD_CONFIRM}
-                        onChanged={() => onPasswordChanged?.()}
-                    >
+            {isDemo && (
+                <div
+                    className="card"
+                    data-testid="demo-account-note"
+                    style={{ padding: 16, marginBottom: 24 }}
+                >
+                    <p style={{ fontSize: '0.9rem', margin: 0 }}>
+                        This is a shared demo account, so its password and other account
+                        settings cannot be changed, and it cannot be deleted. Reading and
+                        listening work as usual.
+                    </p>
+                </div>
+            )}
+
+            {!isDemo && (<>
+                {/* Issue #962: the web had no voluntary change-password form; only the
+                    forced-reset screen did. Same endpoint and rules as Android's
+                    Account -> Change password. */}
+                <h2 style={{ fontSize: '1rem' }}>Password</h2>
+                <div className="card" style={{ padding: 16, marginBottom: 24 }}>
+                    <p style={{ fontSize: '0.9rem', marginTop: 0, marginBottom: 12 }}>
+                        Changing your password signs you out on every device, this one included.
+                        Sign in again with the new password afterwards.
+                    </p>
+                    {!changingPassword && (
                         <button
-                            type="button"
                             className="btn btn-secondary"
-                            onClick={() => setChangingPassword(false)}
+                            onClick={() => setChangingPassword(true)}
                         >
-                            Cancel
+                            Change password
                         </button>
-                    </ChangePasswordForm>
-                )}
-            </div>
+                    )}
+                    {changingPassword && (
+                        <ChangePasswordForm
+                            idPrefix="account"
+                            submitLabel="Change password and sign out"
+                            confirmMessage={CHANGE_PASSWORD_CONFIRM}
+                            onChanged={() => onPasswordChanged?.()}
+                        >
+                            <button
+                                type="button"
+                                className="btn btn-secondary"
+                                onClick={() => setChangingPassword(false)}
+                            >
+                                Cancel
+                            </button>
+                        </ChangePasswordForm>
+                    )}
+                </div>
+            </>)}
 
             {/* Issue #714: the community Discord, also on the Android Account screen. */}
             <h2 style={{ fontSize: '1rem' }}>Community</h2>
@@ -150,85 +171,87 @@ export default function AccountPage({ user, onAccountDeleted, onPasswordChanged 
                 </div>
             </div>
 
-            <h2 style={{ fontSize: '1rem', color: 'var(--error)' }}>
-                Danger zone
-            </h2>
-            <div className="card" style={{ padding: 16 }}>
-                <p style={{ fontSize: '0.9rem', marginTop: 0 }}>
-                    Permanently delete your account, bookmarks and reading positions from
-                    this server. The books themselves belong to whoever runs the server
-                    and are not affected.
-                </p>
+            {!isDemo && (<>
+                <h2 style={{ fontSize: '1rem', color: 'var(--error)' }}>
+                    Danger zone
+                </h2>
+                <div className="card" style={{ padding: 16 }}>
+                    <p style={{ fontSize: '0.9rem', marginTop: 0 }}>
+                        Permanently delete your account, bookmarks and reading positions from
+                        this server. The books themselves belong to whoever runs the server
+                        and are not affected.
+                    </p>
 
-                {!open && (
-                    <button
-                        className="btn btn-danger"
-                        onClick={() => setOpen(true)}
-                    >
-                        Delete account
-                    </button>
-                )}
+                    {!open && (
+                        <button
+                            className="btn btn-danger"
+                            onClick={() => setOpen(true)}
+                        >
+                            Delete account
+                        </button>
+                    )}
 
-                {open && (
-                    <div>
-                        <div className="form-group">
-                            <label htmlFor="delete-password">Current password</label>
-                            <input
-                                id="delete-password"
-                                type="password"
-                                className="form-input"
-                                autoComplete="current-password"
-                                value={password}
-                                onChange={e => { setPassword(e.target.value); setError('') }}
-                            />
+                    {open && (
+                        <div>
+                            <div className="form-group">
+                                <label htmlFor="delete-password">Current password</label>
+                                <input
+                                    id="delete-password"
+                                    type="password"
+                                    className="form-input"
+                                    autoComplete="current-password"
+                                    value={password}
+                                    onChange={e => { setPassword(e.target.value); setError('') }}
+                                />
+                            </div>
+                            <div className="form-group">
+                                <label htmlFor="delete-confirm">
+                                    Type {CONFIRM_WORD} to confirm
+                                </label>
+                                <input
+                                    id="delete-confirm"
+                                    type="text"
+                                    className="form-input"
+                                    autoComplete="off"
+                                    value={confirm}
+                                    onChange={e => setConfirm(e.target.value)}
+                                />
+                            </div>
+
+                            {error && <div className="alert alert-error">{error}</div>}
+
+                            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                                <button
+                                    className="btn btn-danger"
+                                    data-testid="confirm-delete-account"
+                                    disabled={!ready}
+                                    onClick={handleDelete}
+                                >
+                                    {busy ? 'Deleting…' : 'Delete account permanently'}
+                                </button>
+                                <button
+                                    className="btn btn-secondary"
+                                    disabled={busy}
+                                    onClick={() => {
+                                        setOpen(false)
+                                        setPassword('')
+                                        setConfirm('')
+                                        setError('')
+                                    }}
+                                >
+                                    Cancel
+                                </button>
+                            </div>
+
+                            <p style={{ marginTop: 12, fontSize: '0.85rem' }}>
+                                <Link to="/account-deletion">
+                                    How account deletion works
+                                </Link>
+                            </p>
                         </div>
-                        <div className="form-group">
-                            <label htmlFor="delete-confirm">
-                                Type {CONFIRM_WORD} to confirm
-                            </label>
-                            <input
-                                id="delete-confirm"
-                                type="text"
-                                className="form-input"
-                                autoComplete="off"
-                                value={confirm}
-                                onChange={e => setConfirm(e.target.value)}
-                            />
-                        </div>
-
-                        {error && <div className="alert alert-error">{error}</div>}
-
-                        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                            <button
-                                className="btn btn-danger"
-                                data-testid="confirm-delete-account"
-                                disabled={!ready}
-                                onClick={handleDelete}
-                            >
-                                {busy ? 'Deleting…' : 'Delete account permanently'}
-                            </button>
-                            <button
-                                className="btn btn-secondary"
-                                disabled={busy}
-                                onClick={() => {
-                                    setOpen(false)
-                                    setPassword('')
-                                    setConfirm('')
-                                    setError('')
-                                }}
-                            >
-                                Cancel
-                            </button>
-                        </div>
-
-                        <p style={{ marginTop: 12, fontSize: '0.85rem' }}>
-                            <Link to="/account-deletion">
-                                How account deletion works
-                            </Link>
-                        </p>
-                    </div>
-                )}
-            </div>
+                    )}
+                </div>
+            </>)}
         </div>
     )
 }

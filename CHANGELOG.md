@@ -21,6 +21,12 @@ operator must do by hand rather than read about afterwards.
 - Next up removals are remembered per account: `GET`/`POST`/`DELETE /api/next-up/dismissals` (#921).
 - The web Account page can change your password (#962), as the Android app already could. It
   signs out every device, this browser included, and the login screen says so.
+- A `demo` role for the shared account on a public demo server (#963). A demo account reads,
+  listens and saves positions like a `user`, but the server refuses it `change-password`,
+  self-service account deletion and `logout-all` (403 `demo_account_locked`), and keeps its stored
+  theme unchanged. The web and Android Account screens hide those controls for it and say why.
+  Admins assign the role from User Management; registration and invites cannot. A demo account is
+  never given a forced password reset, so an admin reset is how its password is put back.
 
 ### Changed
 
@@ -132,6 +138,10 @@ operator must do by hand rather than read about afterwards.
 
 ### Upgrade notes
 
+- To lock a public demo account (#963), set its role to `demo` in System → User Management. No
+  migration: `role` is already a free-text column. Android builds older than this release do not
+  know the role and treat it as unknown, which hides the editor controls a `user` would not see
+  anyway; they still show the account controls, which the server now refuses.
 - Migration 0035 adds `next_up_dismissals`; it runs on start.
 - Migration `0034_series_entries` runs when the server starts: it moves each book's series into
   the new `ebook_series` and `audiobook_series` tables and turns the old "cleared" marker into a

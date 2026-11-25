@@ -94,3 +94,33 @@ describe('Reset Password modal', () => {
         await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
     })
 })
+
+// Issue #963: admins give the public demo account the `demo` role from here.
+describe('demo role', () => {
+    it('is offered in the Create User role picker', async () => {
+        render(<UserManagementSection />)
+        fireEvent.click(await screen.findByRole('button', { name: '+ Create User' }))
+        const dialog = screen.getByRole('dialog')
+        const options = [...dialog.querySelectorAll('option')].map(o => o.value)
+        expect(options).toContain('demo')
+    })
+
+    it('is offered in the role picker of an existing user', async () => {
+        render(<UserManagementSection />)
+        await screen.findByText('reader')
+        const values = [...document.querySelectorAll('select option')].map(o => o.value)
+        expect(values).toContain('demo')
+    })
+
+    it('does not promise a forced password change for a demo account', async () => {
+        // The demo account cannot change its own password, so the server
+        // creates it without the forced reset.
+        render(<UserManagementSection />)
+        fireEvent.click(await screen.findByRole('button', { name: '+ Create User' }))
+        const dialog = screen.getByRole('dialog')
+        expect(dialog).toHaveTextContent(/required to change their password/i)
+        fireEvent.change(dialog.querySelector('select'), { target: { value: 'demo' } })
+        expect(dialog).not.toHaveTextContent(/required to change their password/i)
+        expect(dialog).toHaveTextContent(/cannot change its own password/i)
+    })
+})

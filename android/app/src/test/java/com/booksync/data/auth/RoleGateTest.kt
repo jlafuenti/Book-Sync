@@ -68,4 +68,25 @@ class RoleGateTest {
         assertFalse(hasMinRole("superadmin", "editer"))
         assertFalse(hasMinRole("user", "editer"))
     }
+
+    @Test
+    fun `a demo account reads like a user and edits nothing`() {
+        // Issue #963: the shared account on a public demo server.
+        assertTrue(hasMinRole("demo", "user"))
+        assertFalse(hasMinRole("demo", "editor"))
+    }
+
+    @Test
+    fun `only the demo account is refused self-service account changes`() {
+        // Issue #963. The server refuses change-password, delete-me and
+        // logout-all for `demo`; the Account screen hides them by this.
+        assertFalse(canChangeOwnAccount("demo"))
+        assertTrue(canChangeOwnAccount("user"))
+        assertTrue(canChangeOwnAccount("editor"))
+        assertTrue(canChangeOwnAccount("admin"))
+        assertTrue(canChangeOwnAccount("superadmin"))
+        // Before /auth/me answers the role is unknown; the controls show as they
+        // always have, and the server is the barrier.
+        assertTrue(canChangeOwnAccount(null))
+    }
 }

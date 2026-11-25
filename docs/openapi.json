@@ -7304,7 +7304,7 @@
         ]
       },
       "put": {
-        "description": "Update the current user's profile preferences.",
+        "description": "Update the current user's profile preferences.\n\nFor the demo account (#963) the theme is validated but not stored. Both\nclients apply a theme locally and sync it best-effort, so the visitor still\ngets the theme they picked on their device, while the stored one — the\ndefault the next visitor signs in to — stays put. The walkthrough stamp is\nstored as usual: it is set once and never unset, so the worst one visitor can\ndo is see the offer the others would have seen too.",
         "operationId": "update_me_api_auth_me_put",
         "requestBody": {
           "content": {
@@ -13952,7 +13952,7 @@
     },
     "/api/users/{user_id}/reset-password": {
       "post": {
-        "description": "Admin resets a user's password. User will be forced to change it on next login.",
+        "description": "Admin resets a user's password. User will be forced to change it on next\nlogin, unless it is the demo account, which cannot change it (#963).",
         "operationId": "reset_password_api_users__user_id__reset_password_post",
         "parameters": [
           {
