@@ -21,7 +21,17 @@ vi.mock('./pages/HomePage', () => ({ default: () => <div>home-stub</div> }))
 // is under test here, not their contents.
 // LoginPage renders the real login form and its own api wiring; what matters
 // here is only that the app fell back to it (issue #268).
-vi.mock('./pages/LoginPage', () => ({ default: () => <div>login-stub</div> }))
+vi.mock('./pages/LoginPage', () => ({
+    default: ({ notice, onLogin }) => (
+        <div>
+            <div>login-stub</div>
+            {notice && <div data-testid="login-notice">{notice}</div>}
+            <button onClick={() => onLogin({ username: 'alice', role: 'admin' })}>
+                stub-sign-in
+            </button>
+        </div>
+    ),
+}))
 
 vi.mock('./pages/SystemPage', () => ({ default: () => <div>system-stub</div> }))
 vi.mock('./pages/TroubleshootPage', () => ({ default: () => <div>troubleshoot-stub</div> }))
@@ -109,7 +119,12 @@ describe('AppShell — logout', () => {
 // ---------------------------------------------------------------------------
 
 vi.mock('./pages/ChangePasswordPage', () => ({
-    default: () => <div>change-password-stub</div>,
+    default: ({ onPasswordChanged }) => (
+        <div>
+            <div>change-password-stub</div>
+            <button onClick={() => onPasswordChanged()}>stub-password-changed</button>
+        </div>
+    ),
 }))
 
 describe('App — password_reset_required arriving mid-session', () => {
@@ -154,6 +169,38 @@ describe('App — password_reset_required arriving mid-session', () => {
 
         expect(await screen.findByText('login-stub')).toBeTruthy()
         expect(screen.queryByText('home-stub')).toBeNull()
+    })
+    // Issue #962. A password change revokes every session, this tab's too, so
+    // the forced-reset screen ends at the login screen. It used to get there by
+    // way of a getMe() that 401'd, with nothing to say why.
+    it('lands on the login screen with a notice after a password change', async () => {
+        await renderApp({ username: 'alice', role: 'admin', must_reset_password: false })
+        window.dispatchEvent(new CustomEvent('tandem:password-reset-required'))
+        fireEvent.click(await screen.findByText('stub-password-changed'))
+
+        expect(await screen.findByText('login-stub')).toBeTruthy()
+        expect(screen.getByTestId('login-notice').textContent).toMatch(/password changed/i)
+    })
+
+    it('forgets the notice once the user signs back in', async () => {
+        await renderApp({ username: 'alice', role: 'admin', must_reset_password: false })
+        window.dispatchEvent(new CustomEvent('tandem:password-reset-required'))
+        fireEvent.click(await screen.findByText('stub-password-changed'))
+        fireEvent.click(await screen.findByText('stub-sign-in'))
+        await screen.findByText('home-stub')
+
+        window.dispatchEvent(new CustomEvent('tandem:unauthorized'))
+
+        expect(await screen.findByText('login-stub')).toBeTruthy()
+        expect(screen.queryByTestId('login-notice')).toBeNull()
+    })
+
+    it('shows no notice when the session simply ran out', async () => {
+        await renderApp({ username: 'alice', role: 'admin', must_reset_password: false })
+        window.dispatchEvent(new CustomEvent('tandem:unauthorized'))
+
+        expect(await screen.findByText('login-stub')).toBeTruthy()
+        expect(screen.queryByTestId('login-notice')).toBeNull()
     })
 })
 

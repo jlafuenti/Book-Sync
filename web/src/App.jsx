@@ -171,7 +171,7 @@ function getMobilePageTitle(pathname) {
     return 'Tandem'
 }
 
-export function AppShell({ user, setUser }) {
+export function AppShell({ user, setUser, onPasswordChanged }) {
     const location = useLocation()
     const { hasMinRole } = useAuth()
     const [sidebarHovered, setSidebarHovered] = useState(false)
@@ -424,7 +424,13 @@ export function AppShell({ user, setUser }) {
                             Not role-gated: it is the caller's own account. */}
                         <Route
                             path="/account"
-                            element={<AccountPage user={user} onAccountDeleted={() => setUser(null)} />}
+                            element={
+                                <AccountPage
+                                    user={user}
+                                    onAccountDeleted={() => setUser(null)}
+                                    onPasswordChanged={onPasswordChanged}
+                                />
+                            }
                         />
 
                         {/* Book Detail */}
@@ -458,8 +464,16 @@ const PUBLIC_PATHS = {
     '/terms': <TermsPage />,
 }
 
+const PASSWORD_CHANGED_NOTICE =
+    'Password changed. Sign in again with your new password. Your other devices have been signed out too.'
+
 function App() {
     const [user, setUser] = useState(null)
+    // Why the last session ended, for the login screen to say (issue #962).
+    // Only a password change sets it today: every session is revoked, this
+    // browser's too, and a user dropped at the login form without a word would
+    // reasonably think something broke.
+    const [loginNotice, setLoginNotice] = useState('')
     const [loading, setLoading] = useState(true)
     const [unreachable, setUnreachable] = useState(false)
     const { setTheme } = useTheme()
@@ -549,8 +563,15 @@ function App() {
         )
     }
 
+    // `changePassword()` has already cleared the tokens; this is the React half.
+    const onPasswordChanged = () => {
+        setLoginNotice(PASSWORD_CHANGED_NOTICE)
+        setUser(null)
+    }
+
     if (!user) {
-        return <LoginPage onLogin={(u) => {
+        return <LoginPage notice={loginNotice} onLogin={(u) => {
+            setLoginNotice('')
             setTheme(u.theme || DEFAULT_THEME)
             setUser(u)
         }} />
@@ -558,14 +579,14 @@ function App() {
 
     // Force password reset before entering the app
     if (user.must_reset_password) {
-        return <ChangePasswordPage onPasswordChanged={setUser} />
+        return <ChangePasswordPage onPasswordChanged={onPasswordChanged} />
     }
 
     return (
         <AuthProvider user={user}>
             <AudioPlayerProvider>
                 <TourProvider>
-                    <AppShell user={user} setUser={setUser} />
+                    <AppShell user={user} setUser={setUser} onPasswordChanged={onPasswordChanged} />
                 </TourProvider>
             </AudioPlayerProvider>
         </AuthProvider>

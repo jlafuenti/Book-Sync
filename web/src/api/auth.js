@@ -124,7 +124,13 @@ export async function changePassword(oldPassword, newPassword) {
         method: 'POST',
         body: JSON.stringify({ old_password: oldPassword, new_password: newPassword }),
     });
-    return jsonOrThrow(resp, 'Failed to change password');
+    const data = await jsonOrThrow(resp, 'Failed to change password');
+    // Success bumps token_version and revokes every session, this browser's
+    // included (issue #962), so the tokens held here are already dead. Drop them
+    // now, as `logoutAll` does, rather than let the next request find out with
+    // a 401. A refusal leaves them alone: the session is still good.
+    clearTokens();
+    return data;
 }
 
 export async function logoutAll() {

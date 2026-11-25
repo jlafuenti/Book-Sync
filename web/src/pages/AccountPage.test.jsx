@@ -4,6 +4,7 @@ import { MemoryRouter } from 'react-router-dom'
 import AccountPage from './AccountPage'
 import { TourScreens, TourRegistryContext } from '../tour/anchors'
 import { TourAnchorRegistry } from '../tour/TourAnchorRegistry'
+import { PASSWORD_MAX_LENGTH, PASSWORD_MIN_LENGTH, PASSWORD_POLICY_MESSAGE } from '../lib/passwordPolicy'
 
 /**
  * Self-service account deletion on the web (issue #146).
@@ -19,12 +20,20 @@ import { TourAnchorRegistry } from '../tour/TourAnchorRegistry'
  * the session.
  */
 
-const { deleteAccountMock } = vi.hoisted(() => ({ deleteAccountMock: vi.fn() }))
+const { deleteAccountMock, changePasswordMock } = vi.hoisted(() => ({
+    deleteAccountMock: vi.fn(),
+    changePasswordMock: vi.fn(),
+}))
 
-vi.mock('../api', () => ({ deleteAccount: deleteAccountMock }))
+vi.mock('../api', () => ({
+    deleteAccount: deleteAccountMock,
+    changePassword: changePasswordMock,
+}))
 
 beforeEach(() => {
     deleteAccountMock.mockReset()
+    changePasswordMock.mockReset()
+    vi.restoreAllMocks()
 })
 
 const user = { username: 'alice', email: 'alice@example.com', role: 'user' }
@@ -32,7 +41,12 @@ const user = { username: 'alice', email: 'alice@example.com', role: 'user' }
 function renderPage(props = {}) {
     return render(
         <MemoryRouter>
-            <AccountPage user={user} onAccountDeleted={vi.fn()} {...props} />
+            <AccountPage
+                user={user}
+                onAccountDeleted={vi.fn()}
+                onPasswordChanged={vi.fn()}
+                {...props}
+            />
         </MemoryRouter>,
     )
 }
@@ -177,5 +191,129 @@ describe('AccountPage — Help card / replay the walkthrough (issue #598)', () =
             </TourRegistryContext.Provider>,
         )
         expect(registry.screenState(TourScreens.Account)).toBe('settled')
+    })
+})
+
+// Issue #962: a signed-in web user could not change their own password; only
+// the forced-reset screen had a form. Same endpoint, same rules as Android's
+// Account -> Change password.
+describe('AccountPage — change password (issue #962)', () => {
+    function openChangeForm() {
+        fireEvent.click(screen.getByRole('button', { name: /^change password$/i }))
+    }
+
+    function fillChange({ current = 'old-password', next = 'new-password', confirm = next } = {}) {
+        fireEvent.change(screen.getByLabelText(/^current password$/i), { target: { value: current } })
+        fireEvent.change(screen.getByLabelText(/^new password$/i), { target: { value: next } })
+        fireEvent.change(screen.getByLabelText(/^confirm new password$/i), { target: { value: confirm } })
+    }
+
+    function submit() {
+        fireEvent.click(screen.getByRole('button', { name: /^change password and sign out$/i }))
+    }
+
+    it('keeps the form closed until it is asked for', () => {
+        renderPage()
+        expect(screen.queryByLabelText(/^new password$/i)).toBeNull()
+        openChangeForm()
+        expect(screen.getByLabelText(/^new password$/i)).toBeInTheDocument()
+    })
+
+    it('says up front that it signs out every device', () => {
+        renderPage()
+        openChangeForm()
+        expect(screen.getByText(/signs you out on every device/i)).toBeInTheDocument()
+    })
+
+    it('rejects a confirmation that does not match without calling the API', async () => {
+        renderPage()
+        openChangeForm()
+        fillChange({ confirm: 'something-else' })
+        submit()
+
+        expect(await screen.findByText(/do not match/i)).toBeInTheDocument()
+        expect(changePasswordMock).not.toHaveBeenCalled()
+    })
+
+    it('rejects a password under the floor without calling the API', async () => {
+        renderPage()
+        openChangeForm()
+        const short = 'a'.repeat(PASSWORD_MIN_LENGTH - 1)
+        fillChange({ next: short })
+        submit()
+
+        expect(await screen.findByText(PASSWORD_POLICY_MESSAGE, { exact: false })).toBeInTheDocument()
+        expect(changePasswordMock).not.toHaveBeenCalled()
+    })
+
+    it('rejects a password over the ceiling without calling the API', async () => {
+        renderPage()
+        openChangeForm()
+        const long = 'a'.repeat(PASSWORD_MAX_LENGTH + 1)
+        fillChange({ next: long })
+        submit()
+
+        expect(await screen.findByText(PASSWORD_POLICY_MESSAGE, { exact: false })).toBeInTheDocument()
+        expect(changePasswordMock).not.toHaveBeenCalled()
+    })
+
+    it('asks before signing out every device, and does nothing on cancel', () => {
+        const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false)
+        renderPage()
+        openChangeForm()
+        fillChange()
+        submit()
+
+        expect(confirmSpy).toHaveBeenCalledTimes(1)
+        expect(confirmSpy.mock.calls[0][0]).toMatch(/every device/i)
+        expect(changePasswordMock).not.toHaveBeenCalled()
+    })
+
+    it('shows the server refusal for a wrong current password and keeps the session', async () => {
+        vi.spyOn(window, 'confirm').mockReturnValue(true)
+        changePasswordMock.mockRejectedValue(new Error('Current password is incorrect'))
+        const onPasswordChanged = vi.fn()
+        renderPage({ onPasswordChanged })
+        openChangeForm()
+        fillChange({ current: 'wrong' })
+        submit()
+
+        expect(await screen.findByText(/Current password is incorrect/)).toBeInTheDocument()
+        expect(onPasswordChanged).not.toHaveBeenCalled()
+    })
+
+    it('shows the lockout once too many attempts have failed', async () => {
+        vi.spyOn(window, 'confirm').mockReturnValue(true)
+        changePasswordMock.mockRejectedValue(new Error('Too many failed attempts. Try again later.'))
+        renderPage()
+        openChangeForm()
+        fillChange()
+        submit()
+
+        expect(await screen.findByText(/Too many failed attempts/)).toBeInTheDocument()
+    })
+
+    it('sends the change, then ends the session', async () => {
+        vi.spyOn(window, 'confirm').mockReturnValue(true)
+        changePasswordMock.mockResolvedValue({ message: 'Password changed successfully' })
+        const onPasswordChanged = vi.fn()
+        renderPage({ onPasswordChanged })
+        openChangeForm()
+        fillChange()
+        submit()
+
+        await waitFor(() => expect(onPasswordChanged).toHaveBeenCalledTimes(1))
+        expect(changePasswordMock).toHaveBeenCalledWith('old-password', 'new-password')
+    })
+
+    it('clears the fields when the form is cancelled', () => {
+        renderPage()
+        openChangeForm()
+        fillChange()
+        fireEvent.click(screen.getByRole('button', { name: /^cancel$/i }))
+
+        expect(screen.queryByLabelText(/^new password$/i)).toBeNull()
+        openChangeForm()
+        expect(screen.getByLabelText(/^current password$/i)).toHaveValue('')
     })
 })

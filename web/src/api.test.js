@@ -2327,3 +2327,43 @@ describe('Next up dismissals (issue #922)', () => {
         expect(init.method).toBe('DELETE')
     })
 })
+
+describe('changePassword() (issue #962)', () => {
+    // A successful change bumps token_version and revokes every session, so the
+    // tokens this browser holds are dead the moment the response arrives.
+    // Clearing them here, as logoutAll() does, stops the app firing requests
+    // that can only 401.
+
+    it('clears the local tokens on success', async () => {
+        localStorage.setItem('tandem_token', 'access-1')
+        localStorage.setItem('tandem_refresh', 'refresh-1')
+        vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+            ok: true, status: 200,
+            json: async () => ({ message: 'Password changed successfully' }),
+        }))
+
+        const { changePassword, isLoggedIn } = await import('./api')
+        await changePassword('old-password', 'new-password')
+
+        expect(isLoggedIn()).toBe(false)
+        expect(localStorage.getItem('tandem_token')).toBeNull()
+        expect(localStorage.getItem('tandem_refresh')).toBeNull()
+    })
+
+    it('keeps them when the server refuses, and passes on its reason', async () => {
+        localStorage.setItem('tandem_token', 'access-1')
+        localStorage.setItem('tandem_refresh', 'refresh-1')
+        vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
+            new Response(JSON.stringify({ detail: 'Current password is incorrect' }), {
+                status: 400,
+                headers: { 'Content-Type': 'application/json' },
+            }),
+        ))
+
+        const { changePassword, isLoggedIn } = await import('./api')
+        await expect(changePassword('wrong', 'new-password'))
+            .rejects.toThrow('Current password is incorrect')
+
+        expect(isLoggedIn()).toBe(true)
+    })
+})
