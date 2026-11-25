@@ -149,6 +149,21 @@ describe('AccountPage — delete account', () => {
 
 // Issue #714: the project's community Discord, reachable from Account on both
 // the web and the Android app. One constant (lib/community.js) holds the invite.
+describe('AccountPage — delete account cancel', () => {
+    it('closes the form and forgets what was typed', () => {
+        renderPage()
+        openDeleteForm()
+        fill()
+        fireEvent.click(screen.getByRole('button', { name: /^cancel$/i }))
+
+        expect(screen.queryByTestId('confirm-delete-account')).toBeNull()
+        openDeleteForm()
+        expect(screen.getByLabelText(/current password/i)).toHaveValue('')
+        expect(screen.getByLabelText(/type delete to confirm/i)).toHaveValue('')
+        expect(deleteAccountMock).not.toHaveBeenCalled()
+    })
+})
+
 describe('AccountPage — community link (issue #714)', () => {
     it('links to the community Discord in a new tab, without leaking the opener', () => {
         renderPage()
