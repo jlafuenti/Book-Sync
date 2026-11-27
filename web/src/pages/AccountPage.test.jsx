@@ -149,6 +149,21 @@ describe('AccountPage — delete account', () => {
 
 // Issue #714: the project's community Discord, reachable from Account on both
 // the web and the Android app. One constant (lib/community.js) holds the invite.
+describe('AccountPage — delete account cancel', () => {
+    it('closes the form and forgets what was typed', () => {
+        renderPage()
+        openDeleteForm()
+        fill()
+        fireEvent.click(screen.getByRole('button', { name: /^cancel$/i }))
+
+        expect(screen.queryByTestId('confirm-delete-account')).toBeNull()
+        openDeleteForm()
+        expect(screen.getByLabelText(/current password/i)).toHaveValue('')
+        expect(screen.getByLabelText(/type delete to confirm/i)).toHaveValue('')
+        expect(deleteAccountMock).not.toHaveBeenCalled()
+    })
+})
+
 describe('AccountPage — community link (issue #714)', () => {
     it('links to the community Discord in a new tab, without leaking the opener', () => {
         renderPage()
@@ -315,5 +330,33 @@ describe('AccountPage — change password (issue #962)', () => {
         expect(screen.queryByLabelText(/^new password$/i)).toBeNull()
         openChangeForm()
         expect(screen.getByLabelText(/^current password$/i)).toHaveValue('')
+    })
+})
+
+// Issue #963: the demo account's password is published and every visitor shares
+// it. The server refuses these changes; the page does not offer them, and says
+// why instead of leaving an empty card.
+describe('AccountPage — demo account (issue #963)', () => {
+    const demo = { username: 'demo', email: 'demo@example.com', role: 'demo' }
+
+    it('offers neither change password nor delete account', () => {
+        renderPage({ user: demo })
+        expect(screen.queryByRole('button', { name: /change password/i })).toBeNull()
+        expect(screen.queryByRole('button', { name: /delete account/i })).toBeNull()
+    })
+
+    it('explains that the demo account is shared and cannot be changed', () => {
+        renderPage({ user: demo })
+        expect(screen.getByTestId('demo-account-note')).toHaveTextContent(/shared demo account/i)
+    })
+
+    it('still offers the walkthrough replay', () => {
+        renderPage({ user: demo })
+        expect(screen.getByRole('button', { name: /replay/i })).toBeInTheDocument()
+    })
+
+    it('shows no demo note to an ordinary user', () => {
+        renderPage()
+        expect(screen.queryByTestId('demo-account-note')).toBeNull()
     })
 })

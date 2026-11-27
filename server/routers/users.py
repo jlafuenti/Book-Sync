@@ -9,7 +9,7 @@ from sqlalchemy import select, func, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import get_db
-from models.user import User, VALID_ROLES
+from models.user import DEMO_ROLE, User, VALID_ROLES
 from models.audit_log import AuditLog
 from schemas import UserResponse, UserCreateAdmin, UserUpdateAdmin, UserPasswordReset
 from routers.auth import (
@@ -154,7 +154,9 @@ async def create_user(
         role=data.role,
         is_admin=data.role in ("admin", "superadmin"),
         is_active=True,
-        must_reset_password=True,
+        # The demo account cannot change its own password (#963), so a forced
+        # reset would lock every visitor out instead of handing the account over.
+        must_reset_password=data.role != DEMO_ROLE,
     )
     db.add(user)
     await db.flush()
@@ -196,6 +198,9 @@ async def update_user(
         old_role = user.role
         user.role = data.role
         user.is_admin = data.role in ("admin", "superadmin")
+        if user.is_demo:
+            # A pending forced reset could never be completed (#963).
+            user.must_reset_password = False
         changes.append(f"role: {old_role} -> {data.role}")
 
     if data.is_active is not None:
@@ -252,7 +257,8 @@ async def reset_password(
     admin: User = Depends(get_admin_user),
     db: AsyncSession = Depends(get_db, scope="function"),
 ):
-    """Admin resets a user's password. User will be forced to change it on next login."""
+    """Admin resets a user's password. User will be forced to change it on next
+    login, unless it is the demo account, which cannot change it (#963)."""
     result = await db.execute(select(User).where(User.id == user_id))
     user = result.scalar_one_or_none()
     if not user:
@@ -262,7 +268,9 @@ async def reset_password(
         raise HTTPException(status_code=403, detail="Only superadmin can reset superadmin password")
 
     user.hashed_password = hash_password(data.new_password)
-    user.must_reset_password = True
+    # This is the demo account's repair path (#963): the operator sets the
+    # published password back, and nobody can be made to change it.
+    user.must_reset_password = not user.is_demo
     # Global, like a self-service password change: an admin reset must reach
     # every device, so it bumps `token_version` and revokes the sessions behind
     # the tokens too (issue #250).
@@ -276,6 +284,8 @@ async def reset_password(
         ip_address=get_client_ip(request),
     )
 
+    if user.is_demo:
+        return {"message": f"Password reset for '{user.username}'."}
     return {"message": f"Password reset for '{user.username}'. They will be required to change it on next login."}
 
 

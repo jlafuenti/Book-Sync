@@ -326,6 +326,32 @@ async def get_current_user(
     return user
 
 
+# Issue #963. The detail is a stable code, like `password_reset_required`, so
+# clients can recognise it; the web and Android hide the controls that would
+# hit it, so a visitor normally never sees it at all.
+DEMO_ACCOUNT_LOCKED = "demo_account_locked"
+
+
+async def refuse_demo(current_user: User = Depends(get_current_user)) -> User:
+    """FastAPI dependency: `get_current_user`, refusing the demo account (#963).
+
+    For the self-service routes that change the account itself — its password,
+    its existence, every other device's sessions. On a public demo server the
+    account is shared by every visitor, so any of these breaks the demo for the
+    rest until an operator repairs it.
+
+    A dependency rather than a check inside each handler, so the refusal comes
+    before anything else the handler does: change-password and delete-me would
+    otherwise verify the password first and count a wrong guess toward the
+    lockout the account's other visitors share.
+    """
+    if current_user.is_demo:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail=DEMO_ACCOUNT_LOCKED,
+        )
+    return current_user
+
+
 def require_role(minimum_role: str):
     """Factory that returns a FastAPI dependency requiring at least `minimum_role`.
 
@@ -895,11 +921,20 @@ async def update_me(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db, scope="function"),
 ):
-    """Update the current user's profile preferences."""
+    """Update the current user's profile preferences.
+
+    For the demo account (#963) the theme is validated but not stored. Both
+    clients apply a theme locally and sync it best-effort, so the visitor still
+    gets the theme they picked on their device, while the stored one — the
+    default the next visitor signs in to — stays put. The walkthrough stamp is
+    stored as usual: it is set once and never unset, so the worst one visitor can
+    do is see the offer the others would have seen too.
+    """
     if body.theme is not None:
         if body.theme not in VALID_THEMES:
             raise HTTPException(status_code=400, detail="Invalid theme")
-        current_user.theme = body.theme
+        if not current_user.is_demo:
+            current_user.theme = body.theme
     if body.web_tour_offered is not None:
         if not body.web_tour_offered:
             # There is no un-offering: the stamp only ever gets set once.
@@ -917,7 +952,7 @@ async def update_me(
 async def change_password(
     body: PasswordChange,
     request: Request,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(refuse_demo),
     db: AsyncSession = Depends(get_db, scope="function"),
 ):
     """Change the current user's password. Clears must_reset_password flag."""
@@ -982,7 +1017,7 @@ async def change_password(
 async def delete_me(
     body: AccountDelete,
     request: Request,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(refuse_demo),
     db: AsyncSession = Depends(get_db, scope="function"),
 ):
     """Delete the caller's own account and everything belonging to it (#146).
@@ -1144,7 +1179,7 @@ async def logout(
 @router.post("/logout-all", response_model=LogoutResponse)
 async def logout_all(
     request: Request,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(refuse_demo),
     db: AsyncSession = Depends(get_db, scope="function"),
 ):
     """Sign out on every device — the behaviour `logout` had before issue #250,

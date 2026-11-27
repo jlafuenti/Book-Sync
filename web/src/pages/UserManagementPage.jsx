@@ -11,7 +11,9 @@ import { formatDate, formatDateTime } from '../lib/datetime'
 import Modal from '../components/Modal'
 import './UserManagementPage.css'
 
-const ROLES = ['user', 'editor', 'admin']
+// `demo` (issue #963): the shared account on a public demo server, which cannot
+// change its own password or delete itself.
+const ROLES = ['user', 'editor', 'admin', 'demo']
 
 /* ── FilterPill ────────────────────────────────────────────────────── */
 function FilterPill({ label, value, options, onChange }) {
@@ -70,6 +72,7 @@ function RoleBadge({ role }) {
         admin: 'badge-admin',
         editor: 'badge-editor',
         user: 'badge-user',
+        demo: 'badge-user',
     }
     return <span className={`badge ${colors[role] || ''}`}>{role}</span>
 }
@@ -122,7 +125,9 @@ function CreateUserModal({ onClose, onCreated }) {
                         </select>
                     </div>
                     <p className="admin-modal-note">
-                        User will be required to change their password on first login.
+                        {form.role === 'demo'
+                            ? 'A demo account cannot change its own password, delete itself or sign out every device. Use this for a shared account whose password is public.'
+                            : 'User will be required to change their password on first login.'}
                     </p>
                     <div className="admin-modal-footer">
                         <button type="button" className="btn btn-secondary" onClick={onClose}>Cancel</button>

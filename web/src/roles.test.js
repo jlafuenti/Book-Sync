@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
-import { ROLE_HIERARCHY, KNOWN_ROLES, roleMeets } from './roles'
+import { ROLE_HIERARCHY, KNOWN_ROLES, roleMeets, isDemoUser } from './roles'
 
 /**
  * The role ladder fails closed on an unknown minimum (issue #359).
@@ -123,5 +123,23 @@ describe('role literals in web/src (issue #359)', () => {
             'Since #359 an unknown minimum fails closed, so the symptom is a page ' +
             'nobody can reach rather than one everybody can — but it is still wrong.',
         ).toEqual([])
+    })
+})
+
+// Issue #963: the shared account on a public demo server. A reader in every
+// respect except that it cannot change itself, so it clears exactly the bars
+// `user` clears.
+describe('demo role', () => {
+    it('scores the same as user', () => {
+        expect(ROLE_HIERARCHY.demo).toBe(ROLE_HIERARCHY.user)
+        expect(roleMeets('demo', 'user')).toBe(true)
+        expect(roleMeets('demo', 'editor')).toBe(false)
+    })
+
+    it('is recognised from the signed-in user', () => {
+        expect(isDemoUser({ role: 'demo' })).toBe(true)
+        expect(isDemoUser({ role: 'user' })).toBe(false)
+        expect(isDemoUser(null)).toBe(false)
+        expect(isDemoUser(undefined)).toBe(false)
     })
 })

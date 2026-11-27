@@ -8,6 +8,7 @@ import android.content.Intent
 import android.widget.Toast
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.TextButton
+import com.booksync.data.auth.canChangeOwnAccount
 import com.booksync.diagnostics.COMMUNITY_DISCORD_URL
 import com.booksync.diagnostics.REPORT_PROBLEM_DISCORD_FORUM
 import androidx.compose.foundation.background
@@ -140,6 +141,9 @@ fun AccountScreen(
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
 
+    // Issue #963: the shared demo account cannot change itself; the server
+    // refuses it, so the controls are not offered.
+    val canChangeAccount = canChangeOwnAccount(user?.role)
     var showChangePassword     by remember { mutableStateOf(false) }
     var confirmLogout          by remember { mutableStateOf(false) }
     var confirmLogoutAll       by remember { mutableStateOf(false) }
@@ -300,6 +304,7 @@ fun AccountScreen(
                     username = user?.username ?: "Loading…",
                     email = user?.email,
                     isOnline = isOnline,
+                    canChangePassword = canChangeAccount,
                     onChangePassword = { showChangePassword = true },
                 )
             }
@@ -628,45 +633,48 @@ fun AccountScreen(
                 }
             }
 
-            // Sign out everywhere (issue #250). Under Log out, and quieter than
-            // it: the per-device sign-out is the one people want, this is the
-            // one for a lost device. It is also the only normal user action
-            // that still bumps `token_version`.
-            item {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(Tandem.shapes.card)
-                        .background(colors.bgCard),
-                ) {
-                    ActionRow(
-                        title = "Sign out everywhere",
-                        description = "End every session on this account, on all devices.",
-                        destructive = true,
-                        onClick = { confirmLogoutAll = true },
-                    )
+            // Issue #963: neither is offered to the shared demo account.
+            if (canChangeAccount) {
+                // Sign out everywhere (issue #250). Under Log out, and quieter than
+                // it: the per-device sign-out is the one people want, this is the
+                // one for a lost device. It is also the only normal user action
+                // that still bumps `token_version`.
+                item {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(Tandem.shapes.card)
+                            .background(colors.bgCard),
+                    ) {
+                        ActionRow(
+                            title = "Sign out everywhere",
+                            description = "End every session on this account, on all devices.",
+                            destructive = true,
+                            onClick = { confirmLogoutAll = true },
+                        )
+                    }
                 }
-            }
 
-            // Danger zone. Play requires an in-app deletion path for any app
-            // that can create an account (issue #146), and Tandem's login
-            // screen offers "Request access". Kept below Log out, in its own
-            // section, and behind a typed confirmation — the two rows do very
-            // different things and sit a few millimetres apart.
-            item { SectionTitle("Danger zone") }
-            item {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(Tandem.shapes.card)
-                        .background(colors.bgCard),
-                ) {
-                    ActionRow(
-                        title = stringResource(R.string.delete_account_title),
-                        description = stringResource(R.string.delete_account_row_description),
-                        destructive = true,
-                        onClick = { showDeleteAccount = true },
-                    )
+                // Danger zone. Play requires an in-app deletion path for any app
+                // that can create an account (issue #146), and Tandem's login
+                // screen offers "Request access". Kept below Log out, in its own
+                // section, and behind a typed confirmation — the two rows do very
+                // different things and sit a few millimetres apart.
+                item { SectionTitle("Danger zone") }
+                item {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(Tandem.shapes.card)
+                            .background(colors.bgCard),
+                    ) {
+                        ActionRow(
+                            title = stringResource(R.string.delete_account_title),
+                            description = stringResource(R.string.delete_account_row_description),
+                            destructive = true,
+                            onClick = { showDeleteAccount = true },
+                        )
+                    }
                 }
             }
         }
@@ -769,6 +777,7 @@ private fun UserCard(
     username: String,
     email: String?,
     isOnline: Boolean,
+    canChangePassword: Boolean,
     onChangePassword: () -> Unit,
 ) {
     val colors = Tandem.colors
@@ -813,34 +822,43 @@ private fun UserCard(
             }
         }
         Spacer(Modifier.height(14.dp))
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clip(Tandem.shapes.button)
-                .background(colors.accent.copy(alpha = 0.15f))
-                .clickable(enabled = isOnline, onClick = onChangePassword)
-                .padding(horizontal = 12.dp, vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Icon(
-                Icons.Default.Key,
-                contentDescription = null,
-                tint = if (isOnline) colors.accent else colors.textMuted,
-                modifier = Modifier.size(18.dp),
-            )
-            Spacer(Modifier.width(10.dp))
+        if (canChangePassword) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(Tandem.shapes.button)
+                    .background(colors.accent.copy(alpha = 0.15f))
+                    .clickable(enabled = isOnline, onClick = onChangePassword)
+                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(
+                    Icons.Default.Key,
+                    contentDescription = null,
+                    tint = if (isOnline) colors.accent else colors.textMuted,
+                    modifier = Modifier.size(18.dp),
+                )
+                Spacer(Modifier.width(10.dp))
+                Text(
+                    if (isOnline) "Change password" else "Change password (offline)",
+                    color = if (isOnline) colors.accent else colors.textMuted,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Spacer(Modifier.weight(1f))
+                Icon(
+                    Icons.Default.ChevronRight,
+                    contentDescription = null,
+                    tint = if (isOnline) colors.accent else colors.textMuted,
+                    modifier = Modifier.size(18.dp),
+                )
+            }
+        } else {
+            // Issue #963: the shared demo account; its password is published.
             Text(
-                if (isOnline) "Change password" else "Change password (offline)",
-                color = if (isOnline) colors.accent else colors.textMuted,
-                fontSize = 14.sp,
-                fontWeight = FontWeight.SemiBold,
-            )
-            Spacer(Modifier.weight(1f))
-            Icon(
-                Icons.Default.ChevronRight,
-                contentDescription = null,
-                tint = if (isOnline) colors.accent else colors.textMuted,
-                modifier = Modifier.size(18.dp),
+                stringResource(R.string.account_demo_note),
+                color = colors.textSecondary,
+                fontSize = 13.sp,
             )
         }
     }

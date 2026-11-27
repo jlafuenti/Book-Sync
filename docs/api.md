@@ -126,10 +126,11 @@ the same neutral `201` as everything else, with nothing stored.
 
 ## Roles
 
-Four roles, strictly ordered:
+Four roles, strictly ordered, plus `demo` alongside `user`:
 
 | Role | Can |
 |---|---|
+| `demo` | Everything `user` can, but not change its own account: `POST /api/auth/change-password`, `DELETE /api/auth/me` and `POST /api/auth/logout-all` answer `403 {"detail": "demo_account_locked"}`, and `PUT /api/auth/me` leaves the stored theme alone. For the shared account on a public demo server, whose password is published (#963). Never given a forced password reset. |
 | `user` | Read the library, read and write **their own** reading positions, bookmarks and progress. |
 | `editor` | Everything above, plus write to the library: upload, edit metadata, pair/unpair, delete, scan, run the troubleshooter, and the maintenance endpoints (`GET /api/library/verify`, `GET /api/library/debug-metadata/...`). |
 | `admin` | Everything above, plus system settings, users, import sources, backups, and the rest of transcription control. |

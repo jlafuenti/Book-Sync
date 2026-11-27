@@ -82,6 +82,7 @@
             is the literal word the field must match — keep it uppercase and keep
             it in step with the check in AccountScreen. -->
     <string name="delete_account_title">Delete account</string>
+    <string name="account_demo_note">This is a shared demo account, so its password cannot be changed and it cannot be deleted or signed out on every device. Reading and listening work as usual.</string>
     <string name="delete_account_row_description">Permanently remove your account and reading positions from this server.</string>
     <string name="delete_account_dialog_title">Delete your account?</string>
     <string name="delete_account_warning">This cannot be undone. Your account, bookmarks and reading positions are deleted from the server. The books themselves belong to whoever runs the server and are not affected.</string>

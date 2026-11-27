@@ -8,6 +8,7 @@ const { logoutAllMock } = vi.hoisted(() => ({
 vi.mock('../api', () => ({ logoutAll: logoutAllMock }))
 
 import SignOutEverywhere from './SignOutEverywhere'
+import { AuthProvider } from '../contexts/AuthContext'
 
 describe('SignOutEverywhere (issue #250)', () => {
     let confirmSpy
@@ -82,5 +83,28 @@ describe('SignOutEverywhere (issue #250)', () => {
 
         expect(logoutAllMock).toHaveBeenCalledTimes(1)
         release()
+    })
+})
+
+// Issue #963: on a public demo server every visitor shares one account, so one
+// visitor signing it out everywhere would sign out all the others. The server
+// refuses it; the control is not offered.
+describe('SignOutEverywhere for the demo account (issue #963)', () => {
+    it('renders nothing for a demo user', () => {
+        render(
+            <AuthProvider user={{ username: 'demo', role: 'demo' }}>
+                <SignOutEverywhere onSignedOut={vi.fn()} />
+            </AuthProvider>,
+        )
+        expect(screen.queryByTestId('sign-out-everywhere')).toBeNull()
+    })
+
+    it('still renders for an ordinary user', () => {
+        render(
+            <AuthProvider user={{ username: 'alice', role: 'user' }}>
+                <SignOutEverywhere onSignedOut={vi.fn()} />
+            </AuthProvider>,
+        )
+        expect(screen.getByTestId('sign-out-everywhere')).toBeInTheDocument()
     })
 })

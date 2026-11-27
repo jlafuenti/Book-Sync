@@ -1,5 +1,7 @@
 import React, { useState } from 'react'
 import { logoutAll } from '../api'
+import { useAuth } from '../contexts/AuthContext'
+import { isDemoUser } from '../roles'
 
 export const SIGN_OUT_EVERYWHERE_CONFIRM =
     'Sign out on every device?\n\n' +
@@ -30,6 +32,7 @@ export const SIGN_OUT_EVERYWHERE_CONFIRM =
  * today.
  */
 export default function SignOutEverywhere({ onSignedOut, className }) {
+    const { user } = useAuth()
     const [busy, setBusy] = useState(false)
 
     const handleClick = async () => {
@@ -46,6 +49,11 @@ export default function SignOutEverywhere({ onSignedOut, className }) {
             onSignedOut()
         }
     }
+
+    // Issue #963: every visitor to a public demo server shares the demo
+    // account, so signing it out everywhere signs out all of them. The server
+    // refuses it; the control is not offered.
+    if (isDemoUser(user)) return null
 
     return (
         <button
